@@ -15,8 +15,7 @@ def run():
         print("暂无交易信号")
 
 '''
-# trader/executor.py
-from strategies.moving_average import generate_signal
+
 from data.okx import fetch_ohlcv  # 假设你在这里获取数据
 
 def run():
