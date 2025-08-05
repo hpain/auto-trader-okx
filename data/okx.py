@@ -61,7 +61,7 @@ def fetch_ohlcv(symbol, interval='1h', limit=50):
     url = f"https://www.okx.com/api/v5/market/candles"
     params = {
         'instId': symbol,
-        'bar': normalize_interval（interval）,
+        'bar': normalize_interval(interval),
         'limit': limit
     }
 
