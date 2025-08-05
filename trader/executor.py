@@ -21,11 +21,19 @@ from data.okx import fetch_ohlcv  # 假设你在这里获取数据
 def run():
     df = fetch_ohlcv("BTC-USDT", interval="1h", limit=50)
 
+    if df is None or df.empty:
+        print("🚫 获取数据失败，终止运行")
+        return
+
+    print("📊 数据准备完毕，继续执行策略分析...") 
+    signal = generate_signal(df)
+    print("📈 生成交易信号:", signal)
+    '''
     # ✅ 打印数据结构和后几行
     print("\n📊 市场数据预览：")
     print(df.tail(5))           # 打印后5行
     print("\n数据总行数:", len(df))
     print("字段列表:", df.columns.tolist())
 
-    signal = generate_signal(df)
-    print("📈 生成交易信号:", signal)
+   
+'''
