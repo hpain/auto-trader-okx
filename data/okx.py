@@ -91,7 +91,7 @@ def fetch_ohlcv(symbol, interval='1h', limit=50):
         
         
         
-        df['timestamp'] = pd.to_datetime(df['ts'], unit='ms')
+        df['timestamp'] = pd.to_datetime(df['ts'].astype(int), unit='ms')
         df[['open', 'high', 'low', 'close', 'volume']] = df[['open', 'high', 'low', 'close', 'volume']].astype(float)
 
         df = df[['timestamp', 'open', 'high', 'low', 'close', 'volume']]
