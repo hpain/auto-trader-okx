@@ -41,7 +41,7 @@ def fetch_ohlcv(symbol, interval='1h', limit=100):
 
 '''
 
-def fetch_ohlcv(symbol, interval='1h', limit=50):
+def fetch_ohlcv(symbol, interval='1H', limit=50):
     print(f"📡 正在连接 OKX API 获取 {symbol} 的 K线数据...")
 
     url = f"https://www.okx.com/api/v5/market/candles"
