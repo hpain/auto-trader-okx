@@ -1,7 +1,7 @@
 okx:
-  api_key: "你的API_KEY"
-  secret_key: "你的SECRET_KEY"
-  passphrase: "你的PASSPHRASE"
+  api_key: "e67abf71-96a1-428e-a58e-4920d1d65c64"
+  secret_key: "35E63240CFFE876334DFD3664A572666"
+  passphrase: "Han@Kun#98"
   use_server_time: True
   flag: "0"  # 0=模拟, 1=实盘
 
