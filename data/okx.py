@@ -41,13 +41,27 @@ def fetch_ohlcv(symbol, interval='1h', limit=100):
 
 '''
 
-def fetch_ohlcv(symbol, interval='1H', limit=50):
+def normalize_interval(interval):
+    # 自动将常见小写写法转换为OKX支持的格式
+    mapping = {
+        '1h': '1H',
+        '4h': '4H',
+        '1d': '1D',
+        '1w': '1W',
+        '1m': '1m',
+        '5m': '5m',
+        '15m': '15m',
+        '30m': '30m',
+    }
+    return mapping.get(interval.lower(), interval)
+    
+def fetch_ohlcv(symbol, interval='1h', limit=50):
     print(f"📡 正在连接 OKX API 获取 {symbol} 的 K线数据...")
 
     url = f"https://www.okx.com/api/v5/market/candles"
     params = {
         'instId': symbol,
-        'bar': interval,
+        'bar': normalize_interval（interval）,
         'limit': limit
     }
 
