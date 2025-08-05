@@ -75,8 +75,32 @@ def fetch_ohlcv(symbol, interval='1h', limit=50):
             return None
 
         # 解析为DataFrame
-        df = pd.DataFrame(data['data'], columns=['ts', 'open', 'high', 'low', 'close', 'volume', '_1', '_2'])
+        #df = pd.DataFrame(data['data'], columns=['ts', 'open', 'high', 'low', 'close', 'volume', '_1', '_2'])
+        # 原始数据 DataFrame（不指定列名）
+        df = pd.DataFrame(data['data'])
         df = df.iloc[::-1]  # 翻转为时间升序
+
+        # 👉 打印列数和列内容
+        print(f"✅ 获取到的原始数据共有 {df.shape[1]} 列")
+        print("📋 列名示意：", [f"Column {i}" for i in range(df.shape[1])])
+        print("📊 原始样本行：", df.iloc[0].to_list())
+
+        # 只取前6列为 ['ts', 'open', 'high', 'low', 'close', 'volume']
+        df = df.iloc[:, :6]
+        df.columns = ['ts', 'open', 'high', 'low', 'close', 'volume']
+        
+        
+        
+        df['timestamp'] = pd.to_datetime(df['ts'], unit='ms')
+        df[['open', 'high', 'low', 'close', 'volume']] = df[['open', 'high', 'low', 'close', 'volume']].astype(float)
+
+        df = df[['timestamp', 'open', 'high', 'low', 'close', 'volume']]
+        print("📊 数据预处理成功，最后几条：")
+        print(df.tail(3))
+
+         
+        '''
+        
 
         df['timestamp'] = pd.to_datetime(df['ts'], unit='ms')
         df[['open', 'high', 'low', 'close', 'volume']] = df[['open', 'high', 'low', 'close', 'volume']].astype(float)
@@ -85,6 +109,7 @@ def fetch_ohlcv(symbol, interval='1h', limit=50):
 
         print(f"✅ 成功获取数据，共 {len(df)} 条记录。")
         print(df.tail(3))  # 打印最后几行以确认数据
+        '''
         return df
 
     except requests.exceptions.RequestException as e:
