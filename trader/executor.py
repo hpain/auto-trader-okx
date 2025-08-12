@@ -23,7 +23,9 @@ def run():
     from data.okx import get_klines
 
     client = OKXClient(**config["okx"])
-    df = get_klines(client, config["symbol"], config["interval"])
+    symbol = config["trade"]["symbol"]
+    interval = config["trade"]["interval"]
+    df = get_klines(client, symbol, interval)
     
     if df is None or df.empty:
         print("❌ API 返回数据为空，终止运行")
