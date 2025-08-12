@@ -40,7 +40,7 @@ def run():
     print(f"📈 生成交易信号: {signal}")
 
     # 画图保存
-    plot_moving_averages(df, config["symbol"])
+    plot_moving_averages(df, symbol)
     '''
     # ✅ 打印数据结构和后几行
     print("\n📊 市场数据预览：")
