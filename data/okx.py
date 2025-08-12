@@ -128,6 +128,7 @@ def get_klines(client, symbol="BTC-USDT", interval="1h", limit=100):
     interval: 时间周期，比如 "1m", "5m", "15m", "1h", "1d"
     limit: 获取的条数
     """
+    interval = normalize_interval(interval)
     url = f"https://www.okx.com/api/v5/market/candles?instId={symbol}&bar={interval}&limit={limit}"
     
     headers = {
