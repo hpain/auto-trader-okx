@@ -120,3 +120,47 @@ def fetch_ohlcv(symbol, interval='1h', limit=50):
         print(f"❌ 数据解析或转换失败：{e}")
         return None
 
+
+def get_klines(client, symbol="BTC-USDT", interval="1h", limit=100):
+    """
+    从 OKX API 获取历史 K 线数据，并返回 DataFrame
+    symbol: 币对，比如 "BTC-USDT"
+    interval: 时间周期，比如 "1m", "5m", "15m", "1h", "1d"
+    limit: 获取的条数
+    """
+    url = f"https://www.okx.com/api/v5/market/candles?instId={symbol}&bar={interval}&limit={limit}"
+    
+    headers = {
+        'Content-Type': 'application/json'
+    }
+
+    try:
+        r = requests.get(url, headers=headers, timeout=10)
+        data = r.json()
+
+        # 检查 API 返回是否有数据
+        if "data" not in data or len(data["data"]) == 0:
+            print(f"❌ API 返回数据为空: {data}")
+            return None
+
+        # OKX 返回的时间顺序是 最新在前，这里反转为按时间升序
+        raw_data = data["data"][::-1]
+
+        # 转 DataFrame
+        df = pd.DataFrame(raw_data, columns=[
+            "ts", "open", "high", "low", "close", "vol", "volCcy", "volCcyQuote", "confirm"
+        ])
+
+        # 转换数据类型
+        df["ts"] = pd.to_datetime(df["ts"].astype(float), unit="ms")
+        df[["open", "high", "low", "close", "vol"]] = df[["open", "high", "low", "close", "vol"]].astype(float)
+
+        print(f"✅ 成功获取 {len(df)} 条 {symbol} {interval} K线数据")
+        print(f"📄 数据列名: {list(df.columns)}")
+
+        return df
+
+    except Exception as e:
+        print(f"❌ 获取 K 线数据出错: {e}")
+        return None
+        
