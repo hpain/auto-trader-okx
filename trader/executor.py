@@ -1,4 +1,4 @@
-from strategies.moving_average import generate_signal
+from strategies.moving_average import generate_signal, plot_moving_averages
 from trader.okx_client import OKXClient
 import yaml
 '''
@@ -19,15 +19,26 @@ def run():
 from data.okx import fetch_ohlcv  # 假设你在这里获取数据
 
 def run():
-    df = fetch_ohlcv("BTC-USDT", interval="1h", limit=50)
+    from config import config
+    from data.okx import get_klines
 
+    client = OKXClient(**config["okx"])
+    df = get_klines(client, config["symbol"], config["interval"])
+    
     if df is None or df.empty:
-        print("🚫 获取数据失败，终止运行")
+        print("❌ API 返回数据为空，终止运行")
         return
+    
+    # 计算均线
+    df['ma_short'] = df['close'].rolling(window=5).mean()
+    df['ma_long'] = df['close'].rolling(window=20).mean()
 
-    print("📊 数据准备完毕，继续执行策略分析...") 
+    # 生成交易信号
     signal = generate_signal(df)
-    print("📈 生成交易信号:", signal)
+    print(f"📈 生成交易信号: {signal}")
+
+    # 画图保存
+    plot_moving_averages(df, config["symbol"])
     '''
     # ✅ 打印数据结构和后几行
     print("\n📊 市场数据预览：")
