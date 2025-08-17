@@ -11,6 +11,7 @@ from data.okx import get_klines
 from data.news import load_news_from_csv, aggregate_daily_sentiment
 from features.feature_engineering import add_tech_indicators, merge_price_and_sentiment, make_supervised
 from models.evolution import train_evolve
+from trader.okx_client import OKXClient
 
 NEWS_CSV = os.getenv("NEWS_CSV_PATH", "news_sample.csv")  # 先支持本地CSV，列: timestamp,title
 
