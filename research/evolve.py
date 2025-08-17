@@ -19,7 +19,7 @@ def main():
     interval = config.get("trade", {}).get("interval","1H")
 
     # 价格数据
-    dfp = get_klines(None, symbol, interval, limit=1000)
+    dfp = get_klines(None, symbol, interval, max_candles=10000)
     if dfp is None or dfp.empty:
         print("❌ 价格数据为空")
         return
