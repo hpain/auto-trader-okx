@@ -121,47 +121,62 @@ def fetch_ohlcv(symbol, interval='1h', limit=50):
         return None
 
 
-def get_klines(client, symbol="BTC-USDT", interval="1h", limit=100):
+def get_klines(client, symbol, interval, limit=1000, max_candles=10000, save=True):
     """
-    从 OKX API 获取历史 K 线数据，并返回 DataFrame
-    symbol: 币对，比如 "BTC-USDT"
-    interval: 时间周期，比如 "1m", "5m", "15m", "1h", "1d"
-    limit: 获取的条数
+    分页拉取OKX历史K线，自动拼接，返回DataFrame
+    :param client: OKXClient
+    :param symbol: 交易对，例如 "BTC-USDT"
+    :param interval: K线周期，例如 "1m", "5m", "1H"
+    :param limit: 单次请求数量（OKX最大1000）
+    :param max_candles: 最多获取多少根K线
+    :param save: 是否保存到 data/history/ 目录
     """
-    interval = normalize_interval(interval)
-    url = f"https://www.okx.com/api/v5/market/candles?instId={symbol}&bar={interval}&limit={limit}"
-    
-    headers = {
-        'Content-Type': 'application/json'
-    }
+    all_data = []
+    end_time = None
+    fetched = 0
 
-    try:
-        r = requests.get(url, headers=headers, timeout=10)
-        data = r.json()
+    while fetched < max_candles:
+        resp = client.get_candlesticks(
+            instId=symbol,
+            bar=interval,
+            limit=limit,
+            after=end_time
+        )
 
-        # 检查 API 返回是否有数据
-        if "data" not in data or len(data["data"]) == 0:
-            print(f"❌ API 返回数据为空: {data}")
-            return None
+        if not resp or "data" not in resp or len(resp["data"]) == 0:
+            print("⚠️ API 返回数据为空或出错")
+            break
 
-        # OKX 返回的时间顺序是 最新在前，这里反转为按时间升序
-        raw_data = data["data"][::-1]
+        batch = resp["data"]
+        all_data.extend(batch)
+        fetched += len(batch)
 
-        # 转 DataFrame
-        df = pd.DataFrame(raw_data, columns=[
-            "ts", "open", "high", "low", "close", "vol", "volCcy", "volCcyQuote", "confirm"
-        ])
+        # 下一次请求的结束时间（取最后一根K线的ts）
+        end_time = batch[-1][0]
+        time.sleep(0.2)  # 防止触发API限速
 
-        # 转换数据类型
-        df["ts"] = pd.to_datetime(df["ts"].astype(float), unit="ms")
-        df[["open", "high", "low", "close", "vol"]] = df[["open", "high", "low", "close", "vol"]].astype(float)
+        if len(batch) < limit:
+            break
 
-        print(f"✅ 成功获取 {len(df)} 条 {symbol} {interval} K线数据")
-        print(f"📄 数据列名: {list(df.columns)}")
+    # 转换为 DataFrame
+    df = pd.DataFrame(all_data, columns=[
+        "ts", "open", "high", "low", "close", "vol", "volCcy", "volCcyQuote", "confirm"
+    ])
 
-        return df
+    # 时间戳转换
+    df["ts"] = pd.to_datetime(df["ts"].astype(float), unit="ms")
+    df = df.sort_values("ts").reset_index(drop=True)
 
-    except Exception as e:
-        print(f"❌ 获取 K 线数据出错: {e}")
-        return None
-        
+    # 只保留常用字段
+    df = df[["ts", "open", "high", "low", "close", "vol"]].astype(float)
+
+    print(f"✅ 成功获取 {len(df)} 根K线数据 ({symbol}, {interval})")
+
+    # 保存数据
+    if save:
+        os.makedirs("data/history", exist_ok=True)
+        path = f"data/history/{symbol.replace('-', '')}_{interval}.csv"
+        df.to_csv(path, index=False)
+        print(f"💾 已保存到 {path}")
+
+    return df
