@@ -2,7 +2,10 @@
 import os, json
 import pandas as pd
 
-from auto_trader_okx.config import config
+# 将项目根目录加入 sys.path
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from config import config
 from data.okx import get_klines
 from data.news import load_news_from_csv, aggregate_daily_sentiment
 from features.feature_engineering import add_tech_indicators, merge_price_and_sentiment, make_supervised
