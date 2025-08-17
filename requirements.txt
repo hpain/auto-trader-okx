@@ -3,3 +3,8 @@ pandas
 numpy
 pyyaml
 python-dateutil
+scikit-learn
+optuna
+vaderSentiment
+ta
+joblib
