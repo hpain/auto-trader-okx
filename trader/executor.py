@@ -128,3 +128,5 @@ def run():
     print(f"🧠 模型概率={proba:.3f} | buy_th={buy_th:.2f} sell_th={sell_th:.2f}")
     print(f"📈 交易信号(Model): {sig}")
 
+
+
