@@ -1,5 +1,6 @@
 import requests, time
 import pandas as pd
+import os
 from datetime import datetime
 
 class OKXClient:
