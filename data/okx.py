@@ -135,7 +135,7 @@ def get_klines(client, symbol, interval, limit=1000, max_candles=10000, save=Tru
     all_data = []
     end_time = None
     fetched = 0
-    
+    count =0
     while fetched < max_candles:
         '''
         resp = client.get_candlesticks(
@@ -167,11 +167,14 @@ def get_klines(client, symbol, interval, limit=1000, max_candles=10000, save=Tru
         end_time = batch[-1][0]
         time.sleep(0.2)  # 防止触发API限速
 
+        print(f"len(batch):{c_len}, count: {count} ")
+        count ++
+        '''
         c_len = len(batch)
         if c_len < limit:
             print(f"len(batch):{c_len}, limit: {limit} ")
             break
-
+       '''
     # 转换为 DataFrame
     df = pd.DataFrame(all_data, columns=[
         "ts", "open", "high", "low", "close", "vol", "volCcy", "volCcyQuote", "confirm"
