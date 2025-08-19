@@ -38,18 +38,6 @@ class OKXClient:
             return None
         return resp.json()
 
-    def get_candlesticks(self, instId, bar="1H", limit=100, after=None, before=None):
-        url = f"{self.base_url}/api/v5/market/candles"
-        params = {"instId": instId, "bar": bar, "limit": limit}
-        if after:
-            params["after"] = after
-        if before:
-            params["before"] = before
-        resp = requests.get(url, params=params)
-        if resp.status_code != 200:
-            print(f"❌ 请求失败: {resp.status_code}, {resp.text}")
-            return None
-        return resp.json()
         
     def fetch_historical_klines(self, instId, bar="1H", limit=100, max_pages=50, save_path="data/history"):
         """
