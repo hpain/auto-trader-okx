@@ -13,6 +13,8 @@ from features.feature_engineering import add_tech_indicators, merge_price_and_se
 from models.evolution import train_evolve
 from trader.okx_client import OKXClient
 
+from research.features import add_features
+
 NEWS_CSV = os.getenv("NEWS_CSV_PATH", "news_sample.csv")  # 先支持本地CSV，列: timestamp,title
 
 def main():
@@ -28,6 +30,9 @@ def main():
 
     # 技术指标
     dfp = add_tech_indicators(dfp)
+    # === 添加技术指标因子 ===
+    dfp = add_features(dfp)
+    print(f"📊 已添加因子，最终样本数: {len(dfp)}")
 
     # 新闻情绪（可选）
     if os.path.exists(NEWS_CSV):
