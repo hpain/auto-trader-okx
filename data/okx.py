@@ -167,6 +167,7 @@ def get_klines(client, symbol, interval, limit=1000, max_candles=10000, save=Tru
         end_time = batch[-1][0]
         time.sleep(0.2)  # 防止触发API限速
 
+        c_len = len(batch)
         print(f"len(batch):{c_len}, count: {count} ")
         count += 1
         '''
