@@ -3,6 +3,7 @@
 import requests
 import pandas as pd
 import time
+import os
 
 '''
 def fetch_ohlcv(symbol, interval='1h', limit=100):
