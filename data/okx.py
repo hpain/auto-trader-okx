@@ -139,7 +139,7 @@ def get_klines(client, symbol, interval, limit=1000, max_candles=10000, save=Tru
     while fetched < max_candles:
         resp = client.get_candlesticks(
             instId=symbol,
-            bar=interval,
+            bar=normalize_interval(interval),
             limit=limit,
             after=end_time
         )
