@@ -135,14 +135,25 @@ def get_klines(client, symbol, interval, limit=1000, max_candles=10000, save=Tru
     all_data = []
     end_time = None
     fetched = 0
-
+    
     while fetched < max_candles:
+        '''
         resp = client.get_candlesticks(
             instId=symbol,
             bar=normalize_interval(interval),
             limit=limit,
             after=end_time
         )
+        '''
+        params = {
+            "instId": symbol,
+            "bar": normalize_interval(interval),
+            "limit": 1000
+        }
+        if end_time:
+            params["before"] = end_time  # 翻页：从上次最早的时间往前取
+
+        resp = client.get_candlesticks(**params)
 
         if not resp or "data" not in resp or len(resp["data"]) == 0:
             print("⚠️ API 返回数据为空或出错")
