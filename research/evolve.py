@@ -13,7 +13,7 @@ from features.feature_engineering import add_tech_indicators, merge_price_and_se
 from models.evolution import train_evolve
 from trader.okx_client import OKXClient
 
-from research.features import add_features
+#from research.features import add_features
 
 NEWS_CSV = os.getenv("NEWS_CSV_PATH", "news_sample.csv")  # 先支持本地CSV，列: timestamp,title
 
