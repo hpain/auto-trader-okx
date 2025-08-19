@@ -168,7 +168,19 @@ def get_klines(client, symbol, interval, limit=1000, max_candles=10000, save=Tru
     df = df.sort_values("ts").reset_index(drop=True)
 
     # 只保留常用字段
-    df = df[["ts", "open", "high", "low", "close", "vol"]].astype(float)
+    #df = df[["ts", "open", "high", "low", "close", "vol"]].astype(float)
+    df = df[["ts", "open", "high", "low", "close", "vol"]].copy()
+
+    # 转换数值列
+    for col in ["open", "high", "low", "close", "vol"]:
+       df[col] = df[col].astype(float)
+
+    # 确保时间列为 datetime
+    df["ts"] = pd.to_datetime(df["ts"], unit="ms")
+
+    # 按时间升序
+    df = df.sort_values("ts").reset_index(drop=True)
+
 
     print(f"✅ 成功获取 {len(df)} 根K线数据 ({symbol}, {interval})")
 
