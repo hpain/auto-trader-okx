@@ -24,7 +24,7 @@ class OKXClient:
     def mock_order(self, action, symbol, qty):
         print(f"[模拟交易] {datetime.now()}：{action.upper()} {qty} {symbol}")
 
-        def get_candlesticks(self, instId, bar="1H", limit=100, after=None, before=None):
+    def get_candlesticks(self, instId, bar="1H", limit=100, after=None, before=None):
         url = f"{self.base_url}/api/v5/market/candles"
         params = {"instId": instId, "bar": bar, "limit": limit}
         if after:
