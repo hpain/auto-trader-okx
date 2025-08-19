@@ -27,12 +27,16 @@ class OKXClient:
 
     def get_candlesticks(self, instId, bar="1H", limit=100, after=None, before=None):
         url = f"{self.base_url}/api/v5/market/candles"
+        print(f"url:  {url}")
         params = {"instId": instId, "bar": bar, "limit": limit}
         if after:
             params["after"] = after
         if before:
             params["before"] = before
+
+        print(f"params: {params}")
         resp = requests.get(url, params=params)
+        print(f"resp: {resp}")
         if resp.status_code != 200:
             print(f"❌ 请求失败: {resp.status_code}, {resp.text}")
             return None
