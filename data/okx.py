@@ -123,19 +123,27 @@ def fetch_ohlcv(symbol, interval='1h', limit=50):
 
 
 
-def get_klines(client, symbol, interval, years=5, limit=1000, save=True):
+def get_klines(client, symbol, interval, years=5, limit=1000, save=True, keep_ts_float=False):
     """
     按年限抓取OKX历史K线，支持本地缓存优先，统一UTC时区
+    :param keep_ts_float: 是否额外保留秒级浮点时间戳列
     """
+    import os, time
+    import pandas as pd
+
     # 缓存路径
     cache_dir = "data/history"
     os.makedirs(cache_dir, exist_ok=True)
     cache_path = f"{cache_dir}/{symbol.replace('-', '')}_{interval}_{years}y.csv"
 
-    # 先查本地缓存
+    # 优先用本地缓存
     if os.path.exists(cache_path):
         print(f"📂 从本地缓存读取数据：{cache_path}")
-        df = pd.read_csv(cache_path, parse_dates=["ts"], date_parser=lambda col: pd.to_datetime(col, utc=True))
+        df = pd.read_csv(
+            cache_path,
+            parse_dates=["ts"],
+            date_parser=lambda col: pd.to_datetime(col, utc=True)
+        )
         return df
 
     all_data = []
@@ -158,24 +166,34 @@ def get_klines(client, symbol, interval, years=5, limit=1000, save=True):
 
         batch = resp["data"]
         all_data.extend(batch)
-
-        # 记录最早一根K线的UTC时间
         end_time = batch[-1][0]
-        earliest_ts = pd.to_datetime(pd.to_numeric(end_time), unit="ms", utc=True)
 
+        earliest_ts = pd.to_datetime(pd.to_numeric(end_time), unit="ms", utc=True)
         if earliest_ts <= target_time:
             print(f"✅ 已到达目标时间 {target_time.date()}")
             break
 
-        time.sleep(0.2)  # 防止限速
+        time.sleep(0.2)  # 防限速
 
     # 转 DataFrame
     df = pd.DataFrame(all_data, columns=[
-        "ts", "open", "high", "low", "close", "vol", "volCcy", "volCcyQuote", "confirm"
+        "ts", "open", "high", "low", "close", "vol",
+        "volCcy", "volCcyQuote", "confirm"
     ])
+
+    # 时间列保持 datetime64[ns, UTC]
     df["ts"] = pd.to_datetime(pd.to_numeric(df["ts"]), unit="ms", utc=True)
+
+    # 转数值列（只转价格和成交量，不动时间列）
+    num_cols = ["open", "high", "low", "close", "vol"]
+    df[num_cols] = df[num_cols].astype(float)
+
+    # 如果需要浮点秒时间戳
+    if keep_ts_float:
+        df["ts_float"] = df["ts"].view("int64") / 1e9
+
+    # 排序
     df = df.sort_values("ts").reset_index(drop=True)
-    df = df[["ts", "open", "high", "low", "close", "vol"]].astype(float)
 
     print(f"✅ 成功获取 {len(df)} 根K线 ({symbol}, {interval})")
 
@@ -185,6 +203,7 @@ def get_klines(client, symbol, interval, years=5, limit=1000, save=True):
         print(f"💾 已保存到 {cache_path}")
 
     return df
+
 
 """
 def get_klines(client, symbol, interval, limit=1000, max_candles=10000, save=True):
