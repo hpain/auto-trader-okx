@@ -121,7 +121,70 @@ def fetch_ohlcv(symbol, interval='1h', limit=50):
         print(f"❌ 数据解析或转换失败：{e}")
         return None
 
+def get_klines(client, symbol, interval, years=5, limit=1000, save=True):
+    """
+    按年限抓取OKX历史K线，并缓存到本地
+    :param client: OKXClient 实例
+    :param symbol: 交易对，例如 "BTC-USDT"
+    :param interval: K线周期，例如 "1H", "4H", "1D"
+    :param years: 历史跨度（年）
+    :param limit: 每次请求条数（OKX最大1000）
+    :param save: 是否保存到 data/history/
+    """
+    all_data = []
+    end_time = None
+    target_time = pd.Timestamp.utcnow() - pd.Timedelta(days=years * 365)
 
+    while True:
+        params = {
+            "instId": symbol,
+            "bar": normalize_interval(interval),
+            "limit": limit
+        }
+        if end_time:
+            params["before"] = end_time  # 向前翻页
+
+        resp = client.get_candlesticks(**params)
+        if not resp or "data" not in resp or not resp["data"]:
+            print("⚠️ API 返回数据为空或出错")
+            break
+
+        batch = resp["data"]
+        all_data.extend(batch)
+        end_time = batch[-1][0]  # 记录最早一根K线时间戳
+
+        earliest_ts = pd.to_datetime(end_time, unit="ms")
+        if earliest_ts <= target_time:
+            print(f"✅ 已到达目标时间 {target_time.date()}")
+            break
+
+        time.sleep(0.2)  # 防止触发限速
+
+    # 转DataFrame
+    df = pd.DataFrame(all_data, columns=[
+        "ts", "open", "high", "low", "close", "vol",
+        "volCcy", "volCcyQuote", "confirm"
+    ])
+    df["ts"] = pd.to_datetime(df["ts"].astype(float), unit="ms")
+    df = df.sort_values("ts").reset_index(drop=True)
+    df = df[["ts", "open", "high", "low", "close", "vol"]].copy()
+
+    # 转换数据类型
+    for col in ["open", "high", "low", "close", "vol"]:
+        df[col] = df[col].astype(float)
+
+    print(f"✅ 成功获取 {len(df)} 根K线 ({symbol}, {interval})")
+
+    # 保存本地
+    if save:
+        os.makedirs("data/history", exist_ok=True)
+        path = f"data/history/{symbol.replace('-', '')}_{interval}_{years}y.csv"
+        df.to_csv(path, index=False)
+        print(f"💾 已保存到 {path}")
+
+    return df
+
+"""
 def get_klines(client, symbol, interval, limit=1000, max_candles=10000, save=True):
     """
     分页拉取OKX历史K线，自动拼接，返回DataFrame
@@ -210,3 +273,5 @@ def get_klines(client, symbol, interval, limit=1000, max_candles=10000, save=Tru
         print(f"💾 已保存到 {path}")
 
     return df
+
+    """
