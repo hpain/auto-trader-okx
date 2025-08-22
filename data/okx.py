@@ -121,19 +121,26 @@ def fetch_ohlcv(symbol, interval='1h', limit=50):
         print(f"❌ 数据解析或转换失败：{e}")
         return None
 
+
+
 def get_klines(client, symbol, interval, years=5, limit=1000, save=True):
     """
-    按年限抓取OKX历史K线，并缓存到本地
-    :param client: OKXClient 实例
-    :param symbol: 交易对，例如 "BTC-USDT"
-    :param interval: K线周期，例如 "1H", "4H", "1D"
-    :param years: 历史跨度（年）
-    :param limit: 每次请求条数（OKX最大1000）
-    :param save: 是否保存到 data/history/
+    按年限抓取OKX历史K线，支持本地缓存优先，统一UTC时区
     """
+    # 缓存路径
+    cache_dir = "data/history"
+    os.makedirs(cache_dir, exist_ok=True)
+    cache_path = f"{cache_dir}/{symbol.replace('-', '')}_{interval}_{years}y.csv"
+
+    # 先查本地缓存
+    if os.path.exists(cache_path):
+        print(f"📂 从本地缓存读取数据：{cache_path}")
+        df = pd.read_csv(cache_path, parse_dates=["ts"], date_parser=lambda col: pd.to_datetime(col, utc=True))
+        return df
+
     all_data = []
     end_time = None
-    target_time = pd.Timestamp.utcnow() - pd.Timedelta(days=years * 365)
+    target_time = pd.Timestamp.utcnow().tz_localize("UTC") - pd.Timedelta(days=years * 365)
 
     while True:
         params = {
@@ -142,7 +149,7 @@ def get_klines(client, symbol, interval, years=5, limit=1000, save=True):
             "limit": limit
         }
         if end_time:
-            params["before"] = end_time  # 向前翻页
+            params["before"] = end_time
 
         resp = client.get_candlesticks(**params)
         if not resp or "data" not in resp or not resp["data"]:
@@ -151,36 +158,31 @@ def get_klines(client, symbol, interval, years=5, limit=1000, save=True):
 
         batch = resp["data"]
         all_data.extend(batch)
-        end_time = batch[-1][0]  # 记录最早一根K线时间戳
 
-        earliest_ts = pd.to_datetime(end_time, unit="ms")
+        # 记录最早一根K线的UTC时间
+        end_time = batch[-1][0]
+        earliest_ts = pd.to_datetime(pd.to_numeric(end_time), unit="ms", utc=True)
+
         if earliest_ts <= target_time:
             print(f"✅ 已到达目标时间 {target_time.date()}")
             break
 
-        time.sleep(0.2)  # 防止触发限速
+        time.sleep(0.2)  # 防止限速
 
-    # 转DataFrame
+    # 转 DataFrame
     df = pd.DataFrame(all_data, columns=[
-        "ts", "open", "high", "low", "close", "vol",
-        "volCcy", "volCcyQuote", "confirm"
+        "ts", "open", "high", "low", "close", "vol", "volCcy", "volCcyQuote", "confirm"
     ])
-    df["ts"] = pd.to_datetime(df["ts"].astype(float), unit="ms")
+    df["ts"] = pd.to_datetime(pd.to_numeric(df["ts"]), unit="ms", utc=True)
     df = df.sort_values("ts").reset_index(drop=True)
-    df = df[["ts", "open", "high", "low", "close", "vol"]].copy()
-
-    # 转换数据类型
-    for col in ["open", "high", "low", "close", "vol"]:
-        df[col] = df[col].astype(float)
+    df = df[["ts", "open", "high", "low", "close", "vol"]].astype(float)
 
     print(f"✅ 成功获取 {len(df)} 根K线 ({symbol}, {interval})")
 
-    # 保存本地
+    # 保存缓存
     if save:
-        os.makedirs("data/history", exist_ok=True)
-        path = f"data/history/{symbol.replace('-', '')}_{interval}_{years}y.csv"
-        df.to_csv(path, index=False)
-        print(f"💾 已保存到 {path}")
+        df.to_csv(cache_path, index=False)
+        print(f"💾 已保存到 {cache_path}")
 
     return df
 
