@@ -23,7 +23,7 @@ def main():
 
     # 价格数据
     client = OKXClient(**config["okx"])
-    dfp = get_klines(client, symbol, interval, max_candles=10000)
+    dfp = get_klines(client, symbol, interval, years=3)
     if dfp is None or dfp.empty:
         print("❌ 价格数据为空")
         return
