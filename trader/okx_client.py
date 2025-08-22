@@ -34,7 +34,7 @@ class OKXClient:
         if before:
             params["before"] = before
 
-        print(f"params: {params}")
+        #print(f"params: {params}")
         resp = requests.get(url, params=params)
         print(f"resp: {resp}")
         if resp.status_code != 200:
