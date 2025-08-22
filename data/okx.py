@@ -186,7 +186,7 @@ def get_klines(client, symbol, interval, years=5, limit=1000, save=True):
 
 """
 def get_klines(client, symbol, interval, limit=1000, max_candles=10000, save=True):
-    """
+    '''
     分页拉取OKX历史K线，自动拼接，返回DataFrame
     :param client: OKXClient
     :param symbol: 交易对，例如 "BTC-USDT"
@@ -194,7 +194,7 @@ def get_klines(client, symbol, interval, limit=1000, max_candles=10000, save=Tru
     :param limit: 单次请求数量（OKX最大1000）
     :param max_candles: 最多获取多少根K线
     :param save: 是否保存到 data/history/ 目录
-    """
+    '''
     all_data = []
     end_time = None
     fetched = 0
