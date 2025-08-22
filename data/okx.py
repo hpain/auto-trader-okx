@@ -140,7 +140,7 @@ def get_klines(client, symbol, interval, years=5, limit=1000, save=True):
 
     all_data = []
     end_time = None
-    target_time = pd.Timestamp.utcnow().tz_localize("UTC") - pd.Timedelta(days=years * 365)
+    target_time = pd.Timestamp.utcnow() - pd.Timedelta(days=years * 365)
 
     while True:
         params = {
