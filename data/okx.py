@@ -123,9 +123,11 @@ def fetch_ohlcv(symbol, interval='1h', limit=50):
 
 def get_klines(client, symbol, interval, years=1, limit=300, save=True, keep_ts_float=False, max_pages=5000):
     """
-    稳健抓取 OKX 历史K线（无死循环版，只用 /market/candles）：
-    - 分页拉取，直到命中目标时间或达到 max_pages
-    - 自动去重、按时间正序
+    稳健抓取 OKX 历史 K 线（分页+去重+防死循环+按时间正序）：
+    - 第 1 页使用 /market/candles
+    - 后续使用 /market/history-candles
+    - 每页 before = 上页最旧 K 线时间戳 - 1ms
+    - 命中目标时间后截断
     - 支持保存 CSV
     """
     import os, time, requests
@@ -133,15 +135,16 @@ def get_klines(client, symbol, interval, years=1, limit=300, save=True, keep_ts_
 
     # 规范化 interval
     def normalize_interval(iv):
-        m = {'1m':'1m','5m':'5m','15m':'15m','30m':'30m',
-             '1h':'1H','4h':'4H','1d':'1D','1w':'1W'}
+        m = {
+            '1m':'1m','5m':'5m','15m':'15m','30m':'30m',
+            '1h':'1H','4h':'4H','1d':'1D','1w':'1W'
+        }
         return m.get(iv.lower(), iv)
 
     bar = normalize_interval(interval)
 
     # 目标时间
     target_time = pd.Timestamp.utcnow() - pd.Timedelta(days=years*365)
-    # 修复 tz-aware 错误
     if target_time.tzinfo is None:
         target_time = target_time.tz_localize('UTC')
     else:
@@ -156,11 +159,14 @@ def get_klines(client, symbol, interval, years=1, limit=300, save=True, keep_ts_
     all_rows = []
     before_ts = None
     page_no = 1
+    last_oldest_ts = None
 
     while page_no <= max_pages:
-        url = f"{client.base_url}/api/v5/market/candles"
+        # 第 1 页用 candles，后续用 history-candles
+        endpoint = "/api/v5/market/candles" if page_no == 1 and before_ts is None else "/api/v5/market/history-candles"
+        url = f"{client.base_url}{endpoint}"
         params = {"instId": symbol, "bar": bar, "limit": limit}
-        if before_ts:
+        if before_ts is not None:
             params["before"] = str(int(before_ts))
 
         try:
@@ -168,7 +174,7 @@ def get_klines(client, symbol, interval, years=1, limit=300, save=True, keep_ts_
             r.raise_for_status()
             resp = r.json()
         except Exception as e:
-            print(f"⚠️ 请求异常: {e}")
+            print(f"⚠️ 请求异常: {type(e).__name__}: {e}")
             break
 
         if resp.get("code") not in ("0", 0, None) or not resp.get("data"):
@@ -179,33 +185,36 @@ def get_klines(client, symbol, interval, years=1, limit=300, save=True, keep_ts_
         if not batch:
             break
 
-        # OKX 返回倒序，最新→最旧
+        # OKX 返回倒序（最新→最旧）
         ts_arr = pd.to_datetime([int(row[0]) for row in batch], unit='ms', utc=True)
         newest, oldest = ts_arr.max(), ts_arr.min()
         diff_h = (oldest - target_time).total_seconds() / 3600
-        print(f"📄 第 {page_no} 页: {len(batch)} 根, 最旧 {oldest}, 最新 {newest}, 距目标 {diff_h:.1f} 小时")
+        print(f"📄 第 {page_no} 页 via {endpoint.split('/')[-1]}: {len(batch)} 根, 最旧 {oldest}, 最新 {newest}, 距目标 {diff_h:.1f} 小时")
+
+        # 游标前进保护
+        cur_oldest_ts = int(batch[-1][0])  # 直接用 API 返回的原始毫秒值
+        if last_oldest_ts is not None and cur_oldest_ts >= last_oldest_ts:
+            print(f"⛔ 游标未前进（oldest_ts 未变：{cur_oldest_ts}），终止抓取")
+            break
+        last_oldest_ts = cur_oldest_ts
 
         # 命中目标时间 → 截断
-        batch = [row for row in batch if pd.to_datetime(int(row[0]), unit='ms', utc=True) >= target_time]
+        batch = [row for row in batch if pd.to_datetime(int(row[0]), unit="ms", utc=True) >= target_time]
         all_rows.extend(batch)
 
-        # 如果最旧 K 线已经早于目标时间，结束
         if oldest <= target_time:
             print(f"✅ 命中目标时间，已收集到 {target_time.date()} 及之后数据")
             break
 
-
-        # 更新游标
-        before_ts = int(oldest.value // 10**6) - 1
+        before_ts = cur_oldest_ts - 1
         page_no += 1
-        time.sleep(0.2)  # 限速
-       
+        time.sleep(0.18)  # 适度限速
 
     if not all_rows:
-        print("❌ 没有抓到任何K线")
+        print("❌ 没有抓到任何 K 线")
         return pd.DataFrame(columns=["ts","open","high","low","close","vol"])
 
-    # 构建 DataFrame
+    # DataFrame 化
     df = pd.DataFrame(all_rows)
     df.columns = ["ts","open","high","low","close","vol","volCcy","volCcyQuote","confirm"][:df.shape[1]]
     df["ts"] = pd.to_datetime(df["ts"].astype(int), unit="ms", utc=True)
@@ -215,10 +224,17 @@ def get_klines(client, symbol, interval, years=1, limit=300, save=True, keep_ts_
     df = df.dropna(subset=["open","high","low","close"]).sort_values("ts").drop_duplicates(subset=["ts"]).reset_index(drop=True)
     df = df[df["ts"] >= target_time].reset_index(drop=True)
 
-    if keep_ts_float:
-        df["ts_float"] = df["ts"].view("int64") / 1e9
+    # 数量护栏
+    bars_per_day = {"1m":1440,"5m":288,"15m":96,"30m":48,"1h":24,"4h":6,"1d":1,"1w":1/7}
+    if interval.lower() in bars_per_day:
+        expected = int(years*365*bars_per_day[interval.lower()] + 96)  # 留冗余
+        if len(df) > expected:
+            df = df.tail(expected).reset_index(drop=True)
 
-    print(f"✅ 成功获取 {len(df)} 根K线 ({symbol}, {interval}, {years}y)")
+    if keep_ts_float:
+        df["ts_float"] = df["ts"].view("int64")/1e9
+
+    print(f"✅ 成功获取 {len(df)} 根 K 线 ({symbol}, {interval}, {years}y)")
     if save:
         df.to_csv(cache_path, index=False)
         print(f"💾 已保存到 {cache_path}")
