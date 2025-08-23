@@ -163,9 +163,16 @@ def get_klines(client, symbol, interval, years=5, limit=1000, save=True, keep_ts
         )
 
         # 如果本页最早的K线时间 <= 目标时间 -> 到达截断点
-        if page_times.min() <= target_time.tz_localize("UTC"):
+       # 确保 target_time 是 tz-aware(UTC)
+        if target_time.tzinfo is None:
+            target_time = target_time.tz_localize("UTC")
+        else:
+            target_time = target_time.tz_convert("UTC")
+
+        if page_times.min() <= target_time:
             print(f"✅ 已到达目标时间 {target_time.date()}")
             break
+
 
         # 下一页起点：本页最早一根的时间戳
         end_time = batch[-1][0]
@@ -191,7 +198,11 @@ def get_klines(client, symbol, interval, years=5, limit=1000, save=True, keep_ts
 
     # ⬇️ 收尾精确截断，确保只保留 target_time 之后的数据
     if years is not None:
-        df = df[df["ts"] >= target_time.tz_localize("UTC")].reset_index(drop=True)
+        if target_time.tzinfo is None:
+            target_time = target_time.tz_localize("UTC")
+       else:
+            target_time = target_time.tz_convert("UTC")
+       df = df[df["ts"] >= target_time].reset_index(drop=True)
 
     print(f"✅ 成功获取 {len(df)} 根K线 ({symbol}, {interval})")
 
