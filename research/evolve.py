@@ -27,6 +27,7 @@ def main():
     symbol = config.get("trade", {}).get("symbol", "BTC-USDT")
     interval = config.get("trade", {}).get("interval", "1H")
 
+    print(f"拉取年数：{args.years}")
     # === 拉取价格数据 ===
     client = OKXClient(**config["okx"])
     dfp = get_klines(client, symbol, interval, years=args.years)
