@@ -125,19 +125,21 @@ def fetch_ohlcv(symbol, interval='1h', limit=50):
 
 def get_klines(client, symbol, interval, years=5, limit=1000, save=True, keep_ts_float=False):
     """
-    按年限抓取 OKX 历史K线，统一UTC时区，循环内跨页检测+循环结束后精确截断
+    按年限抓取 OKX 历史K线，命中目标时间页即时截断 + 收尾双保险过滤
     """
     import os, time
     import pandas as pd
 
-    # 保存路径（缓存功能暂不恢复）
     cache_dir = "data/history"
     os.makedirs(cache_dir, exist_ok=True)
     cache_path = f"{cache_dir}/{symbol.replace('-', '')}_{interval}_{years}y.csv"
 
+    # 目标时间（tz-aware UTC）
+    target_time = pd.Timestamp.utcnow() - pd.Timedelta(days=years * 365)
+    target_time = target_time.tz_localize("UTC") if target_time.tzinfo is None else target_time.tz_convert("UTC")
+
     all_data = []
     end_time = None
-    target_time = pd.Timestamp.utcnow() - pd.Timedelta(days=years * 365)
 
     while True:
         params = {
@@ -154,29 +156,20 @@ def get_klines(client, symbol, interval, years=5, limit=1000, save=True, keep_ts
             break
 
         batch = resp["data"]
-        all_data.extend(batch)
-
-        # 本页的所有时间戳（UTC）
-        page_times = pd.to_datetime(
-            pd.to_numeric([row[0] for row in batch]),
-            unit="ms", utc=True
-        )
-
-        # 如果本页最早的K线时间 <= 目标时间 -> 到达截断点
-       # 确保 target_time 是 tz-aware(UTC)
-        if target_time.tzinfo is None:
-            target_time = target_time.tz_localize("UTC")
-        else:
-            target_time = target_time.tz_convert("UTC")
+        page_times = pd.to_datetime(pd.to_numeric([row[0] for row in batch]), unit="ms", utc=True)
 
         if page_times.min() <= target_time:
             print(f"✅ 已到达目标时间 {target_time.date()}")
+            batch = [
+                row for row in batch
+                if pd.to_datetime(int(row[0]), unit="ms", utc=True) >= target_time
+            ]
+            all_data.extend(batch)
             break
+        else:
+            all_data.extend(batch)
 
-
-        # 下一页起点：本页最早一根的时间戳
         end_time = batch[-1][0]
-
         time.sleep(0.2)  # 防限速
 
     # 转 DataFrame
@@ -186,27 +179,19 @@ def get_klines(client, symbol, interval, years=5, limit=1000, save=True, keep_ts
     ])
     df["ts"] = pd.to_datetime(pd.to_numeric(df["ts"]), unit="ms", utc=True)
 
-    # 转数值列
     num_cols = ["open", "high", "low", "close", "vol"]
     df[num_cols] = df[num_cols].astype(float)
 
     if keep_ts_float:
         df["ts_float"] = df["ts"].view("int64") / 1e9
 
-    # 按时间升序
     df = df.sort_values("ts").reset_index(drop=True)
 
-    # ⬇️ 收尾精确截断，确保只保留 target_time 之后的数据
-    if years is not None:
-        if target_time.tzinfo is None:
-            target_time = target_time.tz_localize("UTC")
-        else:
-            target_time = target_time.tz_convert("UTC")
-        df = df[df["ts"] >= target_time].reset_index(drop=True)
+    # 收尾严格截断
+    df = df[df["ts"] >= target_time].reset_index(drop=True)
 
     print(f"✅ 成功获取 {len(df)} 根K线 ({symbol}, {interval})")
 
-    # 保存数据（无缓存逻辑）
     if save:
         df.to_csv(cache_path, index=False)
         print(f"💾 已保存到 {cache_path}")
