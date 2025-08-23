@@ -125,29 +125,16 @@ def fetch_ohlcv(symbol, interval='1h', limit=50):
 
 def get_klines(client, symbol, interval, years=5, limit=1000, save=True, keep_ts_float=False):
     """
-    按年限抓取OKX历史K线，支持本地缓存优先，统一UTC时区
-    :param keep_ts_float: 是否额外保留秒级浮点时间戳列
+    按年限抓取 OKX 历史K线，统一UTC时区，循环内跨页检测+循环结束后精确截断
     """
     import os, time
     import pandas as pd
 
-    # 缓存路径
+    # 保存路径（缓存功能暂不恢复）
     cache_dir = "data/history"
     os.makedirs(cache_dir, exist_ok=True)
     cache_path = f"{cache_dir}/{symbol.replace('-', '')}_{interval}_{years}y.csv"
 
-    # 优先用本地缓存
-    '''
-    if os.path.exists(cache_path):
-        print(f"📂 从本地缓存读取数据：{cache_path}")
-        df = pd.read_csv(
-            cache_path,
-            parse_dates=["ts"],
-            date_parser=lambda col: pd.to_datetime(col, utc=True)
-        )
-        return df
-    '''
-    
     all_data = []
     end_time = None
     target_time = pd.Timestamp.utcnow() - pd.Timedelta(days=years * 365)
@@ -168,12 +155,20 @@ def get_klines(client, symbol, interval, years=5, limit=1000, save=True, keep_ts
 
         batch = resp["data"]
         all_data.extend(batch)
-        end_time = batch[-1][0]
 
-        earliest_ts = pd.to_datetime(pd.to_numeric(end_time), unit="ms", utc=True)
-        if earliest_ts <= target_time:
+        # 本页的所有时间戳（UTC）
+        page_times = pd.to_datetime(
+            pd.to_numeric([row[0] for row in batch]),
+            unit="ms", utc=True
+        )
+
+        # 如果本页最早的K线时间 <= 目标时间 -> 到达截断点
+        if page_times.min() <= target_time.tz_localize("UTC"):
             print(f"✅ 已到达目标时间 {target_time.date()}")
             break
+
+        # 下一页起点：本页最早一根的时间戳
+        end_time = batch[-1][0]
 
         time.sleep(0.2)  # 防限速
 
@@ -182,24 +177,25 @@ def get_klines(client, symbol, interval, years=5, limit=1000, save=True, keep_ts
         "ts", "open", "high", "low", "close", "vol",
         "volCcy", "volCcyQuote", "confirm"
     ])
-
-    # 时间列保持 datetime64[ns, UTC]
     df["ts"] = pd.to_datetime(pd.to_numeric(df["ts"]), unit="ms", utc=True)
 
-    # 转数值列（只转价格和成交量，不动时间列）
+    # 转数值列
     num_cols = ["open", "high", "low", "close", "vol"]
     df[num_cols] = df[num_cols].astype(float)
 
-    # 如果需要浮点秒时间戳
     if keep_ts_float:
         df["ts_float"] = df["ts"].view("int64") / 1e9
 
-    # 排序
+    # 按时间升序
     df = df.sort_values("ts").reset_index(drop=True)
+
+    # ⬇️ 收尾精确截断，确保只保留 target_time 之后的数据
+    if years is not None:
+        df = df[df["ts"] >= target_time.tz_localize("UTC")].reset_index(drop=True)
 
     print(f"✅ 成功获取 {len(df)} 根K线 ({symbol}, {interval})")
 
-    # 保存缓存
+    # 保存数据（无缓存逻辑）
     if save:
         df.to_csv(cache_path, index=False)
         print(f"💾 已保存到 {cache_path}")
