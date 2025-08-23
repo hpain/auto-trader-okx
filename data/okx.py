@@ -124,113 +124,101 @@ def fetch_ohlcv(symbol, interval='1h', limit=50):
 
 def get_klines(client, symbol, interval, years=1, limit=1000, save=True, keep_ts_float=False):
     """
-    按年限抓取 OKX 历史K线：
-    - 从最新往过去翻页
-    - 游标严格推进：每次 before = 本页最旧时间 - 1ms
-    - 命中 target_time 后页内截断
-    - 去重 + 时间升序
-    - 条数护栏（防止 API 异常多抓）
+    按年限拉取 OKX 历史K线（正向分页 + 严格窗口 + 分页日志）
+    - 从 target_time 往现在，用 after 游标推进
+    - 每页打印 第几页 / 条数 / 最早-最晚 / 距 now 差距
+    - 严格截断到 window，以及条数护栏
     """
     import os, time
     import pandas as pd
 
-    def normalize_interval(interval):
-        mapping = {
-            '1h': '1H', '4h': '4H', '1d': '1D', '1w': '1W',
-            '1m': '1m', '5m': '5m', '15m': '15m', '30m': '30m'
+    def normalize_interval(iv):
+        m = {
+            '1m':'1m','5m':'5m','15m':'15m','30m':'30m',
+            '1h':'1H','4h':'4H','1d':'1D','1w':'1W'
         }
-        return mapping.get(interval.lower(), interval)
+        return m.get(iv.lower(), iv)
 
-    # 目标时间（tz-aware UTC）
-    target_time = pd.Timestamp.utcnow() - pd.Timedelta(days=years * 365)
-    if target_time.tzinfo is None:
-        target_time = target_time.tz_localize("UTC")
-    else:
-        target_time = target_time.tz_convert("UTC")
+    # 1）计算窗口
+    now_utc = pd.Timestamp.utcnow().tz_localize("UTC")
+    target_time = (now_utc - pd.Timedelta(days=years * 365)).ceil(interval.lower()).tz_convert("UTC")
 
-    cache_dir = "data/history"
-    os.makedirs(cache_dir, exist_ok=True)
-    cache_path = f"{cache_dir}/{symbol.replace('-', '')}_{interval}_{years}y.csv"
+    # 2）准备 after 游标：要拿到 >= target_time 的第一根，减 1ms
+    after_ms = int((target_time - pd.Timedelta(milliseconds=1)).timestamp() * 1000)
 
-    all_data = []
-    before_ts = None
+    all_rows = []
     page_no = 1
 
     while True:
         params = {
             "instId": symbol,
             "bar": normalize_interval(interval),
-            "limit": limit
+            "limit": limit,
+            "after": str(after_ms)
         }
-        if before_ts is not None:
-            params["before"] = before_ts
-
         resp = client.get_candlesticks(**params)
-        if not resp or "data" not in resp or not resp["data"]:
-            print("⚠️ API 返回数据为空或出错")
+        data = resp.get("data") or []
+        if not data:
+            print("⚠️ API 返回空或出错")
             break
 
-        batch = resp["data"]
-        # OKX 返回的数据是时间倒序（最新→最旧）
-        page_times = pd.to_datetime(
-            pd.to_numeric([row[0] for row in batch]), unit="ms", utc=True
-        )
+        # 转时间戳
+        ts = pd.to_datetime([int(r[0]) for r in data], unit="ms", utc=True)
+        earliest, latest = ts.min(), ts.max()
 
-        diff_hours = (page_times.min() - target_time).total_seconds() / 3600
-        diff_days = diff_hours / 24
-        print(f"📄 第 {page_no} 页: {len(batch)} 根, "
-              f"最早 {page_times.min()}, 最晚 {page_times.max()}, "
-              f"距目标 {diff_hours:.1f} 小时 ({diff_days:.2f} 天)")
+        # 分页日志：页号 / 条数 / 范围 / 距离 now 差距
+        delta_hrs = (now_utc - latest).total_seconds() / 3600
+        print(f"📄 第{page_no}页: {len(data)}根, 范围 {earliest} ~ {latest}, 离 now {delta_hrs:.1f}h")
 
-        # 命中目标时间 → 截断
-        if page_times.min() <= target_time:
-            batch = [
-                row for row in batch
-                if pd.to_datetime(int(row[0]), unit="ms", utc=True) >= target_time
-            ]
-            all_data.extend(batch)
-            print(f"✅ 已到达目标时间 {target_time.date()}")
+        # 收集 >= target_time 的行
+        for row, t in zip(data, ts):
+            if t >= target_time:
+                all_rows.append(row)
+
+        # 如果 latest 已经 >= now_utc（拉到最新），或本页条数 < limit，直接停
+        if latest >= now_utc or len(data) < limit:
+            print("✅ 拉取到最新或不足一页，停止")
             break
-        else:
-            all_data.extend(batch)
-            oldest_ts = int(batch[-1][0])   # 最旧的时间戳（毫秒）
-            before_ts = oldest_ts - 1       # 下一页游标
-            print(f"➡️ 下一页 before={before_ts} "
-                  f"({pd.to_datetime(before_ts, unit='ms', utc=True)})")
 
+        # 推进 after 游标：本页最新时间 + 1ms
+        after_ms = int((latest + pd.Timedelta(milliseconds=1)).timestamp() * 1000)
         page_no += 1
-        time.sleep(0.2)  # 防止触发限流
+        time.sleep(0.2)
 
-    # 转 DataFrame
-    df = pd.DataFrame(all_data, columns=[
-        "ts", "open", "high", "low", "close", "vol",
-        "volCcy", "volCcyQuote", "confirm"
+    # DataFrame 化 & 类型转换
+    df = pd.DataFrame(all_rows, columns=[
+        "ts","open","high","low","close","vol",
+        "volCcy","volCcyQuote","confirm"
     ])
-    df["ts"] = pd.to_datetime(pd.to_numeric(df["ts"]), unit="ms", utc=True)
-    num_cols = ["open", "high", "low", "close", "vol"]
-    df[num_cols] = df[num_cols].astype(float)
+    df["ts"] = pd.to_datetime(df["ts"].astype(int), unit="ms", utc=True)
+    for c in ["open","high","low","close","vol"]:
+        df[c] = df[c].astype(float)
     if keep_ts_float:
         df["ts_float"] = df["ts"].view("int64") / 1e9
 
-    # 排序 + 去重 + 截断
-    df = df.sort_values("ts").drop_duplicates(subset=["ts"]).reset_index(drop=True)
+    # 排序 + 去重 + 严格窗口截断
+    df = df.sort_values("ts").drop_duplicates(["ts"]).reset_index(drop=True)
     df = df[df["ts"] >= target_time].reset_index(drop=True)
 
-    # 预期护栏
+    # 条数护栏（可选）
     bars_per_day = {
-        "1m": 1440, "5m": 288, "15m": 96, "30m": 48,
-        "1h": 24, "4h": 6, "1d": 1, "1w": 1/7
+        "1m":1440, "5m":288, "15m":96, "30m":48,
+        "1h":24, "4h":6, "1d":1, "1w":1/7
     }
-    if interval.lower() in bars_per_day:
-        expected = int(years * 365 * bars_per_day[interval.lower()] + 48)
+    iv = interval.lower()
+    if iv in bars_per_day:
+        expected = int(years * 365 * bars_per_day[iv] + 2)  # +2根缓冲
         if len(df) > expected:
-            print(f"⚠️ 超出预期({expected})，裁剪多余 {len(df) - expected} 根")
+            print(f"⚠️ 超出预期{expected}根，裁剪多余{len(df)-expected}根")
             df = df.tail(expected).reset_index(drop=True)
 
-    print(f"✅ 成功获取 {len(df)} 根K线 ({symbol}, {interval})")
+    print(f"✅ 完成获取 {len(df)}根K线 ({symbol},{interval}), 窗口从{target_time}到{now_utc}")
     if save:
-        df.to_csv(cache_path, index=False)
-        print(f"💾 已保存到 {cache_path}")
+        os.makedirs("data/history", exist_ok=True)
+        path = f"data/history/{symbol.replace('-','')}_{interval}_{years}y.csv"
+        df.to_csv(path, index=False)
+        print(f"💾 已保存 {path}")
+
     return df
 
 
