@@ -129,6 +129,7 @@ def get_klines(client, symbol, interval, years=1, limit=1000, save=True, keep_ts
     - 逆向翻页
     - 命中目标时间页即时截断
     - 收尾严格过滤 + 条数护栏
+    - 分页调试日志：每页范围、数量、起点差距
     """
     import os, time
     import pandas as pd
@@ -150,6 +151,7 @@ def get_klines(client, symbol, interval, years=1, limit=1000, save=True, keep_ts
 
     all_data = []
     end_time = None
+    page_no = 1
 
     while True:
         params = {
@@ -171,6 +173,14 @@ def get_klines(client, symbol, interval, years=1, limit=1000, save=True, keep_ts
             unit="ms", utc=True
         )
 
+        # 计算当前页最早时间与目标时间的差距（小时/天）
+        diff_hours = (page_times.min() - target_time).total_seconds() / 3600
+        diff_days = diff_hours / 24
+
+        print(f"📄 第 {page_no} 页: {len(batch)} 根, "
+              f"最早 {page_times.min()}, 最晚 {page_times.max()}, "
+              f"距目标 {diff_hours:.1f} 小时 ({diff_days:.2f} 天)")
+
         # 命中目标时间 → 页内截断 + 立即结束
         if page_times.min() <= target_time:
             print(f"✅ 已到达目标时间 {target_time.date()}")
@@ -184,6 +194,7 @@ def get_klines(client, symbol, interval, years=1, limit=1000, save=True, keep_ts
             all_data.extend(batch)
 
         end_time = batch[-1][0]
+        page_no += 1
         time.sleep(0.2)  # 防限速
 
     # 转 DataFrame
@@ -212,6 +223,7 @@ def get_klines(client, symbol, interval, years=1, limit=1000, save=True, keep_ts
     if interval.lower() in bars_per_day:
         expected = int(years * 365 * bars_per_day[interval.lower()] + 48)  # +48 容差
         if len(df) > expected:
+            print(f"⚠️ 超出预期({expected})，裁剪多余 {len(df) - expected} 根")
             df = df.tail(expected).reset_index(drop=True)
 
     print(f"✅ 成功获取 {len(df)} 根K线 ({symbol}, {interval})")
@@ -221,6 +233,7 @@ def get_klines(client, symbol, interval, years=1, limit=1000, save=True, keep_ts
         print(f"💾 已保存到 {cache_path}")
 
     return df
+
 
 
 """
