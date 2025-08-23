@@ -61,7 +61,7 @@ def main():
         print(f"⚠️ 样本太少（{len(data)}）无法有效训练，建议拉更长周期或换小周期。")
         return
 
-    best_score, best_params = train_evolve(data, feature_cols, out_dir="models", n_trials=30)
+    best_score, best_params = train_evolve(data, feature_cols, out_dir="models", n_trials=50)
     print(f"✅ 训练完成：best sharpe={best_score:.3f}")
     print("最佳参数：", json.dumps(best_params, ensure_ascii=False, indent=2))
 
