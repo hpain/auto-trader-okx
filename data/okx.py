@@ -126,10 +126,11 @@ def fetch_ohlcv(symbol, interval='1h', limit=50):
 def get_klines(client, symbol, interval, years=1, limit=1000, save=True, keep_ts_float=False):
     """
     按年限抓取 OKX 历史K线：
-    - 逆向翻页
-    - 命中目标时间页即时截断
-    - 收尾严格过滤 + 条数护栏
-    - 分页调试日志：每页范围、数量、起点差距
+    - 从最新往过去翻页
+    - 游标严格推进：每次 before = 本页最早 - 1ms
+    - 命中 target_time 后页内截断
+    - 去重 + 时间升序
+    - 条数护栏（防止 API 异常多抓）
     """
     import os, time
     import pandas as pd
@@ -143,14 +144,17 @@ def get_klines(client, symbol, interval, years=1, limit=1000, save=True, keep_ts
 
     # 目标时间（tz-aware UTC）
     target_time = pd.Timestamp.utcnow() - pd.Timedelta(days=years * 365)
-    target_time = target_time.tz_localize("UTC") if target_time.tzinfo is None else target_time.tz_convert("UTC")
+    if target_time.tzinfo is None:
+        target_time = target_time.tz_localize("UTC")
+    else:
+        target_time = target_time.tz_convert("UTC")
 
     cache_dir = "data/history"
     os.makedirs(cache_dir, exist_ok=True)
     cache_path = f"{cache_dir}/{symbol.replace('-', '')}_{interval}_{years}y.csv"
 
     all_data = []
-    end_time = None
+    before_ts = None
     page_no = 1
 
     while True:
@@ -159,8 +163,8 @@ def get_klines(client, symbol, interval, years=1, limit=1000, save=True, keep_ts
             "bar": normalize_interval(interval),
             "limit": limit
         }
-        if end_time:
-            params["before"] = end_time
+        if before_ts is not None:
+            params["before"] = before_ts
 
         resp = client.get_candlesticks(**params)
         if not resp or "data" not in resp or not resp["data"]:
@@ -169,33 +173,29 @@ def get_klines(client, symbol, interval, years=1, limit=1000, save=True, keep_ts
 
         batch = resp["data"]
         page_times = pd.to_datetime(
-            pd.to_numeric([row[0] for row in batch]),
-            unit="ms", utc=True
+            pd.to_numeric([row[0] for row in batch]), unit="ms", utc=True
         )
 
-        # 计算当前页最早时间与目标时间的差距（小时/天）
         diff_hours = (page_times.min() - target_time).total_seconds() / 3600
         diff_days = diff_hours / 24
-
         print(f"📄 第 {page_no} 页: {len(batch)} 根, "
               f"最早 {page_times.min()}, 最晚 {page_times.max()}, "
               f"距目标 {diff_hours:.1f} 小时 ({diff_days:.2f} 天)")
 
-        # 命中目标时间 → 页内截断 + 立即结束
         if page_times.min() <= target_time:
-            print(f"✅ 已到达目标时间 {target_time.date()}")
             batch = [
                 row for row in batch
                 if pd.to_datetime(int(row[0]), unit="ms", utc=True) >= target_time
             ]
             all_data.extend(batch)
+            print(f"✅ 已到达目标时间 {target_time.date()}")
             break
         else:
             all_data.extend(batch)
+            before_ts = int((page_times.min() - pd.Timedelta(milliseconds=1)).timestamp() * 1000)
 
-        end_time = batch[-1][0]
         page_no += 1
-        time.sleep(0.2)  # 防限速
+        time.sleep(0.2)
 
     # 转 DataFrame
     df = pd.DataFrame(all_data, columns=[
@@ -203,37 +203,30 @@ def get_klines(client, symbol, interval, years=1, limit=1000, save=True, keep_ts
         "volCcy", "volCcyQuote", "confirm"
     ])
     df["ts"] = pd.to_datetime(pd.to_numeric(df["ts"]), unit="ms", utc=True)
-
     num_cols = ["open", "high", "low", "close", "vol"]
     df[num_cols] = df[num_cols].astype(float)
-
     if keep_ts_float:
         df["ts_float"] = df["ts"].view("int64") / 1e9
 
-    df = df.sort_values("ts").reset_index(drop=True)
-
-    # 收尾严格截断
+    # 排序 + 去重 + 截断
+    df = df.sort_values("ts").drop_duplicates(subset=["ts"]).reset_index(drop=True)
     df = df[df["ts"] >= target_time].reset_index(drop=True)
 
-    # 条数护栏（防止 API 异常多抓）
     bars_per_day = {
         "1m": 1440, "5m": 288, "15m": 96, "30m": 48,
         "1h": 24, "4h": 6, "1d": 1, "1w": 1/7
     }
     if interval.lower() in bars_per_day:
-        expected = int(years * 365 * bars_per_day[interval.lower()] + 48)  # +48 容差
+        expected = int(years * 365 * bars_per_day[interval.lower()] + 48)
         if len(df) > expected:
             print(f"⚠️ 超出预期({expected})，裁剪多余 {len(df) - expected} 根")
             df = df.tail(expected).reset_index(drop=True)
 
     print(f"✅ 成功获取 {len(df)} 根K线 ({symbol}, {interval})")
-
     if save:
         df.to_csv(cache_path, index=False)
         print(f"💾 已保存到 {cache_path}")
-
     return df
-
 
 
 """
