@@ -119,6 +119,10 @@ def train_evolve(df: pd.DataFrame, feature_cols, out_dir="models", n_trials=50, 
             "trades": trial.user_attrs.get("trades"),
             "mean_mdd": trial.user_attrs.get("mean_mdd")
         })
+
+        # 记录和最佳的差距
+        gap = score - best_so_far
+        
         # 早停逻辑
         if score > best_so_far + 1e-6:
             best_so_far = score
@@ -126,7 +130,14 @@ def train_evolve(df: pd.DataFrame, feature_cols, out_dir="models", n_trials=50, 
         else:
             no_improve_rounds += 1
             if no_improve_rounds >= patience:
+                print(f"⚠️ Trial {trial.number} pruned: 连续 {patience} 次无提升 (gap={gap:.4f})")
                 raise optuna.exceptions.TrialPruned()
+                
+        # 如果当前得分比最佳差太多，也直接剪掉
+        if gap < -1.0:  # 比最佳低 1.0 Sharpe
+            print(f"⚠️ Trial {trial.number} pruned: 当前 score 比最佳低 {abs(gap):.3f}")
+            raise optuna.exceptions.TrialPruned()
+            
         return score
 
     study = optuna.create_study(direction="maximize")
