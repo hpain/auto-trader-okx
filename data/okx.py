@@ -123,20 +123,30 @@ def fetch_ohlcv(symbol, interval='1h', limit=50):
 
 
 
-def get_klines(client, symbol, interval, years=5, limit=1000, save=True, keep_ts_float=False):
+def get_klines(client, symbol, interval, years=1, limit=1000, save=True, keep_ts_float=False):
     """
-    按年限抓取 OKX 历史K线，命中目标时间页即时截断 + 收尾双保险过滤
+    按年限抓取 OKX 历史K线：
+    - 逆向翻页
+    - 命中目标时间页即时截断
+    - 收尾严格过滤 + 条数护栏
     """
     import os, time
     import pandas as pd
 
-    cache_dir = "data/history"
-    os.makedirs(cache_dir, exist_ok=True)
-    cache_path = f"{cache_dir}/{symbol.replace('-', '')}_{interval}_{years}y.csv"
+    def normalize_interval(interval):
+        mapping = {
+            '1h': '1H', '4h': '4H', '1d': '1D', '1w': '1W',
+            '1m': '1m', '5m': '5m', '15m': '15m', '30m': '30m'
+        }
+        return mapping.get(interval.lower(), interval)
 
     # 目标时间（tz-aware UTC）
     target_time = pd.Timestamp.utcnow() - pd.Timedelta(days=years * 365)
     target_time = target_time.tz_localize("UTC") if target_time.tzinfo is None else target_time.tz_convert("UTC")
+
+    cache_dir = "data/history"
+    os.makedirs(cache_dir, exist_ok=True)
+    cache_path = f"{cache_dir}/{symbol.replace('-', '')}_{interval}_{years}y.csv"
 
     all_data = []
     end_time = None
@@ -156,8 +166,12 @@ def get_klines(client, symbol, interval, years=5, limit=1000, save=True, keep_ts
             break
 
         batch = resp["data"]
-        page_times = pd.to_datetime(pd.to_numeric([row[0] for row in batch]), unit="ms", utc=True)
+        page_times = pd.to_datetime(
+            pd.to_numeric([row[0] for row in batch]),
+            unit="ms", utc=True
+        )
 
+        # 命中目标时间 → 页内截断 + 立即结束
         if page_times.min() <= target_time:
             print(f"✅ 已到达目标时间 {target_time.date()}")
             batch = [
@@ -189,6 +203,16 @@ def get_klines(client, symbol, interval, years=5, limit=1000, save=True, keep_ts
 
     # 收尾严格截断
     df = df[df["ts"] >= target_time].reset_index(drop=True)
+
+    # 条数护栏（防止 API 异常多抓）
+    bars_per_day = {
+        "1m": 1440, "5m": 288, "15m": 96, "30m": 48,
+        "1h": 24, "4h": 6, "1d": 1, "1w": 1/7
+    }
+    if interval.lower() in bars_per_day:
+        expected = int(years * 365 * bars_per_day[interval.lower()] + 48)  # +48 容差
+        if len(df) > expected:
+            df = df.tail(expected).reset_index(drop=True)
 
     print(f"✅ 成功获取 {len(df)} 根K线 ({symbol}, {interval})")
 
