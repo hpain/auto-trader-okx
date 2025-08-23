@@ -122,116 +122,120 @@ def fetch_ohlcv(symbol, interval='1h', limit=50):
         return None
 
 
-def get_klines(client, symbol, interval, years=1, limit=300, save=True, keep_ts_float=False):
+def get_klines(client, symbol, interval, years=1, limit=300, save=True, keep_ts_float=False, max_pages=5000):
     """
-    按年限抓取 OKX 历史K线：
-    - 从最新往过去翻页 (OKX 返回数据默认：最新 → 最旧)
-    - 游标推进：每次 before = 本页最旧时间戳 - 1ms
+    稳健抓取 OKX 历史K线（无死循环版）：
+    - 第1页用 /market/candles
+    - 之后统一用 /market/history-candles
+    - 每次 before = 本页“最旧”K线时间戳 - 1ms
     - 命中 target_time 后截断
-    - 去重 + 时间升序
-    - 条数护栏（防止 API 异常多抓）
+    - 去重、按时间正序、数量护栏
     """
-    import os, time
+    import os, time, requests
     import pandas as pd
 
-    def normalize_interval(interval):
-        mapping = {
-            '1h': '1H', '4h': '4H', '1d': '1D', '1w': '1W',
-            '1m': '1m', '5m': '5m', '15m': '15m', '30m': '30m'
-        }
-        return mapping.get(interval.lower(), interval)
+    def normalize_interval(iv):
+        m = {'1h': '1H','4h': '4H','1d': '1D','1w': '1W','1m': '1m','5m': '5m','15m': '15m','30m': '30m'}
+        return m.get(iv.lower(), iv)
 
     # 目标时间（tz-aware UTC）
     target_time = pd.Timestamp.utcnow() - pd.Timedelta(days=years * 365)
-    if target_time.tzinfo is None:
-        target_time = target_time.tz_localize("UTC")
-    else:
-        target_time = target_time.tz_convert("UTC")
+    target_time = (target_time.tz_localize("UTC") if target_time.tzinfo is None else target_time.tz_convert("UTC"))
 
-    cache_dir = "data/history"
-    os.makedirs(cache_dir, exist_ok=True)
+    cache_dir = "data/history"; os.makedirs(cache_dir, exist_ok=True)
     cache_path = f"{cache_dir}/{symbol.replace('-', '')}_{interval}_{years}y.csv"
 
-    all_data = []
+    bar = normalize_interval(interval)
+    all_rows = []
     before_ts = None
     page_no = 1
+    last_oldest_ts = None
+    session = requests.Session()
 
-    while True:
-        params = {
-            "instId": symbol,
-            "bar": normalize_interval(interval),
-            "limit": limit
-        }
+    def _fetch(endpoint, params):
+        url = f"{client.base_url}{endpoint}"
+        r = session.get(url, params=params, timeout=15)
+        print(f"🔎 url: {r.url}")  # 看看 before 是否真的带出去了
+        r.raise_for_status()
+        return r.json()
+
+    while page_no <= max_pages:
+        # 第1页用 candles，后续一律 history-candles
+        endpoint = "/api/v5/market/candles" if page_no == 1 and before_ts is None else "/api/v5/market/history-candles"
+        params = {"instId": symbol, "bar": bar, "limit": limit}
         if before_ts is not None:
-            params["before"] = before_ts
+            # 有些服务端对类型较敏感，统一转字符串更稳
+            params["before"] = str(int(before_ts))
 
-        resp = client.get_candlesticks(**params)
-        if not resp or "data" not in resp or not resp["data"]:
-            print("⚠️ API 返回数据为空或出错")
+        try:
+            resp = _fetch(endpoint, params)
+        except Exception as e:
+            print(f"⚠️ 请求异常: {type(e).__name__}: {e}")
+            break
+
+        if not resp or resp.get("code") not in ("0", 0, None) or not resp.get("data"):
+            print(f"⚠️ API 返回空/错误: {resp}")
             break
 
         batch = resp["data"]
+        # OKX 返回倒序（最新→最旧）
+        ts_arr = pd.to_datetime(pd.to_numeric([row[0] for row in batch]), unit="ms", utc=True)
+        newest, oldest = ts_arr.max(), ts_arr.min()
+        diff_h = (oldest - target_time).total_seconds() / 3600
+        print(f"📄 第 {page_no} 页 via {endpoint.split('/')[-1]}: {len(batch)} 根, 最旧 {oldest}, 最新 {newest}, 距目标 {diff_h:.1f} 小时")
 
-        # OKX 数据是倒序的（最新 → 最旧）
-        batch_times = pd.to_datetime(
-            pd.to_numeric([row[0] for row in batch]), unit="ms", utc=True
-        )
-        newest = batch_times.max()
-        oldest = batch_times.min()
+        # 游标不前进保护（避免死循环）
+        cur_oldest_ts = int(min(int(r[0]) for r in batch))
+        if last_oldest_ts is not None and cur_oldest_ts >= last_oldest_ts:
+            print(f"⛔ 游标未前进（oldest_ts 未变：{cur_oldest_ts}），强制切换至 history 或终止。")
+            if endpoint.endswith("candles"):
+                # 立即改用 history 再试一次
+                page_no += 1
+                endpoint = "/api/v5/market/history-candles"
+                before_ts = cur_oldest_ts - 1
+                continue
+            else:
+                break
+        last_oldest_ts = cur_oldest_ts
 
-        diff_hours = (oldest - target_time).total_seconds() / 3600
-        diff_days = diff_hours / 24
-        print(f"📄 第 {page_no} 页: {len(batch)} 根, "
-              f"最旧 {oldest}, 最新 {newest}, "
-              f"距目标 {diff_hours:.1f} 小时 ({diff_days:.2f} 天)")
-
-        # 命中目标时间 → 截断
+        # 命中目标时间 → 截断并收尾
         if oldest <= target_time:
-            batch = [
-                row for row in batch
-                if pd.to_datetime(int(row[0]), unit="ms", utc=True) >= target_time
-            ]
-            all_data.extend(batch)
-            print(f"✅ 已到达目标时间 {target_time.date()}")
+            batch = [row for row in batch if pd.to_datetime(int(row[0]), unit="ms", utc=True) >= target_time]
+            all_rows.extend(batch)
+            print(f"✅ 命中目标时间，已收集到 {target_time.date()} 及之后数据")
             break
-        else:
-            all_data.extend(batch)
-            oldest_ts = int(batch[-1][0])   # 最旧的K线时间戳
-            before_ts = oldest_ts - 1       # 下一页游标
-            print(f"➡️ 下一页 before={before_ts} "
-                  f"({pd.to_datetime(before_ts, unit='ms', utc=True)})")
 
+        # 累加并推进游标
+        all_rows.extend(batch)
+        before_ts = cur_oldest_ts - 1
         page_no += 1
-        time.sleep(0.2)
+        time.sleep(0.18)  # 适度限速
 
-    # 转 DataFrame
+    # —— DataFrame 化 —— #
     import pandas as pd
-    df = pd.DataFrame(all_data, columns=[
-        "ts", "open", "high", "low", "close", "vol",
-        "volCcy", "volCcyQuote", "confirm"
-    ])
-    df["ts"] = pd.to_datetime(pd.to_numeric(df["ts"]), unit="ms", utc=True)
-    num_cols = ["open", "high", "low", "close", "vol"]
-    df[num_cols] = df[num_cols].astype(float)
-    if keep_ts_float:
-        df["ts_float"] = df["ts"].view("int64") / 1e9
+    if not all_rows:
+        print("❌ 没有抓到任何K线")
+        return pd.DataFrame(columns=["ts","open","high","low","close","vol"])
 
-    # 排序 + 去重 + 截断
-    df = df.sort_values("ts").drop_duplicates(subset=["ts"]).reset_index(drop=True)
+    df = pd.DataFrame(all_rows, columns=["ts","open","high","low","close","vol","volCcy","volCcyQuote","confirm"])
+    df["ts"] = pd.to_datetime(pd.to_numeric(df["ts"]), unit="ms", utc=True)
+    for col in ["open","high","low","close","vol"]:
+        df[col] = pd.to_numeric(df[col], errors="coerce")
+    df = df.dropna(subset=["open","high","low","close"]).sort_values("ts").drop_duplicates(subset=["ts"]).reset_index(drop=True)
     df = df[df["ts"] >= target_time].reset_index(drop=True)
 
-    # 预期数量护栏
-    bars_per_day = {
-        "1m": 1440, "5m": 288, "15m": 96, "30m": 48,
-        "1h": 24, "4h": 6, "1d": 1, "1w": 1/7
-    }
+    # 数量护栏
+    bars_per_day = {"1m":1440,"5m":288,"15m":96,"30m":48,"1h":24,"4h":6,"1d":1,"1w":1/7}
     if interval.lower() in bars_per_day:
-        expected = int(years * 365 * bars_per_day[interval.lower()] + 48)
+        expected = int(years*365*bars_per_day[interval.lower()] + 96)  # 留冗余
         if len(df) > expected:
-            print(f"⚠️ 超出预期({expected})，裁剪多余 {len(df) - expected} 根")
+            print(f"⚠️ 超出预期({expected})，裁掉多余 {len(df)-expected} 根")
             df = df.tail(expected).reset_index(drop=True)
 
-    print(f"✅ 成功获取 {len(df)} 根K线 ({symbol}, {interval})")
+    if keep_ts_float:
+        df["ts_float"] = df["ts"].view("int64")/1e9
+
+    print(f"✅ 成功获取 {len(df)} 根K线 ({symbol}, {interval}, {years}y)")
     if save:
         df.to_csv(cache_path, index=False)
         print(f"💾 已保存到 {cache_path}")
