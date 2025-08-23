@@ -137,6 +137,7 @@ def get_klines(client, symbol, interval, years=5, limit=1000, save=True, keep_ts
     cache_path = f"{cache_dir}/{symbol.replace('-', '')}_{interval}_{years}y.csv"
 
     # 优先用本地缓存
+    '''
     if os.path.exists(cache_path):
         print(f"📂 从本地缓存读取数据：{cache_path}")
         df = pd.read_csv(
@@ -145,7 +146,8 @@ def get_klines(client, symbol, interval, years=5, limit=1000, save=True, keep_ts
             date_parser=lambda col: pd.to_datetime(col, utc=True)
         )
         return df
-
+    '''
+    
     all_data = []
     end_time = None
     target_time = pd.Timestamp.utcnow() - pd.Timedelta(days=years * 365)
