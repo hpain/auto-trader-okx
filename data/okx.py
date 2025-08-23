@@ -200,9 +200,9 @@ def get_klines(client, symbol, interval, years=5, limit=1000, save=True, keep_ts
     if years is not None:
         if target_time.tzinfo is None:
             target_time = target_time.tz_localize("UTC")
-       else:
+        else:
             target_time = target_time.tz_convert("UTC")
-       df = df[df["ts"] >= target_time].reset_index(drop=True)
+        df = df[df["ts"] >= target_time].reset_index(drop=True)
 
     print(f"✅ 成功获取 {len(df)} 根K线 ({symbol}, {interval})")
 
