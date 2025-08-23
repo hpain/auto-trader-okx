@@ -121,7 +121,6 @@ def fetch_ohlcv(symbol, interval='1h', limit=50):
         print(f"❌ 数据解析或转换失败：{e}")
         return None
 
-
 def get_klines(client, symbol, interval, years=1, limit=300, save=True, keep_ts_float=False, max_pages=5000):
     """
     稳健抓取 OKX 历史K线（无死循环版，只用 /market/candles）：
@@ -142,7 +141,11 @@ def get_klines(client, symbol, interval, years=1, limit=300, save=True, keep_ts_
 
     # 目标时间
     target_time = pd.Timestamp.utcnow() - pd.Timedelta(days=years*365)
-    target_time = target_time.tz_localize('UTC')
+    # 修复 tz-aware 错误
+    if target_time.tzinfo is None:
+        target_time = target_time.tz_localize('UTC')
+    else:
+        target_time = target_time.tz_convert('UTC')
 
     # 保存路径
     cache_dir = "data/history"
