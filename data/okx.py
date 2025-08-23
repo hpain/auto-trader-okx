@@ -194,10 +194,12 @@ def get_klines(client, symbol, interval, years=1, limit=300, save=True, keep_ts_
             print(f"✅ 命中目标时间，已收集到 {target_time.date()} 及之后数据")
             break
 
+
         # 更新游标
-        before_ts = int(oldest) - 1
+        before_ts = int(oldest.value // 10**6) - 1
         page_no += 1
         time.sleep(0.2)  # 限速
+       
 
     if not all_rows:
         print("❌ 没有抓到任何K线")
