@@ -123,7 +123,7 @@ def fetch_ohlcv(symbol, interval='1h', limit=50):
 
 def get_klines(client, symbol, interval, years=1, limit=300, save=True, keep_ts_float=False, max_pages=5000):
     """
-    稳健抓取 OKX 历史 K 线（分页+去重+防死循环+按时间正序）：
+    稳健抓取 OKX 历史 K 线（分页+去重+防死循环+按时间正序）
     - 第 1 页使用 /market/candles
     - 后续使用 /market/history-candles
     - 每页 before = 上页最旧 K 线时间戳 - 1ms
@@ -191,11 +191,13 @@ def get_klines(client, symbol, interval, years=1, limit=300, save=True, keep_ts_
         diff_h = (oldest - target_time).total_seconds() / 3600
         print(f"📄 第 {page_no} 页 via {endpoint.split('/')[-1]}: {len(batch)} 根, 最旧 {oldest}, 最新 {newest}, 距目标 {diff_h:.1f} 小时")
 
+        # 获取当前页最旧 K 线原始毫秒时间戳
+        cur_oldest_ts = int(batch[-1][0])
+
         # 游标前进保护
-        cur_oldest_ts = int(batch[-1][0])  # 直接用 API 返回的原始毫秒值
         if last_oldest_ts is not None and cur_oldest_ts >= last_oldest_ts:
-            print(f"⛔ 游标未前进（oldest_ts 未变：{cur_oldest_ts}），终止抓取")
-            break
+            # 微调游标避免重复
+            cur_oldest_ts = last_oldest_ts - 1
         last_oldest_ts = cur_oldest_ts
 
         # 命中目标时间 → 截断
@@ -206,7 +208,8 @@ def get_klines(client, symbol, interval, years=1, limit=300, save=True, keep_ts_
             print(f"✅ 命中目标时间，已收集到 {target_time.date()} 及之后数据")
             break
 
-        before_ts = cur_oldest_ts - 1
+        # 下一页游标
+        before_ts = cur_oldest_ts
         page_no += 1
         time.sleep(0.18)  # 适度限速
 
