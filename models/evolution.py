@@ -79,15 +79,25 @@ def objective(trial: optuna.Trial, df: pd.DataFrame, feature_cols):
 
     return mean_sharpe
 
-def train_evolve(df: pd.DataFrame, feature_cols, out_dir="models", n_trials=50, patience=10):
+def train_evolve(df: pd.DataFrame, feature_cols, out_dir="models", n_trials=50, patience=10, model_list=None):
+    from config.model_config import MODEL_PARAMS
     os.makedirs(out_dir, exist_ok=True)
+
+    # 过滤模型搜索空间
+    if model_list is not None:
+        model_choices = [m for m in model_list if m in MODEL_PARAMS]
+        if not model_choices:
+            raise ValueError(f"❌ 未找到指定模型: {model_list}")
+    else:
+        model_choices = list(MODEL_PARAMS.keys())
+
     results = []
     best_so_far = -1e9
     no_improve_rounds = 0
 
     def log_objective(trial):
         nonlocal best_so_far, no_improve_rounds
-        score = objective(trial, df, feature_cols)
+        score = objective(trial, df, feature_cols, model_choices=model_choices)
         results.append({
             **trial.params,
             "mean_sharpe": score,
@@ -113,11 +123,9 @@ def train_evolve(df: pd.DataFrame, feature_cols, out_dir="models", n_trials=50, 
     pd.DataFrame(results).to_csv(os.path.join(out_dir, "optuna_trials.csv"), index=False)
     best_params = study.best_trial.params
     best_model = build_model(**best_params)
-
     X, y = df[feature_cols], df["y"]
     best_model.fit(X, y)
     dump(best_model, os.path.join(out_dir, "best_model.pkl"))
-
     meta = {
         "feature_cols": feature_cols,
         "best_params": best_params,
@@ -125,6 +133,8 @@ def train_evolve(df: pd.DataFrame, feature_cols, out_dir="models", n_trials=50, 
     }
     with open(os.path.join(out_dir, "metadata.json"), "w", encoding="utf-8") as f:
         json.dump(meta, f, ensure_ascii=False, indent=2)
+
+    # OOS 评估保持原逻辑...
 
     # === 固定留出集 OOS 评估 ===
     split_point = int(len(df) * 0.85)
