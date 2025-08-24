@@ -12,6 +12,7 @@ from features.feature_engineering import add_tech_indicators, merge_price_and_se
 from models.evolution import train_evolve
 from trader.okx_client import OKXClient
 from research.features_utils import add_features
+from utils.data_normalization import normalize_binance_df
 
 NEWS_CSV = os.getenv("NEWS_CSV_PATH", "news_sample.csv")
 
@@ -35,6 +36,7 @@ def main():
         print("❌ 价格数据为空")
         return
 
+    dfp = normalize_binance_df(dfp)
     
     # === 技术指标 & 特征 ===
     dfp = add_tech_indicators(dfp)
