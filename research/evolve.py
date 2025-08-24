@@ -6,7 +6,7 @@ import pandas as pd
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from config import config
-from data.okx import get_klines
+from data.okx import get_klines, get_klines_bian
 from data.news import load_news_from_csv, aggregate_daily_sentiment
 from features.feature_engineering import add_tech_indicators, merge_price_and_sentiment, make_supervised
 from models.evolution import train_evolve
