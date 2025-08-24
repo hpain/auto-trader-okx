@@ -35,8 +35,7 @@ def main():
         print("❌ 价格数据为空")
         return
 
-    #此处直接退出，暂时不训练
-    return
+    
     # === 技术指标 & 特征 ===
     dfp = add_tech_indicators(dfp)
     dfp = add_features(dfp)
