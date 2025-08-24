@@ -267,7 +267,14 @@ def get_klines_bian(client, symbol, interval, years=1,
 
     # 目标起始时间
     target_time = pd.Timestamp.utcnow() - pd.Timedelta(days=years*365)
-    target_time = target_time.tz_localize("UTC")
+   
+
+    target_time = (
+        target_time.tz_localize("UTC")
+        if target_time.tzinfo is None
+        else target_time.tz_convert("UTC")
+    )
+
 
     # 保存路径
     cache_dir = "data/history"
