@@ -72,7 +72,8 @@ def main():
     best_score, best_params = train_evolve(
         data, feature_cols,
         out_dir="models",
-        n_trials=args.trials
+        n_trials=args.trials,
+        model_list=model_list,  # 新增：来自 CLI --models
     )
     print(f"✅ 训练完成：best sharpe={best_score:.3f}")
     print("最佳参数：", json.dumps(best_params, ensure_ascii=False, indent=2))
