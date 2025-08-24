@@ -249,32 +249,24 @@ import time
 import requests
 import pandas as pd
 
-def get_klines_bian(client, symbol, interval, years=1,
-               limit=1000, save=True, keep_ts_float=False, max_pages=5000):
+def get_klines_bian(client, symbol, interval, years=1, limit=1000,
+                    save=True, keep_ts_float=False, max_pages=5000):
     """
     稳健抓取 Binance 历史 K 线（分页 + 去重 + 防死循环 + 每批降序）
     参数保持与 OKX 版本一致，可无缝替换
-    :param client: 保留占位，不使用
-    :param symbol: "BTCUSDT"
-    :param interval: "1m" "5m" "1h" "4h" "1d"
-    :param years: 回溯年数
-    :param limit: Binance 单次最大 1000
-    :param save: 是否保存到 data/history/
-    :param keep_ts_float: 是否保留 ts_float
-    :param max_pages: 最大翻页数
     """
     API_URL = "https://api.binance.com/api/v3/klines"
+    symbol = symbol.replace("-", "")  # 关键修复：Binance 不接受中横线
 
-    # 目标起始时间
-    target_time = pd.Timestamp.utcnow() - pd.Timedelta(days=years*365)
-   
+    # 提前定义列，避免 columns 未定义
+    columns = ["ts", "o", "h", "l", "c", "v", "ct",
+               "qv", "tbuv", "tqav", "trades", "ignore"]
 
-    target_time = (
-        target_time.tz_localize("UTC")
-        if target_time.tzinfo is None
-        else target_time.tz_convert("UTC")
-    )
-
+    # 目标起始时间（UTC）
+    target_time = pd.Timestamp.utcnow() - pd.Timedelta(days=years * 365)
+    target_time = (target_time.tz_localize("UTC")
+                   if target_time.tzinfo is None
+                   else target_time.tz_convert("UTC"))
 
     # 保存路径
     cache_dir = "data/history"
@@ -296,7 +288,7 @@ def get_klines_bian(client, symbol, interval, years=1,
                 existing_df['ts'].apply(lambda x: int(x.timestamp() * 1000)).tolist()
             )
             total_fetched = len(existing_df)
-            print(f"检测到已有 {total_fetched} 条数据，从 {existing_df['ts'].min()} 继续获取...")
+            print(f"检测到已有 {total_fetched} 条数据，从 {existing_df['ts'].min()} 继续获取…")
         except Exception as e:
             print(f"⚠️ 加载缓存失败: {e}，将从最新开始")
 
@@ -335,8 +327,6 @@ def get_klines_bian(client, symbol, interval, years=1,
             break
 
         # 转 DataFrame，每批降序
-        columns = ["ts", "o", "h", "l", "c", "v",
-                   "ct", "qv", "tbuv", "tqav", "trades", "ignore"]
         df_new = pd.DataFrame(new_rows, columns=columns)
         df_new['ts'] = pd.to_datetime(df_new['ts'], unit='ms', utc=True)
         df_new = df_new.sort_values("ts", ascending=False)
@@ -357,16 +347,22 @@ def get_klines_bian(client, symbol, interval, years=1,
 
         # 追加写入
         if save:
-            df_new.to_csv(cache_path, mode='a', header=not os.path.exists(cache_path), index=False)
+            df_new.to_csv(cache_path, mode='a',
+                          header=not os.path.exists(cache_path), index=False)
 
         before_param = int(oldest.timestamp() * 1000) - 1
         page_no += 1
         time.sleep(0.45)
 
     # 转换总 DataFrame
+    if not all_rows:
+        print("❌ 没有抓到任何数据")
+        return pd.DataFrame(columns=columns)
+
     df = pd.DataFrame(all_rows, columns=columns)
     if not keep_ts_float:
-        df = df.drop(columns=['ct', 'qv', 'tbuv', 'tqav', 'trades', 'ignore'], errors='ignore')
+        df = df.drop(columns=['ct', 'qv', 'tbuv', 'tqav', 'trades', 'ignore'],
+                     errors='ignore')
     else:
         df['ts_float'] = df['ts'].view('int64') / 1e9
 
@@ -375,6 +371,7 @@ def get_klines_bian(client, symbol, interval, years=1,
 
     print(f"🏁 完成，共 {len(df)} 条，保存于 {cache_path}")
     return df
+
 
 
 """
