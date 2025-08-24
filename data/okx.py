@@ -244,6 +244,131 @@ def get_klines(client, symbol, interval, years=1, limit=300, save=True, keep_ts_
 
     return df
 
+import os
+import time
+import requests
+import pandas as pd
+
+def get_klines_bian(client, symbol, interval, years=1,
+               limit=1000, save=True, keep_ts_float=False, max_pages=5000):
+    """
+    稳健抓取 Binance 历史 K 线（分页 + 去重 + 防死循环 + 每批降序）
+    参数保持与 OKX 版本一致，可无缝替换
+    :param client: 保留占位，不使用
+    :param symbol: "BTCUSDT"
+    :param interval: "1m" "5m" "1h" "4h" "1d"
+    :param years: 回溯年数
+    :param limit: Binance 单次最大 1000
+    :param save: 是否保存到 data/history/
+    :param keep_ts_float: 是否保留 ts_float
+    :param max_pages: 最大翻页数
+    """
+    API_URL = "https://api.binance.com/api/v3/klines"
+
+    # 目标起始时间
+    target_time = pd.Timestamp.utcnow() - pd.Timedelta(days=years*365)
+    target_time = target_time.tz_localize("UTC")
+
+    # 保存路径
+    cache_dir = "data/history"
+    os.makedirs(cache_dir, exist_ok=True)
+    cache_path = f"{cache_dir}/binance_{symbol}_{interval}_{years}y.csv"
+
+    fetched_timestamps = set()
+    all_rows = []
+    total_fetched = 0
+    before_param = None
+
+    # ===== 断点续传 =====
+    if os.path.exists(cache_path):
+        try:
+            existing_df = pd.read_csv(cache_path)
+            existing_df['ts'] = pd.to_datetime(existing_df['ts'])
+            before_param = int(existing_df['ts'].min().timestamp() * 1000) - 1
+            fetched_timestamps.update(
+                existing_df['ts'].apply(lambda x: int(x.timestamp() * 1000)).tolist()
+            )
+            total_fetched = len(existing_df)
+            print(f"检测到已有 {total_fetched} 条数据，从 {existing_df['ts'].min()} 继续获取...")
+        except Exception as e:
+            print(f"⚠️ 加载缓存失败: {e}，将从最新开始")
+
+    session = requests.Session()
+    page_no = 1
+
+    while page_no <= max_pages:
+        params = {"symbol": symbol, "interval": interval, "limit": limit}
+        if before_param is not None:
+            params["endTime"] = before_param
+
+        try:
+            r = session.get(API_URL, params=params, timeout=15)
+            r.raise_for_status()
+            batch = r.json()
+        except Exception as e:
+            print(f"❌ 请求失败: {e}")
+            break
+
+        if not batch:
+            print("✅ 数据获取完毕")
+            break
+
+        # 去重
+        new_rows = []
+        has_new = False
+        for row in batch:
+            ts = int(row[0])
+            if ts not in fetched_timestamps:
+                new_rows.append(row)
+                fetched_timestamps.add(ts)
+                has_new = True
+
+        if not has_new:
+            print("⚠️ 全重复，结束")
+            break
+
+        # 转 DataFrame，每批降序
+        columns = ["ts", "o", "h", "l", "c", "v",
+                   "ct", "qv", "tbuv", "tqav", "trades", "ignore"]
+        df_new = pd.DataFrame(new_rows, columns=columns)
+        df_new['ts'] = pd.to_datetime(df_new['ts'], unit='ms', utc=True)
+        df_new = df_new.sort_values("ts", ascending=False)
+
+        newest, oldest = df_new['ts'].max(), df_new['ts'].min()
+        print(f"📥 第 {page_no} 页: {len(df_new)} 条, 最新: {newest}, 最旧: {oldest}")
+
+        # 截断到目标时间
+        if oldest <= target_time:
+            df_new = df_new[df_new['ts'] >= target_time]
+            all_rows.extend(df_new.values.tolist())
+            total_fetched += len(df_new)
+            print(f"✅ 命中目标时间，收集完成 ({len(df_new)} 条)")
+            break
+
+        all_rows.extend(df_new.values.tolist())
+        total_fetched += len(df_new)
+
+        # 追加写入
+        if save:
+            df_new.to_csv(cache_path, mode='a', header=not os.path.exists(cache_path), index=False)
+
+        before_param = int(oldest.timestamp() * 1000) - 1
+        page_no += 1
+        time.sleep(0.45)
+
+    # 转换总 DataFrame
+    df = pd.DataFrame(all_rows, columns=columns)
+    if not keep_ts_float:
+        df = df.drop(columns=['ct', 'qv', 'tbuv', 'tqav', 'trades', 'ignore'], errors='ignore')
+    else:
+        df['ts_float'] = df['ts'].view('int64') / 1e9
+
+    if save and not os.path.exists(cache_path):
+        df.to_csv(cache_path, index=False)
+
+    print(f"🏁 完成，共 {len(df)} 条，保存于 {cache_path}")
+    return df
+
 
 """
 def get_klines(client, symbol, interval, limit=1000, max_candles=10000, save=True):
