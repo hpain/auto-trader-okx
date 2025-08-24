@@ -29,8 +29,6 @@ def objective(trial: optuna.Trial, df: pd.DataFrame, feature_cols, model_choices
         model_choices = list(MODEL_PARAMS.keys())
     model_type = trial.suggest_categorical("model_type", model_choices)
     
-    model_type = trial.suggest_categorical("model_type", list(MODEL_PARAMS.keys()))
-    
     if model_type == "logreg":
         C = trial.suggest_float("C", *MODEL_PARAMS["logreg"]["C_range"], log=True)
         model = build_model(model_type, C=C)
