@@ -139,7 +139,30 @@ def train_evolve(df: pd.DataFrame, feature_cols, out_dir="models", n_trials=50, 
 
     # OOS 评估保持原逻辑...
 
-    # === 固定留出集 OOS 评估 ===
-    split_point = int(len(df) * 0.85)
-    oos_model = build_model(**best_params)
-    oos_model.fit(X.iloc[:split_point
+   # === 固定留出集 OOS 评估 ===
+split_point = int(len(df) * 0.85)
+
+# 用最佳参数重新训练模型（仅用前 85% 数据）
+oos_model = build_model(**best_params)
+oos_model.fit(X.iloc[:split_point], y.iloc[:split_point])
+
+# 在留出集上预测
+proba = oos_model.predict_proba(X.iloc[split_point:])[:, 1]
+
+# 复制留出集 DataFrame 并添加预测概率
+oos_df = df.iloc[split_point:].copy()
+oos_df["proba"] = proba
+
+# 回测留出集表现
+bt = simple_backtest(
+    oos_df,
+    proba_col="proba",
+    buy_th=best_params["buy_th"],
+    sell_th=best_params["sell_th"],
+    fee=best_params["fee"]
+)
+
+print("OOS Sharpe:", bt["sharpe"])
+print("OOS MDD:", bt["mdd"])
+print("OOS Trades:", bt["trades"])
+
