@@ -250,18 +250,17 @@ import requests
 import pandas as pd
 
 def get_klines_bian(client, symbol, interval, years=1, limit=1000,
-                    save=True, keep_ts_float=False, max_pages=5000，
+                    save=True, keep_ts_float=False, max_pages=5000,
                     ignore_local=False):
     """
-    稳健抓取 Binance 历史 K 线（分页 + 去重 + 防死循环 + 每批降序）
-    参数保持与 OKX 版本一致，可无缝替换
+    稳健抓取 Binance 历史 K 线（分页 + 去重 + 防死循环 + 合并本地历史）
+    参数保持与 OKX 版本一致，可无缝替换。
     """
-    API_URL = "https://api.binance.com/api/v3/klines"
-    symbol = symbol.replace("-", "")  # 关键修复：Binance 不接受中横线
+    import os, time, pandas as pd, requests
 
-    # 提前定义列，避免 columns 未定义
-    columns = ["ts", "o", "h", "l", "c", "v", "ct",
-               "qv", "tbuv", "tqav", "trades", "ignore"]
+    API_URL = "https://api.binance.com/api/v3/klines"
+    symbol = symbol.replace("-", "")  # Binance 不接受中横线
+    columns = ["ts", "o", "h", "l", "c", "v", "ct", "qv", "tbuv", "tqav", "trades", "ignore"]
 
     # 目标起始时间（UTC）
     target_time = pd.Timestamp.utcnow() - pd.Timedelta(days=years * 365)
@@ -274,27 +273,28 @@ def get_klines_bian(client, symbol, interval, years=1, limit=1000,
     os.makedirs(cache_dir, exist_ok=True)
     cache_path = f"{cache_dir}/binance_{symbol}_{interval}_{years}y.csv"
 
-    fetched_timestamps = set()
-    all_rows = []
-    total_fetched = 0
-    before_param = None
-
-    # ===== 断点续传 =====
+    # ===== 先尝试加载本地历史 =====
     if not ignore_local and os.path.exists(cache_path):
         try:
-            existing_df = pd.read_csv(cache_path)
-            existing_df['ts'] = pd.to_datetime(existing_df['ts'])
-            before_param = int(existing_df['ts'].min().timestamp() * 1000) - 1
-            fetched_timestamps.update(
-                existing_df['ts'].apply(lambda x: int(x.timestamp() * 1000)).tolist()
-            )
-            total_fetched = len(existing_df)
-            print(f"检测到已有 {total_fetched} 条数据，从 {existing_df['ts'].min()} 继续获取…")
+            df_local = pd.read_csv(cache_path, parse_dates=["ts"])
+            print(f"检测到本地历史: {len(df_local)} 条, 时间范围 {df_local['ts'].min()} → {df_local['ts'].max()}")
         except Exception as e:
-            print(f"⚠️ 加载缓存失败: {e}，将从最新开始")
+            print(f"⚠️ 本地文件读取失败: {e}")
+            df_local = pd.DataFrame(columns=["ts"])
     else:
         if ignore_local:
             print("⚠️ 已启用 ignore_local，忽略本地 CSV，直接全量抓取")
+        df_local = pd.DataFrame(columns=["ts"])
+
+    # ===== 开始抓取（断点续传或全量）=====
+    fetched_timestamps = set(int(x.timestamp() * 1000) for x in df_local['ts']) if not df_local.empty else set()
+    before_param = None
+    total_fetched = 0
+    all_rows = []
+
+    if not df_local.empty and not ignore_local:
+        # 从最早时间往前拉补缺
+        before_param = int(df_local['ts'].min().timestamp() * 1000) - 1
 
     session = requests.Session()
     page_no = 1
@@ -318,19 +318,17 @@ def get_klines_bian(client, symbol, interval, years=1, limit=1000,
 
         # 去重
         new_rows = []
-        has_new = False
         for row in batch:
             ts = int(row[0])
             if ts not in fetched_timestamps:
                 new_rows.append(row)
                 fetched_timestamps.add(ts)
-                has_new = True
 
-        if not has_new:
-            print("⚠️ 全重复，结束")
+        if not new_rows:
+            print("⚠️ 本批全重复，结束")
             break
 
-        # 转 DataFrame，每批降序
+        # 转 DataFrame（批次降序）
         df_new = pd.DataFrame(new_rows, columns=columns)
         df_new['ts'] = pd.to_datetime(df_new['ts'], unit='ms', utc=True)
         df_new = df_new.sort_values("ts", ascending=False)
@@ -338,7 +336,7 @@ def get_klines_bian(client, symbol, interval, years=1, limit=1000,
         newest, oldest = df_new['ts'].max(), df_new['ts'].min()
         print(f"📥 第 {page_no} 页: {len(df_new)} 条, 最新: {newest}, 最旧: {oldest}")
 
-        # 截断到目标时间
+        # 命中目标时间
         if oldest <= target_time:
             df_new = df_new[df_new['ts'] >= target_time]
             all_rows.extend(df_new.values.tolist())
@@ -348,34 +346,37 @@ def get_klines_bian(client, symbol, interval, years=1, limit=1000,
 
         all_rows.extend(df_new.values.tolist())
         total_fetched += len(df_new)
-
-        # 追加写入
-        if save:
-            df_new.to_csv(cache_path, mode='a',
-                          header=not os.path.exists(cache_path), index=False)
-
         before_param = int(oldest.timestamp() * 1000) - 1
         page_no += 1
         time.sleep(0.45)
 
-    # 转换总 DataFrame
-    if not all_rows:
-        print("❌ 没有抓到任何数据")
-        return pd.DataFrame(columns=columns)
+    # ===== 合并历史与新数据 =====
+    df_new_all = pd.DataFrame(all_rows, columns=columns)
+    df_new_all['ts'] = pd.to_datetime(df_new_all['ts'], unit='ms', utc=True)
 
-    df = pd.DataFrame(all_rows, columns=columns)
-    if not keep_ts_float:
-        df = df.drop(columns=['ct', 'qv', 'tbuv', 'tqav', 'trades', 'ignore'],
-                     errors='ignore')
+    if not df_local.empty and not ignore_local:
+        df = pd.concat([df_local, df_new_all], ignore_index=True)
     else:
+        df = df_new_all
+
+    # 清洗
+    df = df.sort_values("ts").drop_duplicates(subset=["ts"]).reset_index(drop=True)
+    for col in ["o", "h", "l", "c", "v"]:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors='coerce')
+    df = df.dropna(subset=["o", "h", "l", "c"])
+
+    if not keep_ts_float and "ct" in df.columns:
+        df = df.drop(columns=['ct', 'qv', 'tbuv', 'tqav', 'trades', 'ignore'], errors='ignore')
+    elif keep_ts_float:
         df['ts_float'] = df['ts'].view('int64') / 1e9
 
-    if save and not os.path.exists(cache_path):
+    if save:
         df.to_csv(cache_path, index=False)
+        print(f"💾 已保存到 {cache_path}")
 
-    print(f"🏁 完成，共 {len(df)} 条，保存于 {cache_path}")
+    print(f"🏁 返回 {len(df)} 条有效K线 ({symbol}, {interval}, {years}y)")
     return df
-
 
 
 """
