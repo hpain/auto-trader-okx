@@ -163,6 +163,6 @@ def train_evolve(df: pd.DataFrame, feature_cols, out_dir="models", n_trials=50, 
     )
 
     print("OOS Sharpe:", bt["sharpe"])
-    print("OOS MDD:", bt["mdd"])
+    print("OOS MDD:", bt.get("max_drawdown", 0))
     print("OOS Trades:", bt["trades"])
 
