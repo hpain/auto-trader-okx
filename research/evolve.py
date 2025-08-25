@@ -37,7 +37,7 @@ def main():
         return
 
     dfp = normalize_binance_df(dfp)
-    
+    print("原始行数:", len(dfp))
     # === 技术指标 & 特征 ===
     dfp = add_tech_indicators(dfp)
     dfp = add_features(dfp)
@@ -64,6 +64,7 @@ def main():
     ]
 
     data = data.dropna(subset=feature_cols + ["y"]).copy()
+    print("dropna 后行数:", len(data))
     if len(data) < 300:
         print(f"⚠️ 样本太少（{len(data)}）无法有效训练，建议拉更长周期或换小周期。")
         return
