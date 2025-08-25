@@ -250,7 +250,8 @@ import requests
 import pandas as pd
 
 def get_klines_bian(client, symbol, interval, years=1, limit=1000,
-                    save=True, keep_ts_float=False, max_pages=5000):
+                    save=True, keep_ts_float=False, max_pages=5000，
+                    ignore_local=False):
     """
     稳健抓取 Binance 历史 K 线（分页 + 去重 + 防死循环 + 每批降序）
     参数保持与 OKX 版本一致，可无缝替换
@@ -279,7 +280,7 @@ def get_klines_bian(client, symbol, interval, years=1, limit=1000,
     before_param = None
 
     # ===== 断点续传 =====
-    if os.path.exists(cache_path):
+    if not ignore_local and os.path.exists(cache_path):
         try:
             existing_df = pd.read_csv(cache_path)
             existing_df['ts'] = pd.to_datetime(existing_df['ts'])
@@ -291,6 +292,9 @@ def get_klines_bian(client, symbol, interval, years=1, limit=1000,
             print(f"检测到已有 {total_fetched} 条数据，从 {existing_df['ts'].min()} 继续获取…")
         except Exception as e:
             print(f"⚠️ 加载缓存失败: {e}，将从最新开始")
+    else:
+        if ignore_local:
+            print("⚠️ 已启用 ignore_local，忽略本地 CSV，直接全量抓取")
 
     session = requests.Session()
     page_no = 1
