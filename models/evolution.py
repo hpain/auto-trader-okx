@@ -64,7 +64,7 @@ def objective(trial: optuna.Trial, df: pd.DataFrame, feature_cols, model_choices
         bt = simple_backtest(va2, "proba", buy_th, sell_th, fee)
         sh_list.append(bt["sharpe"])
         trades_list.append(bt["trades"])
-        mdd_list.append(bt.get("max_dd", 0))
+        mdd_list.append(bt.get("max_drawdown", 0))
 
     mean_sharpe = np.mean(sh_list[:-1])
     oos_sharpe = sh_list[-1]
