@@ -46,9 +46,15 @@ def objective(trial: optuna.Trial, df: pd.DataFrame, feature_cols, model_choices
             learning_rate=trial.suggest_float("learning_rate", *MODEL_PARAMS["lgb"]["learning_rate_range"], log=True)
         )
 
+    buy_th = trial.suggest_float("buy_th", *MODEL_PARAMS["logreg"]["buy_th_range"])
+    sell_th = trial.suggest_float("sell_th", *MODEL_PARAMS["logreg"]["sell_th_range"])
+    fee = trial.suggest_float("fee", *MODEL_PARAMS["logreg"]["fee_range"])
+
+    ''' 
     buy_th = trial.suggest_float("buy_th", 0.45, 0.75)
     sell_th = trial.suggest_float("sell_th", 0.25, 0.55)
     fee = trial.suggest_float("fee", 0.0003, 0.0010)
+    '''
 
     folds = split_walk_forward(df, n_splits=5)
     sh_list, trades_list, mdd_list = [], [], []
