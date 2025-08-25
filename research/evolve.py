@@ -82,6 +82,7 @@ def main():
         data, feature_cols,
         out_dir="models",
         n_trials=args.trials,
+        patience=args.patience,
         model_list=model_list,  # 新增：来自 CLI --models
     )
     print(f"✅ 训练完成：best sharpe={best_score:.3f}")
