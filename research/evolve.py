@@ -36,8 +36,8 @@ def main():
     print(f"拉取年数：{args.years}")
     # === 拉取价格数据 ===
     client = OKXClient(**config["okx"])
-    dfp = get_klines_bian(client, symbol, interval, years=args.years，
-                              ignore_local=args.ignore_local)
+    dfp = get_klines_bian(client, symbol, interval, years=args.years,
+                          ignore_local=args.ignore_local)
     if dfp is None or dfp.empty:
         print("❌ 价格数据为空")
         return
