@@ -26,6 +26,8 @@ def main():
             action="store_true",
             help="忽略本地CSV历史文件，直接从服务器全量拉取"
     )
+    parser.add_argument("--patience", type=int, default=10, help="Optuna early stopping patience")
+
     args = parser.parse_args()
 
     model_list = [m.strip() for m in args.models.split(",") if m.strip()]
