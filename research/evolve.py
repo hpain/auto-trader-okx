@@ -21,6 +21,11 @@ def main():
     parser.add_argument("--years", type=int, default=3, help="拉取多少年数据（默认3年）")
     parser.add_argument("--models", type=str, default="logreg,rf,lgb", help="使用的模型类型，逗号分隔")
     parser.add_argument("--trials", type=int, default=50, help="Optuna 搜索的 trial 数（默认50）")
+    parser.add_argument(
+            "--ignore-local",
+            action="store_true",
+            help="忽略本地CSV历史文件，直接从服务器全量拉取"
+    )
     args = parser.parse_args()
 
     model_list = [m.strip() for m in args.models.split(",") if m.strip()]
@@ -31,7 +36,8 @@ def main():
     print(f"拉取年数：{args.years}")
     # === 拉取价格数据 ===
     client = OKXClient(**config["okx"])
-    dfp = get_klines_bian(client, symbol, interval, years=args.years)
+    dfp = get_klines_bian(client, symbol, interval, years=args.years，
+                          ignore_local=args.ignore_local)
     if dfp is None or dfp.empty:
         print("❌ 价格数据为空")
         return
