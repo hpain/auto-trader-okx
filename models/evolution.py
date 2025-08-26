@@ -173,4 +173,101 @@ def train_evolve(df: pd.DataFrame, feature_cols, out_dir="models", n_trials=50, 
     print("OOS Trades:", bt["trades"])
 
     return study.best_value, best_params
+
+import optuna
+import numpy as np
+import pandas as pd
+from sklearn.model_selection import TimeSeriesSplit
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.linear_model import LogisticRegression
+import lightgbm as lgb
+
+# 导入新的回测工具
+from utils.backtest import run_backtest
+
+def train_evolve(
+    data: pd.DataFrame,
+    feature_cols: list,
+    out_dir: str,
+    n_trials: int,
+    patience: int,
+    model_list: list,
+    profit_threshold: float,
+    confidence_threshold: float,
+    stop_loss_pct: float,
+    max_drawdown_limit: float,
+):
+    X = data[feature_cols]
+    y = data["y"]
+
+    def objective(trial):
+        model_name = trial.suggest_categorical("model", model_list)
+        
+        if model_name == "rf":
+            params = {
+                "n_estimators": trial.suggest_int("n_estimators", 50, 500),
+                "max_depth": trial.suggest_int("max_depth", 3, 15),
+                "min_samples_leaf": trial.suggest_int("min_samples_leaf", 1, 20),
+            }
+            model = RandomForestClassifier(random_state=42, class_weight='balanced', **params)
+        elif model_name == "lgb":
+            params = {
+                "n_estimators": trial.suggest_int("n_estimators", 50, 500),
+                "learning_rate": trial.suggest_float("learning_rate", 0.01, 0.3),
+                "num_leaves": trial.suggest_int("num_leaves", 20, 150),
+            }
+            model = lgb.LGBMClassifier(random_state=42, class_weight='balanced', **params)
+        else: # logreg
+            params = {"C": trial.suggest_float("C", 1e-4, 1e2, log=True)}
+            model = LogisticRegression(random_state=42, solver="liblinear", class_weight='balanced', **params)
+
+        # 使用时间序列分割进行交叉验证
+        tscv = TimeSeriesSplit(n_splits=5)
+        all_returns = []
+        all_drawdowns = []
+        all_success_rates = []
+
+        for train_index, test_index in tscv.split(X):
+            X_train, X_test = X.iloc[train_index], X.iloc[test_index]
+            y_train, y_test = y.iloc[train_index], y.iloc[test_index]
+            
+            model.fit(X_train, y_train)
+            predictions = pd.Series(model.predict(X_test), index=X_test.index)
+            probabilities = model.predict_proba(X_test)[:, 1] # 获取标签为1的概率
+
+            # 使用新的回测函数
+            total_ret, max_dd, success_rate, trade_count = run_backtest(
+                predictions,
+                probabilities,
+                data.loc[X_test.index],
+                confidence_threshold,
+                stop_loss_pct,
+            )
+            
+            # 如果回撤超过限制，这是一个非常差的试验，直接剪枝
+            if abs(max_dd) > max_drawdown_limit:
+                raise optuna.exceptions.TrialPruned()
+
+            all_returns.append(total_ret)
+            all_drawdowns.append(max_dd)
+            if trade_count > 0:
+                all_success_rates.append(success_rate)
+
+        avg_return = np.mean(all_returns)
+        avg_success_rate = np.mean(all_success_rates) if all_success_rates else 0.0
+
+        # 优化目标：我们希望总收益高，并且达标成功率也高
+        # 如果成功率低于95%，给予巨大惩罚
+        penalty = -1e6 if avg_success_rate < 0.95 else 0
+        
+        # 返回一个复合分数，主要看收益，但受成功率影响
+        return avg_return + penalty
+
+    study = optuna.create_study(direction="maximize", pruner=optuna.pruners.MedianPruner())
+    study.optimize(objective, n_trials=n_trials)
     
+    best_score = study.best_value
+    best_params = study.best_params
+    
+    return best_score, best_params
+

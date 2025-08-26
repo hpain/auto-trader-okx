@@ -1,4 +1,3 @@
-
 # features/feature_engineering.py
 import pandas as pd
 import numpy as np
@@ -21,16 +20,23 @@ def add_tech_indicators(df: pd.DataFrame) -> pd.DataFrame:
     out["roc_10"] = ta.momentum.ROCIndicator(out["close"], window=10).roc()
     return out
 
-def make_supervised(df: pd.DataFrame, horizon=1) -> pd.DataFrame:
+def make_supervised(
+    df: pd.DataFrame, horizon: int = 1, threshold: float = 0.005
+) -> pd.DataFrame:
     """
-    生成监督学习目标：预测未来horizon期的收益率 sign。
-    target = sign( close.shift(-h) / close - 1 )
+    构建监督学习数据集.
+    y = 1 如果未来收益 >= threshold, 否则 y = 0.
     """
-    out = df.copy()
-    out["ret_fwd"] = out["close"].shift(-horizon) / out["close"] - 1.0
-    out["y"] = np.where(out["ret_fwd"] > 0, 1, 0)  # 二分类：涨/不涨
-    out.dropna(inplace=True)
-    return out
+    # 计算未来N个周期的最高价和最低价，用于止损和判断潜在收益
+    df["future_high"] = df["high"].shift(-horizon)
+    df["future_low"] = df["low"].shift(-horizon)
+    df["future_close"] = df["close"].shift(-horizon)
+
+    # 目标变量：未来收盘价是否达到目标阈值
+    df["y"] = ((df["future_close"] / df["close"] - 1) >= threshold).astype(int)
+    
+    df.dropna(subset=["future_high", "future_low", "future_close", "y"], inplace=True)
+    return df
 
 def merge_price_and_sentiment(price_df: pd.DataFrame, daily_sent_df: pd.DataFrame) -> pd.DataFrame:
     """
