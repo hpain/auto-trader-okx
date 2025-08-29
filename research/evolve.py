@@ -24,11 +24,13 @@ def main():
     parser.add_argument("--ignore-local", action="store_true", help="忽略本地CSV历史文件，直接从服务器全量拉取")
     parser.add_argument("--patience", type=int, default=10, help="Optuna early stopping patience (当前未使用，可移除)")
     
-    # --- 新增的核心参数 ---
+    # --- 核心参数 ---
     parser.add_argument("--profit-threshold", type=float, default=0.005, help="每日最低收益目标")
     parser.add_argument("--confidence-threshold", type=float, default=0.95, help="执行交易的最低置信度")
     parser.add_argument("--stop-loss-pct", type=float, default=0.02, help="止损百分比 (例如 0.02 代表 2%%)")
     parser.add_argument("--max-drawdown", type=float, default=0.1, help="最大回撤限制 (例如 0.1 代表 10%%)")
+    # --- 新增：可配置的成功率阈值 ---
+    parser.add_argument("--success-rate-threshold", type=float, default=0.75, help="可接受的最低达标交易成功率")
 
     args = parser.parse_args()
 
@@ -40,6 +42,7 @@ def main():
     print(f"  拉取年数: {args.years}")
     print(f"  收益目标: >= {args.profit_threshold:.2%}")
     print(f"  置信度门槛: >= {args.confidence_threshold:.2%}")
+    print(f"  可接受成功率: >= {args.success_rate_threshold:.2%}")
     print(f"  止损线: {args.stop_loss_pct:.2%}")
     print(f"  最大回撤限制: <= {args.max_drawdown:.2%}")
     print("------------------")
@@ -76,7 +79,7 @@ def main():
         print(f"⚠️ 样本太少（{len(data)}）无法有效训练。")
         return
 
-    # === 训练 ===
+    # === 训练 (传入所有新参数) ===
     best_score, best_params = train_evolve(
         data=data,
         feature_cols=feature_cols,
@@ -88,6 +91,7 @@ def main():
         confidence_threshold=args.confidence_threshold,
         stop_loss_pct=args.stop_loss_pct,
         max_drawdown_limit=args.max_drawdown,
+        success_rate_threshold=args.success_rate_threshold, # 传入新参数
     )
     print(f"✅ 训练完成：best score={best_score:.4f}")
     print("最佳参数：", json.dumps(best_params, ensure_ascii=False, indent=2))

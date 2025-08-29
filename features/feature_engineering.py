@@ -18,6 +18,19 @@ def add_tech_indicators(df: pd.DataFrame) -> pd.DataFrame:
     out["macd_signal"] = macd.macd_signal()
     out["atr_14"] = ta.volatility.AverageTrueRange(out["high"], out["low"], out["close"], window=14).average_true_range()
     out["roc_10"] = ta.momentum.ROCIndicator(out["close"], window=10).roc()
+    
+    # --- 新增指标 ---
+    # 布林带
+    bollinger = ta.volatility.BollingerBands(close=out["close"], window=20, window_dev=2)
+    out["bb_mavg"] = bollinger.bollinger_mavg()
+    out["bb_hband"] = bollinger.bollinger_hband()
+    out["bb_lband"] = bollinger.bollinger_lband()
+
+    # 随机振荡器
+    stoch = ta.momentum.StochasticOscillator(high=out["high"], low=out["low"], close=out["close"], window=14, smooth_window=3)
+    out["stoch_k"] = stoch.stoch()
+    out["stoch_d"] = stoch.stoch_signal()
+
     return out
 
 def make_supervised(

@@ -196,6 +196,7 @@ def train_evolve(
     confidence_threshold: float,
     stop_loss_pct: float,
     max_drawdown_limit: float,
+    success_rate_threshold: float, # 新增：成功率阈值
 ):
     X = data[feature_cols]
     y = data["y"]
@@ -223,9 +224,7 @@ def train_evolve(
 
         # 使用时间序列分割进行交叉验证
         tscv = TimeSeriesSplit(n_splits=5)
-        all_returns = []
-        all_drawdowns = []
-        all_success_rates = []
+        all_returns, all_drawdowns, all_success_rates, all_trade_counts = [], [], [], []
 
         for train_index, test_index in tscv.split(X):
             X_train, X_test = X.iloc[train_index], X.iloc[test_index]
@@ -233,35 +232,42 @@ def train_evolve(
             
             model.fit(X_train, y_train)
             predictions = pd.Series(model.predict(X_test), index=X_test.index)
-            probabilities = model.predict_proba(X_test)[:, 1] # 获取标签为1的概率
+            probabilities = model.predict_proba(X_test)[:, 1]
 
-            # 使用新的回测函数
             total_ret, max_dd, success_rate, trade_count = run_backtest(
-                predictions,
-                probabilities,
-                data.loc[X_test.index],
-                confidence_threshold,
-                stop_loss_pct,
+                predictions, probabilities, data.loc[X_test.index],
+                confidence_threshold, stop_loss_pct,
             )
             
-            # 如果回撤超过限制，这是一个非常差的试验，直接剪枝
             if abs(max_dd) > max_drawdown_limit:
                 raise optuna.exceptions.TrialPruned()
 
             all_returns.append(total_ret)
             all_drawdowns.append(max_dd)
+            all_trade_counts.append(trade_count)
             if trade_count > 0:
                 all_success_rates.append(success_rate)
 
         avg_return = np.mean(all_returns)
         avg_success_rate = np.mean(all_success_rates) if all_success_rates else 0.0
+        avg_trade_count = np.mean(all_trade_counts)
 
-        # 优化目标：我们希望总收益高，并且达标成功率也高
-        # 如果成功率低于95%，给予巨大惩罚
-        penalty = -1e6 if avg_success_rate < 0.95 else 0
-        
-        # 返回一个复合分数，主要看收益，但受成功率影响
-        return avg_return + penalty
+        # --- 新增：打印每轮试验的详细日志 ---
+        print(
+            f"Trial {trial.number}: "
+            f"Return={avg_return:.2%}, "
+            f"SuccessRate={avg_success_rate:.2%}, "
+            f"Trades={avg_trade_count:.1f}"
+        )
+
+        # --- 修改：优化评分逻辑 ---
+        if avg_success_rate >= success_rate_threshold:
+            # 如果成功率达标，我们的目标是最大化回报率
+            return avg_return
+        else:
+            # 如果不达标，返回一个负分，分数和成功率相关，为优化器提供梯度
+            # 例如，70%的成功率（-0.3）会比60%的成功率（-0.4）要好
+            return avg_success_rate - 1.0
 
     study = optuna.create_study(direction="maximize", pruner=optuna.pruners.MedianPruner())
     study.optimize(objective, n_trials=n_trials)
