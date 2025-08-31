@@ -34,8 +34,8 @@ def run_backtest(
         prob = aligned_probs.iloc[i]
         pred = aligned_predictions.iloc[i]
 
-        # 决策：只有当预测为1且概率高于阈值时才开仓
-        if pred == 1 and prob >= confidence_threshold:
+        # 决策：只有当预测为1时才开仓 (暂时移除置信度检查)
+        if pred == 1:
             trade_count += 1
             entry_price = row["close"]
             stop_loss_price = entry_price * (1 - stop_loss_pct)
