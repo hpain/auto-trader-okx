@@ -7,7 +7,7 @@ def run_backtest(
     test_data: pd.DataFrame,
     confidence_threshold: float = 0.95,
     stop_loss_pct: float = 0.02,
-) -> tuple[float, float, float, int]:
+) -> tuple[float, float, float, int, pd.Series]:
     """
     执行基于高置信度和止损的回测。
 
@@ -19,7 +19,7 @@ def run_backtest(
         stop_loss_pct (float): 止损百分比.
 
     Returns:
-        tuple: (总收益率, 最大回撤, 达标交易成功率, 交易次数)
+        tuple: (总收益率, 最大回撤, 达标交易成功率, 交易次数, 回报序列)
     """
     returns = []
     trade_count = 0
@@ -56,7 +56,7 @@ def run_backtest(
             returns.append(0.0)
 
     if not returns:
-        return 0.0, 0.0, 0.0, 0
+        return 0.0, 0.0, 0.0, 0, pd.Series(dtype=float)
 
     returns_series = pd.Series(returns)
     total_return = (1 + returns_series).prod() - 1
@@ -70,4 +70,4 @@ def run_backtest(
     # 计算达标交易成功率
     success_rate = successful_trades / trade_count if trade_count > 0 else 0.0
 
-    return total_return, max_drawdown, success_rate, trade_count
+    return total_return, max_drawdown, success_rate, trade_count, returns_series

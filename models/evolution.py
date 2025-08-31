@@ -227,7 +227,9 @@ def train_evolve(
 
         # 使用时间序列分割进行交叉验证
         tscv = TimeSeriesSplit(n_splits=5)
-        all_returns, all_drawdowns, all_success_rates, all_trade_counts = [], [], [], []
+        all_returns_series = []
+        all_success_rates = []
+        all_trade_counts = []
 
         for train_index, test_index in tscv.split(X):
             X_train, X_test = X.iloc[train_index], X.iloc[test_index]
@@ -237,41 +239,58 @@ def train_evolve(
             predictions = pd.Series(model.predict(X_test), index=X_test.index)
             probabilities = model.predict_proba(X_test)[:, 1]
 
-            total_ret, max_dd, success_rate, trade_count = run_backtest(
+            # run_backtest now returns the returns_series as the 5th element
+            total_ret, max_dd, success_rate, trade_count, returns_series = run_backtest(
                 predictions, probabilities, data.loc[X_test.index],
                 conf_threshold, # 使用本轮试验的置信度阈值
                 stop_loss_pct,
             )
             
-            if abs(max_dd) > max_drawdown_limit:
-                raise optuna.exceptions.TrialPruned()
-
-            all_returns.append(total_ret)
-            all_drawdowns.append(max_dd)
+            all_returns_series.append(returns_series)
             all_trade_counts.append(trade_count)
             if trade_count > 0:
                 all_success_rates.append(success_rate)
 
-        avg_return = np.mean(all_returns)
+        # 将所有交叉验证的回报序列拼接起来计算总的夏普比率
+        final_returns = pd.concat(all_returns_series) if all_returns_series else pd.Series(dtype=float)
+        
+        # 计算夏普比率 (假设日频数据，年化因子为 sqrt(365))
+        # Handle case with too few trades or zero standard deviation
+        if final_returns.std() == 0 or len(final_returns.loc[final_returns != 0]) < 10:
+            sharpe_ratio = 0.0
+        else:
+            # Annualize based on the number of trading periods in a year
+            # Assuming 1H data, 24 * 365 periods per year
+            # The number of periods should match the data frequency
+            # For now, let's stick to a simple daily assumption for robustness
+            annualization_factor = np.sqrt(252) # Using 252 trading days for crypto
+            sharpe_ratio = (final_returns.mean() / final_returns.std()) * annualization_factor
+        
+        # Handle cases where sharpe is NaN or inf
+        if not np.isfinite(sharpe_ratio):
+            sharpe_ratio = 0.0
+
+        # --- 打印日志，方便观察 ---
         avg_success_rate = np.mean(all_success_rates) if all_success_rates else 0.0
         avg_trade_count = np.mean(all_trade_counts)
-
-        # --- 新增：打印每轮试验的详细日志 ---
         print(
             f"Trial {trial.number}: "
-            f"Return={avg_return:.2%}, "
+            f"Sharpe={sharpe_ratio:.2f}, "
             f"SuccessRate={avg_success_rate:.2%}, "
-            f"Trades={avg_trade_count:.1f}"
+            f"Trades={avg_trade_count:.1f}, "
+            f"Params={trial.params}"
         )
 
-        # --- 修改：优化评分逻辑 ---
-        if avg_success_rate >= success_rate_threshold:
-            # 如果成功率达标，我们的目标是最大化回报率
-            return avg_return
-        else:
-            # 如果不达标，返回一个负分，分数和成功率相关，为优化器提供梯度
-            # 例如，70%的成功率（-0.3）会比60%的成功率（-0.4）要好
-            return avg_success_rate - 1.0
+        # --- 优化目标：最大化夏普比率 ---
+        return sharpe_ratio
+
+    study = optuna.create_study(direction="maximize", pruner=optuna.pruners.MedianPruner())
+    study.optimize(objective, n_trials=n_trials)
+    
+    best_score = study.best_value
+    best_params = study.best_params
+    
+    return best_score, best_params
 
     study = optuna.create_study(direction="maximize", pruner=optuna.pruners.MedianPruner())
     study.optimize(objective, n_trials=n_trials)
