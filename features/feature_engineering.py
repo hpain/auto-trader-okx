@@ -31,6 +31,19 @@ def add_tech_indicators(df: pd.DataFrame) -> pd.DataFrame:
     out["stoch_k"] = stoch.stoch()
     out["stoch_d"] = stoch.stoch_signal()
 
+    # --- 新增量价和趋势强度指标 ---
+    # ADX
+    adx_indicator = ta.trend.ADXIndicator(high=out["high"], low=out["low"], close=out["close"], window=14)
+    out["adx"] = adx_indicator.adx()
+    out["adx_pos"] = adx_indicator.adx_pos()
+    out["adx_neg"] = adx_indicator.adx_neg()
+
+    # OBV
+    out["obv"] = ta.volume.OnBalanceVolumeIndicator(close=out["close"], volume=out["vol"]).on_balance_volume()
+
+    # Williams %R
+    out["williams_r"] = ta.momentum.WilliamsRIndicator(high=out["high"], low=out["low"], close=out["close"], lbp=14).williams_r()
+
     return out
 
 def make_supervised(
@@ -79,6 +92,6 @@ def merge_price_and_sentiment(price_df: pd.DataFrame, daily_sent_df: pd.DataFram
     sent = daily_sent_df.copy()
     # 左连接，再前向填充
     m = p.merge(sent, how="left", left_on="date", right_index=True)
-    m[["sent_mean","sent_median","count"]] = m[["sent_mean","sent_median","count"]].fillna(method="ffill")
+    m[["sent_mean","sent_median","count"]] = m[["sent_mean","sent_median","count"]].ffill()
     m.drop(columns=["date"], inplace=True)
     return m
