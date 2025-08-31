@@ -37,19 +37,36 @@ def make_supervised(
     df: pd.DataFrame, horizon: int = 1, threshold: float = 0.005
 ) -> pd.DataFrame:
     """
-    构建监督学习数据集.
-    y = 1 如果未来收益 >= threshold, 否则 y = 0.
+    构建监督学习数据集。
+
+    此函数会创建一个新的 DataFrame，其中包含：
+    1. 原始特征。
+    2. 目标变量 'y'：如果未来 `horizon` 周期的收盘价涨幅 >= `threshold`，则为 1，否则为 0。
+    3. 未来价格 'future_*'：可用于后续的回测分析（如止盈止损），但不应作为模型的训练特征，以防数据泄露。
+
+    Args:
+        df: 包含价格数据的 DataFrame。
+        horizon: 预测未来的时间周期数。
+        threshold: 定义“上涨”的收益率阈值。
+
+    Returns:
+        一个新的 DataFrame，包含特征、目标变量 'y' 和未来价格信息。
     """
-    # 计算未来N个周期的最高价和最低价，用于止损和判断潜在收益
-    df["future_high"] = df["high"].shift(-horizon)
-    df["future_low"] = df["low"].shift(-horizon)
-    df["future_close"] = df["close"].shift(-horizon)
+    # 创建副本以避免修改原始 DataFrame
+    out_df = df.copy()
+
+    # 计算未来N个周期的价格，用于生成目标和回测分析
+    # 警告：这些 'future_*' 列不应作为模型训练的特征！
+    out_df["future_high"] = out_df["high"].shift(-horizon)
+    out_df["future_low"] = out_df["low"].shift(-horizon)
+    out_df["future_close"] = out_df["close"].shift(-horizon)
 
     # 目标变量：未来收盘价是否达到目标阈值
-    df["y"] = ((df["future_close"] / df["close"] - 1) >= threshold).astype(int)
+    out_df["y"] = ((out_df["future_close"] / out_df["close"] - 1) >= threshold).astype(int)
     
-    df.dropna(subset=["future_high", "future_low", "future_close", "y"], inplace=True)
-    return df
+    # 移除因 shift 操作在末尾产生的 NaN 值，这些行无法用于训练或回测
+    out_df = out_df.dropna(subset=["future_high", "future_low", "future_close", "y"])
+    return out_df
 
 def merge_price_and_sentiment(price_df: pd.DataFrame, daily_sent_df: pd.DataFrame) -> pd.DataFrame:
     """
