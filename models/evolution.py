@@ -222,6 +222,9 @@ def train_evolve(
             params = {"C": trial.suggest_float("C", 1e-4, 1e2, log=True)}
             model = LogisticRegression(random_state=42, solver="liblinear", class_weight='balanced', **params)
 
+        # 将 confidence_threshold 变成可优化的超参数
+        conf_threshold = trial.suggest_float("confidence_threshold", 0.5, 0.95)
+
         # 使用时间序列分割进行交叉验证
         tscv = TimeSeriesSplit(n_splits=5)
         all_returns, all_drawdowns, all_success_rates, all_trade_counts = [], [], [], []
@@ -236,7 +239,8 @@ def train_evolve(
 
             total_ret, max_dd, success_rate, trade_count = run_backtest(
                 predictions, probabilities, data.loc[X_test.index],
-                confidence_threshold, stop_loss_pct,
+                conf_threshold, # 使用本轮试验的置信度阈值
+                stop_loss_pct,
             )
             
             if abs(max_dd) > max_drawdown_limit:
