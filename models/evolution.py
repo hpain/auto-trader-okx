@@ -285,15 +285,7 @@ def train_evolve(
         return sharpe_ratio
 
     study = optuna.create_study(direction="maximize", pruner=optuna.pruners.MedianPruner())
-    study.optimize(objective, n_trials=n_trials)
-    
-    best_score = study.best_value
-    best_params = study.best_params
-    
-    return best_score, best_params
-
-    study = optuna.create_study(direction="maximize", pruner=optuna.pruners.MedianPruner())
-    study.optimize(objective, n_trials=n_trials)
+    study.optimize(objective, n_trials=n_trials, n_jobs=-1)
     
     best_score = study.best_value
     best_params = study.best_params
