@@ -1,48 +1,55 @@
 # features/feature_engineering.py
 import pandas as pd
 import numpy as np
-import ta  # technical analysis indicators
+import ta
 
-def add_tech_indicators(df: pd.DataFrame) -> pd.DataFrame:
+def generate_features(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Generates a comprehensive set of technical analysis features.
+    """
     out = df.copy()
-    # 需要列: ['open','high','low','close','vol']
-    for c in ["open","high","low","close","vol"]:
-        if c not in out.columns:
-            raise ValueError(f"price df missing column {c}")
-    # 常见指标
-    out["rsi_14"] = ta.momentum.RSIIndicator(out["close"], window=14).rsi()
-    out["ema_12"] = ta.trend.EMAIndicator(out["close"], window=12).ema_indicator()
-    out["ema_26"] = ta.trend.EMAIndicator(out["close"], window=26).ema_indicator()
-    macd = ta.trend.MACD(out["close"])
-    out["macd"] = macd.macd()
-    out["macd_signal"] = macd.macd_signal()
-    out["atr_14"] = ta.volatility.AverageTrueRange(out["high"], out["low"], out["close"], window=14).average_true_range()
-    out["roc_10"] = ta.momentum.ROCIndicator(out["close"], window=10).roc()
     
-    # --- 新增指标 ---
-    # 布林带
+    # Check for required columns
+    for col in ["open", "high", "low", "close", "vol"]:
+        if col not in out.columns:
+            raise ValueError(f"DataFrame must contain column: {col}")
+
+    # Volume features
+    out['vol_ma20'] = out['vol'].rolling(20).mean()
+    out['vol_ratio'] = out['vol'] / (out['vol_ma20'] + 1e-9)
+    out["obv"] = ta.volume.OnBalanceVolumeIndicator(close=out["close"], volume=out["vol"]).on_balance_volume()
+
+    # Volatility features
+    out["atr_14"] = ta.volatility.AverageTrueRange(high=out["high"], low=out["low"], close=out["close"], window=14).average_true_range()
     bollinger = ta.volatility.BollingerBands(close=out["close"], window=20, window_dev=2)
     out["bb_mavg"] = bollinger.bollinger_mavg()
     out["bb_hband"] = bollinger.bollinger_hband()
     out["bb_lband"] = bollinger.bollinger_lband()
 
-    # 随机振荡器
-    stoch = ta.momentum.StochasticOscillator(high=out["high"], low=out["low"], close=out["close"], window=14, smooth_window=3)
-    out["stoch_k"] = stoch.stoch()
-    out["stoch_d"] = stoch.stoch_signal()
+    # Trend features
+    for win in [5, 10, 20, 50]:
+        out[f"sma_{win}"] = ta.trend.SMAIndicator(out["close"], window=win).sma_indicator()
+        out[f"ema_{win}"] = ta.trend.EMAIndicator(out["close"], window=win).ema_indicator()
+    
+    macd = ta.trend.MACD(out["close"])
+    out["macd"] = macd.macd()
+    out["macd_signal"] = macd.macd_signal()
 
-    # --- 新增量价和趋势强度指标 ---
-    # ADX
     adx_indicator = ta.trend.ADXIndicator(high=out["high"], low=out["low"], close=out["close"], window=14)
     out["adx"] = adx_indicator.adx()
     out["adx_pos"] = adx_indicator.adx_pos()
     out["adx_neg"] = adx_indicator.adx_neg()
 
-    # OBV
-    out["obv"] = ta.volume.OnBalanceVolumeIndicator(close=out["close"], volume=out["vol"]).on_balance_volume()
-
-    # Williams %R
+    # Momentum features
+    out["rsi_14"] = ta.momentum.RSIIndicator(out["close"], window=14).rsi()
+    out["roc_10"] = ta.momentum.ROCIndicator(out["close"], window=10).roc()
     out["williams_r"] = ta.momentum.WilliamsRIndicator(high=out["high"], low=out["low"], close=out["close"], lbp=14).williams_r()
+    stoch = ta.momentum.StochasticOscillator(high=out["high"], low=out["low"], close=out["close"], window=14, smooth_window=3)
+    out["stoch_k"] = stoch.stoch()
+    out["stoch_d"] = stoch.stoch_signal()
+    
+    out["return"] = out["close"].pct_change()
+    out["cum_return"] = (1 + out["return"]).cumprod()
 
     return out
 

@@ -8,3 +8,4 @@ optuna
 vaderSentiment
 ta
 joblib
+pyarrow
