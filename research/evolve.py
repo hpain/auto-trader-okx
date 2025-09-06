@@ -1,5 +1,5 @@
 # research/evolve.py
-import sys, os, json, argparse
+import sys, os, json, argparse, logging
 import pandas as pd
 import hashlib
 
@@ -7,7 +7,7 @@ import hashlib
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from config import config
-from data.okx import get_klines_bian
+from data.binance import get_klines_bian
 from data.news import load_news_from_csv, aggregate_daily_sentiment
 from features.feature_engineering import generate_features, merge_price_and_sentiment, make_supervised
 from models.evolution import train_evolve
@@ -17,6 +17,13 @@ from utils.data_normalization import normalize_binance_df
 NEWS_CSV = os.getenv("NEWS_CSV_PATH", "news_sample.csv")
 
 def main():
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(message)s",
+        handlers=[
+            logging.StreamHandler(sys.stdout)
+        ]
+    )
     parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     parser.add_argument("--years", type=int, default=3, help="拉取多少年数据")
     parser.add_argument("--models", type=str, default="rf,lgb", help="使用的模型类型，逗号分隔")
@@ -37,14 +44,14 @@ def main():
     symbol = config.get("trade", {}).get("symbol", "BTC-USDT")
     interval = config.get("trade", {}).get("interval", "1H")
 
-    print("--- 策略参数 ---")
-    print(f"  拉取年数: {args.years}")
-    print(f"  收益目标: >= {args.profit_threshold:.2%}")
-    print(f"  置信度门槛: >= {args.confidence_threshold:.2%}")
-    print(f"  可接受成功率: >= {args.success_rate_threshold:.2%}")
-    print(f"  止损线: {args.stop_loss_pct:.2%}")
-    print(f"  最大回撤限制: <= {args.max_drawdown:.2%}")
-    print("------------------")
+    logging.info("--- 策略参数 ---")
+    logging.info(f"  拉取年数: {args.years}")
+    logging.info(f"  收益目标: >= {args.profit_threshold:.2%}")
+    logging.info(f"  置信度门槛: >= {args.confidence_threshold:.2%}")
+    logging.info(f"  可接受成功率: >= {args.success_rate_threshold:.2%}")
+    logging.info(f"  止损线: {args.stop_loss_pct:.2%}")
+    logging.info(f"  最大回撤限制: <= {args.max_drawdown:.2%}")
+    logging.info("------------------")
 
     # --- Feature Caching Logic ---
     config_str = f"{symbol}-{interval}-{args.years}"
@@ -54,15 +61,15 @@ def main():
     feature_cache_path = os.path.join(cache_dir, f"features_{config_hash}.parquet")
 
     if os.path.exists(feature_cache_path) and not args.ignore_local:
-        print(f"✅ CACHE: Found feature cache, loading from {feature_cache_path}")
+        logging.info(f"✅ CACHE: Found feature cache, loading from {feature_cache_path}")
         dfm = pd.read_parquet(feature_cache_path)
     else:
-        print("⏳ CACHE: No feature cache found or --ignore-local is set, running full data pipeline...")
+        logging.info("⏳ CACHE: No feature cache found or --ignore-local is set, running full data pipeline...")
         # === Data Loading and Processing ===
         client = OKXClient(**config["okx"])
         dfp = get_klines_bian(client, symbol, interval, years=args.years, ignore_local=args.ignore_local)
         if dfp is None or dfp.empty:
-            print("❌ Price data is empty")
+            logging.info("❌ Price data is empty")
             return
         dfp = normalize_binance_df(dfp)
         dfp = generate_features(dfp)
@@ -72,26 +79,26 @@ def main():
             daily_sent = aggregate_daily_sentiment(news_df)
             dfm = merge_price_and_sentiment(dfp, daily_sent)
         else:
-            print(f"⚠️ News CSV not found: {NEWS_CSV}, using only technical indicators.")
+            logging.info(f"⚠️ News CSV not found: {NEWS_CSV}, using only technical indicators.")
             dfm = dfp.copy()
             for col in ["sent_mean", "sent_median", "count"]:
                 if col not in dfm.columns:
                     dfm[col] = 0.0
         
         dfm.to_parquet(feature_cache_path)
-        print(f"💾 CACHE: Features saved to {feature_cache_path}")
+        logging.info(f"💾 CACHE: Features saved to {feature_cache_path}")
 
     # === 构建监督学习数据 ===
     data = make_supervised(dfm, horizon=1, threshold=args.profit_threshold)
     
     # 动态确定特征列
-    non_feature_cols = ["ts", "dt", "y", "future_high", "future_low", "future_close", "future_ret", "date"]
+    non_feature_cols = ["ts", "dt", "y", "future_high", "future_low", "future_close", "future_ret", "date", "timestamp", "vol_ccy", "vol_ccy_quote", "confirm"]
     feature_cols = [c for c in data.columns if c not in non_feature_cols]
     
     data = data.dropna(subset=feature_cols + ["y"]).copy()
     
     if len(data) < 500:
-        print(f"⚠️ 样本太少（{len(data)}）无法有效训练。")
+        logging.info(f"⚠️ 样本太少（{len(data)}）无法有效训练。")
         return
 
     # === 训练 (传入所有新参数) ===
@@ -107,9 +114,10 @@ def main():
         stop_loss_pct=args.stop_loss_pct,
         max_drawdown_limit=args.max_drawdown,
         success_rate_threshold=args.success_rate_threshold, # 传入新参数
+        interval=interval,
     )
-    print(f"✅ 训练完成：best score={best_score:.4f}")
-    print("最佳参数：", json.dumps(best_params, ensure_ascii=False, indent=2))
+    logging.info(f"✅ 训练完成：best score={best_score:.4f}")
+    logging.info(f"最佳参数： {json.dumps(best_params, ensure_ascii=False, indent=2)}")
 
 if __name__ == "__main__":
     main()

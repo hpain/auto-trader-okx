@@ -1,0 +1,19 @@
+{
+  "trial_number": 444,
+  "stability_score": 1.896816750052763,
+  "overall_sharpe": 2.4689280791222368,
+  "fold_sharpes": [
+    3.9521,
+    2.4263,
+    3.2617,
+    1.2084,
+    3.4267
+  ],
+  "params": {
+    "model": "lgb",
+    "n_estimators": 478,
+    "learning_rate": 0.019655768909719595,
+    "num_leaves": 20,
+    "confidence_threshold": 0.5567556048992214
+  }
+}

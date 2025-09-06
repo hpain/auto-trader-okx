@@ -39,3 +39,49 @@ def aggregate_daily_sentiment(news_df: pd.DataFrame, tz_convert=None) -> pd.Data
                                  sent_median=("sent","median"),
                                  count=("sent","size")).sort_index()
     return agg
+
+def fetch_crypto_news(api_key: str, query: str = "crypto", page_size: int = 100) -> pd.DataFrame:
+    """
+    Fetches crypto news from newsapi.org.
+    Requires a NewsAPI key.
+    """
+    import requests
+    print(f"📡 Fetching news for query: {query}...")
+    url = "https://newsapi.org/v2/everything"
+    params = {
+        "q": query,
+        "apiKey": api_key,
+        "pageSize": page_size,
+        "sortBy": "publishedAt",
+        "language": "en"
+    }
+    try:
+        response = requests.get(url, params=params, timeout=10)
+        response.raise_for_status()
+        data = response.json()
+
+        if data["status"] != "ok" or "articles" not in data:
+            print(f"❌ News API error: {data.get('message', 'Unknown error')}")
+            return pd.DataFrame()
+
+        articles = data["articles"]
+        if not articles:
+            print("⚠️ No news articles found.")
+            return pd.DataFrame()
+
+        df = pd.DataFrame(articles)
+        df = df[["publishedAt", "title", "source"]]
+        df.rename(columns={"publishedAt": "timestamp"}, inplace=True)
+        df["timestamp"] = pd.to_datetime(df["timestamp"])
+        df["source"] = df["source"].apply(lambda x: x.get("name") if isinstance(x, dict) else x)
+
+
+        print(f"✅ Successfully fetched {len(df)} news articles.")
+        return df
+
+    except requests.exceptions.RequestException as e:
+        print(f"❌ Network request failed: {e}")
+        return pd.DataFrame()
+    except Exception as e:
+        print(f"❌ Failed to process news data: {e}")
+        return pd.DataFrame()

@@ -9,3 +9,6 @@ vaderSentiment
 ta
 joblib
 pyarrow
+okx-sdk
+matplotlib
+lightgbm
