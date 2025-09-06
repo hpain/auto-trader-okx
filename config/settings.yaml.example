@@ -1,0 +1,16 @@
+okx:
+  api_key: "YOUR_API_KEY"
+  secret_key: "YOUR_SECRET_KEY"
+  passphrase: "YOUR_PASSPHRASE"
+  # flag: 1 for live trading, 0 for demo trading
+  flag: "0"
+
+trade:
+  symbol: "BTC-USDT"
+  interval: "1H"
+  quantity: 0.001
+
+paths:
+  model_dir: "models"
+  feature_cache_dir: "data/cache"
+  history_data_dir: "data/history"

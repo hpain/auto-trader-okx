@@ -29,7 +29,6 @@ def main():
     parser.add_argument("--models", type=str, default="rf,lgb", help="使用的模型类型，逗号分隔")
     parser.add_argument("--trials", type=int, default=100, help="Optuna 搜索的 trial 数")
     parser.add_argument("--ignore-local", action="store_true", help="忽略本地CSV历史文件和特征缓存，直接重新生成")
-    parser.add_argument("--patience", type=int, default=10, help="Optuna early stopping patience (当前未使用，可移除)")
     
     # --- 核心参数 ---
     parser.add_argument("--profit-threshold", type=float, default=0.005, help="每日最低收益目标")
@@ -56,7 +55,7 @@ def main():
     # --- Feature Caching Logic ---
     config_str = f"{symbol}-{interval}-{args.years}"
     config_hash = hashlib.sha256(config_str.encode()).hexdigest()[:10]
-    cache_dir = "data/cache"
+    cache_dir = config["paths"]["feature_cache_dir"]
     os.makedirs(cache_dir, exist_ok=True)
     feature_cache_path = os.path.join(cache_dir, f"features_{config_hash}.parquet")
 
@@ -105,9 +104,8 @@ def main():
     best_score, best_params = train_evolve(
         data=data,
         feature_cols=feature_cols,
-        out_dir="models",
+        out_dir=config["paths"]["model_dir"],
         n_trials=args.trials,
-        patience=args.patience,
         model_list=model_list,
         profit_threshold=args.profit_threshold,
         confidence_threshold=args.confidence_threshold,

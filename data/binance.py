@@ -3,6 +3,7 @@ import os
 import time
 import requests
 import pandas as pd
+from config import config
 
 def get_klines_bian(client, symbol, interval, years=1, limit=1000,
                     save=True, keep_ts_float=False, max_pages=5000,
@@ -23,7 +24,7 @@ def get_klines_bian(client, symbol, interval, years=1, limit=1000,
                    else target_time.tz_convert("UTC"))
 
     # 保存路径
-    cache_dir = "data/history"
+    cache_dir = config["paths"]["history_data_dir"]
     os.makedirs(cache_dir, exist_ok=True)
     cache_path = f"{cache_dir}/binance_{symbol}_{interval}_{years}y.csv"
 

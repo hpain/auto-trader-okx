@@ -1,5 +1,5 @@
 # trader/executor.py
-import json, os
+import json, os, logging
 import pandas as pd
 from joblib import load
 
@@ -11,11 +11,21 @@ from trader.okx_client import OKXClient
 
 def _load_model():
     try:
-        pipe = load("models/best_model.pkl")
-        with open("models/metadata.json", "r", encoding="utf-8") as f:
+        model_dir = config["paths"]["model_dir"]
+        model_path = os.path.join(model_dir, "best_model.pkl")
+        meta_path = os.path.join(model_dir, "metadata.json")
+        pipe = load(model_path)
+        with open(meta_path, "r", encoding="utf-8") as f:
             meta = json.load(f)
         return pipe, meta
+    except FileNotFoundError:
+        # This is an expected error if the model is not trained yet.
+        # No need to log it as an error, the calling function will handle it.
+        return None, None
     except Exception:
+        # This catches all other unexpected errors during model loading,
+        # like a corrupted file. We log it for debugging.
+        logging.error("Failed to load model due to an unexpected error:", exc_info=True)
         return None, None
 
 

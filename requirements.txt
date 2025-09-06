@@ -12,3 +12,4 @@ pyarrow
 okx-sdk
 matplotlib
 lightgbm
+pytest
