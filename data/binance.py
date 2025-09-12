@@ -133,4 +133,9 @@ def get_klines_bian(client, symbol, interval, years=1, limit=1000,
         print(f"💾 已保存到 {cache_path}")
 
     print(f"🏁 返回 {len(df)} 条有效K线 ({symbol}, {interval}, {years}y)")
+    
+    # Set timestamp as index before returning
+    if not df.empty:
+        df = df.set_index("ts", drop=True)
+
     return df

@@ -1,0 +1,32 @@
+version: '3.8'
+
+services:
+  auto-trader:
+    build: .
+    container_name: auto-trader-okx
+    restart: unless-stopped
+    environment:
+      # --- OKX API Credentials ---
+      # Replace with your actual API credentials
+      - OKX_API_KEY=YOUR_API_KEY
+      - OKX_SECRET_KEY=YOUR_SECRET_KEY
+      - OKX_PASSPHRASE=YOUR_PASSPHRASE
+      # flag: "1" for live trading, "0" for demo/paper trading
+      - OKX_FLAG=0
+
+      # --- Trade Settings ---
+      - TRADE_SYMBOL=BTC-USDT
+      - TRADE_INTERVAL=1H
+      - TRADE_QUANTITY=0.001
+      
+    volumes:
+      - ./logs:/app/logs
+      - ./models:/app/models
+      - ./data/history:/app/data/history
+      - ./data/cache:/app/data/cache
+      - ./charts:/app/charts
+      - ./status.json:/app/status.json
+    # If you are on Linux, you might want to add user mapping
+    # to avoid permission issues with the created files.
+    # user: "${UID}:${GID}"
+

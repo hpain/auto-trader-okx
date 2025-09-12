@@ -1,19 +1,117 @@
 {
-  "trial_number": 444,
-  "stability_score": 1.896816750052763,
-  "overall_sharpe": 2.4689280791222368,
-  "fold_sharpes": [
-    3.9521,
-    2.4263,
-    3.2617,
-    1.2084,
-    3.4267
-  ],
-  "params": {
-    "model": "lgb",
-    "n_estimators": 478,
-    "learning_rate": 0.019655768909719595,
-    "num_leaves": 20,
-    "confidence_threshold": 0.5567556048992214
-  }
+    "all_time_best": {
+        "timestamp": "2025-09-07 20:56:22",
+        "total_trials_in_run": 60,
+        "trial_number": 40,
+        "stability_score": 0.9066986620602876,
+        "overall_sharpe": 1.5793032533716167,
+        "fold_sharpes": [
+            2.3411,
+            0.9383,
+            2.5543,
+            1.5112,
+            1.9491
+        ],
+        "params": {
+            "model": "lgb",
+            "n_estimators": 186,
+            "learning_rate": 0.08598250053518768,
+            "num_leaves": 73,
+            "confidence_threshold": 0.5898451817208217
+        }
+    },
+    "recent_trials": [
+        {
+            "timestamp": "2025-09-12 15:34:36",
+            "total_trials_in_run": 200,
+            "trial_number": 153,
+            "stability_score": 0.35405628892601804,
+            "overall_sharpe": 0.4622586707869306,
+            "fold_sharpes": [
+                0.6316,
+                0.39,
+                0.6661,
+                0.3321,
+                0.423
+            ],
+            "params": {
+                "n_estimators": 140,
+                "learning_rate": 0.11614115668752015,
+                "num_leaves": 113,
+                "reg_alpha": 0.2312883216025275,
+                "reg_lambda": 1.3902241627349972e-06,
+                "entry_threshold": 3.756719298039943e-05,
+                "take_profit_pct": 0.06258954014750172
+            }
+        },
+        {
+            "timestamp": "2025-09-10 23:27:05",
+            "total_trials_in_run": 200,
+            "trial_number": 70,
+            "stability_score": 0.28961257764401305,
+            "overall_sharpe": 0.4347283127215567,
+            "fold_sharpes": [
+                0.5755,
+                0.3777,
+                0.8016,
+                0.4387,
+                0.2264
+            ],
+            "params": {
+                "n_estimators": 295,
+                "learning_rate": 0.14766643238810345,
+                "num_leaves": 30,
+                "reg_alpha": 1.5033349899418274e-05,
+                "reg_lambda": 6.085139994682432e-08,
+                "entry_threshold": 0.00044754057746918175,
+                "take_profit_pct": 0.044939679413705386
+            }
+        },
+        {
+            "timestamp": "2025-09-10 22:30:22",
+            "total_trials_in_run": 50,
+            "trial_number": 18,
+            "stability_score": 0.23519198346766654,
+            "overall_sharpe": 0.3524103846798877,
+            "fold_sharpes": [
+                0.519,
+                0.1849,
+                0.7766,
+                0.2151,
+                0.6645
+            ],
+            "params": {
+                "n_estimators": 376,
+                "learning_rate": 0.26348320280031456,
+                "num_leaves": 122,
+                "reg_alpha": 0.001191679993759069,
+                "reg_lambda": 1.7134396576681296e-06,
+                "entry_threshold": 0.0011119314375969342,
+                "take_profit_pct": 0.03948445685961122
+            }
+        },
+        {
+            "timestamp": "2025-09-10 20:58:36",
+            "total_trials_in_run": 50,
+            "trial_number": 38,
+            "stability_score": 0.1977296561311004,
+            "overall_sharpe": 0.23652495403779505,
+            "fold_sharpes": [
+                0.3021,
+                0.2323,
+                0.4672,
+                0.1661,
+                0.3268
+            ],
+            "params": {
+                "n_estimators": 343,
+                "learning_rate": 0.12327378307547208,
+                "num_leaves": 100,
+                "reg_alpha": 0.00012397090627139375,
+                "reg_lambda": 1.214708814837751e-05,
+                "entry_threshold": 0.0020736370062807404,
+                "take_profit_pct": 0.060798668123845226
+            }
+        }
+    ]
 }

@@ -90,6 +90,36 @@ class OKXClient:
         print(f"下单响应: {response}")
         return response
 
+    def place_oco_order(self, symbol, side, quantity, take_profit_price, stop_loss_price):
+        """下单并附带止盈和止损"""
+        print(f"准备下 OCO 订单: {side.upper()} {quantity} {symbol}, TP: {take_profit_price}, SL: {stop_loss_price}")
+        body = {
+            "instId": symbol,
+            "tdMode": "cash",
+            "side": side,
+            "ordType": "oco",
+            "sz": str(quantity),
+            "tpTriggerPx": str(take_profit_price),
+            "tpOrdPx": "-1",  # 以市价执行止盈
+            "slTriggerPx": str(stop_loss_price),
+            "slOrdPx": "-1"   # 以市价执行止损
+        }
+        response = self._request('POST', '/api/v5/trade/order', body=body, authenticated=True)
+        print(f"OCO 下单响应: {response}")
+        return response
+
+    def get_account_balance(self):
+        """获取账户余额信息"""
+        return self._request('GET', '/api/v5/account/balance', authenticated=True)
+
+    def get_usdt_equity(self):
+        """获取以USDT计价的总权益"""
+        data = self.get_account_balance()
+        if data and data.get("code") == "0" and data.get("data"):
+            # totalEq provides the total equity in USDT
+            return float(data["data"][0]["totalEq"])
+        return None
+
     def mock_order(self, action, symbol, qty):
         print(f"[模拟交易] {datetime.now()}：{action.upper()} {qty} {symbol}")
 
