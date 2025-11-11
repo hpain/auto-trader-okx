@@ -2,35 +2,58 @@
 
 # ============== Test Setup: Mock config before any project imports =========
 # This MUST be at the top of the file.
-import os
-import yaml
-import builtins
-from unittest.mock import mock_open
-import numpy as np
 
-# Define a dummy config structure that tests can rely on.
-_dummy_config = {
-    "okx": {"api_key": "dummy", "secret_key": "dummy", "passphrase": "dummy", "flag": "0"},
-    "trade": {"symbol": "BTC-USDT", "interval": "1H", "quantity": 0.001},
-    "paths": {"model_dir": "models", "feature_cache_dir": "data/cache", "history_data_dir": "data/history"}
-}
+# --- BEGIN VADER SENTIMENT MONKEY-PATCH ---
+# This patch fixes a compatibility issue between older versions of
+# vaderSentiment and newer Python versions (3.10+). The issue causes a
+# TypeError during the lexicon file reading. We replace the faulty
+# __init__ method with a corrected one.
+try:
+    import os
+    import sys
+    from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
 
-# Patch the functions that access the filesystem
-os.path.exists = lambda path: True
-builtins.open = mock_open(read_data="dummy: yaml")
-yaml.safe_load = lambda stream: _dummy_config
-# ========================================================================
+    def patched_vader_init(self, lexicon_file="vader_lexicon.txt", emoji_lexicon="emoji_utf8_lexicon.txt"):
+        # Correctly locate the lexicon files relative to the vaderSentiment package
+        vader_module = sys.modules[SentimentIntensityAnalyzer.__module__]
+        vader_path = os.path.dirname(os.path.abspath(vader_module.__file__))
+        
+        # Load Lexicon
+        lexicon_full_filepath = os.path.join(vader_path, lexicon_file)
+        with open(lexicon_full_filepath, encoding='utf-8') as f:
+            self.lexicon = {}
+            for line in f:
+                parts = line.strip().split('\t')
+                if len(parts) == 2:
+                    self.lexicon[parts[0]] = float(parts[1])
+
+        # Load Emoji Lexicon
+        emoji_full_filepath = os.path.join(vader_path, emoji_lexicon)
+        with open(emoji_full_filepath, encoding='utf-8') as f:
+            self.emoji_lexicon = {}
+            for line in f:
+                parts = line.strip().split('\t')
+                if len(parts) == 2:
+                    self.emoji_lexicon[parts[0]] = parts[1]
+        # --- 核心修复：添加缺失的 emojis 属性初始化 ---
+        self.emojis = self.emoji_lexicon
+
+    SentimentIntensityAnalyzer.__init__ = patched_vader_init
+except Exception as e:
+    print(f"Could not apply VADER monkey-patch: {e}")
+# --- END VADER SENTIMENT MONKEY-PATCH ---
 
 import pandas as pd
 import pytest
-from pandas.testing import assert_frame_equal
+from unittest.mock import mock_open, patch
 
 # Make sure the features module can be found
-import sys
+import sys, numpy as np, json
 import os
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from features.feature_engineering import generate_features, merge_price_and_sentiment
+from pandas.testing import assert_frame_equal
 from data.news import load_news_from_csv, aggregate_daily_sentiment
 
 # Helper function to create a base DataFrame for tests
@@ -42,139 +65,106 @@ def create_base_df(rows=50):
         'close': range(101, 101 + rows),
         'vol': range(1000, 1000 + rows)
     }
-    # Create a DatetimeIndex
-    index = pd.to_datetime(pd.date_range(start='2023-01-01', periods=rows, freq='H'))
+    # --- 核心修复：确保测试数据使用带时区的 DatetimeIndex ---
+    index = pd.date_range(start='2023-01-01', periods=rows, freq='h', tz='UTC')
     return pd.DataFrame(data, index=index)
 
 def test_generate_features_basic():
     # 1. Arrange: Create a sample DataFrame
-    df = create_base_df(rows=50)
+    df = create_base_df(rows=250) # Use enough rows for all indicators
 
     # 2. Act: Generate features without news data
     df_features = generate_features(df.copy())
 
     # 3. Assert: Check for expected columns and basic properties
     expected_cols = [
-        # Original
         'open', 'high', 'low', 'close', 'vol',
-        # Volume
-        'vol_ma20', 'vol_ratio', 'obv',
-        # Volatility
-        'atr_14', 'bb_mavg', 'bb_hband', 'bb_lband',
-        # Trend
-        'sma_5', 'ema_5', 'sma_10', 'ema_10', 'sma_20', 'ema_20', 'sma_50', 'ema_50',
-        'macd', 'macd_signal', 'adx', 'adx_pos', 'adx_neg',
-        # Momentum
-        'rsi_14', 'roc_10', 'williams_r', 'stoch_k', 'stoch_d',
-        # Other
-        'return', 'cum_return'
+        'return', 'return_lag_5', 'vol_lag_5',
+        'atr_14', 'bb_width_14', 'volatility_10',
+        'sma_10', 'ema_50', 'adx_14', 'sma_spread_10_50',
+        'rsi_14', 'roc_14', 'williams_r_14',
+        'prob_bull',
     ]
     
-    # Check if all expected columns are present
     for col in expected_cols:
         assert col in df_features.columns, f"Missing expected column: {col}"
 
-    # Check for NaN values in critical columns (after initial rows due to windowing)
-    assert np.isnan(df_features['sma_5'].iloc[3])
-    assert df_features['sma_5'].iloc[4:].notnull().all()
+    assert np.isnan(df_features['sma_10'].iloc[8])
+    assert df_features['sma_10'].iloc[9:].notnull().all()
     
-    assert np.isnan(df_features['rsi_14'].iloc[12])
+    # For a 14-period RSI on monotonically increasing data, the 'ta' library
+    # calculates the first value (100.0) at index 13, not 14.
+    assert not np.isnan(df_features['rsi_14'].iloc[13])
     assert df_features['rsi_14'].iloc[13:].notnull().all()
 
-    # Check value ranges for some indicators
     assert (df_features['rsi_14'].dropna() >= 0).all() and (df_features['rsi_14'].dropna() <= 100).all()
-    assert (df_features['williams_r'].dropna() >= -100).all() and (df_features['williams_r'].dropna() <= 0).all()
+    assert (df_features['williams_r_14'].dropna() >= -100).all() and (df_features['williams_r_14'].dropna() <= 0).all()
 
-    # Check that original columns are unchanged
     original_cols = ['open', 'high', 'low', 'close', 'vol']
     assert_frame_equal(df_features[original_cols], df[original_cols])
 
-    # Check that sentiment columns are created with default zero values
     assert 'sent_mean' in df_features.columns
     assert (df_features['sent_mean'] == 0.0).all()
     assert (df_features['count'] == 0).all()
 
-def test_generate_features_with_news_sentiment(monkeypatch):
+def test_generate_features_with_news_sentiment():
     """
     Test that sentiment features are correctly loaded, merged, and handled.
     """
     # 1. Arrange
     price_df = create_base_df(rows=72) # 3 days of hourly data
-    
-    # Create a dummy news CSV content
-    news_content = """timestamp,title
-2023-01-01T10:00:00Z,"Good news for crypto, prices are up"
-2023-01-02T12:00:00Z,"Bad news for crypto, prices are down"
-"""
     dummy_news_path = "/dummy/path/to/news.csv"
 
-    # Mock the file reading for the news CSV
-    m = mock_open(read_data=news_content)
-    monkeypatch.setattr("builtins.open", m)
-    
-    # 2. Act
-    df_features = generate_features(price_df.copy(), news_csv_path=dummy_news_path)
+    # Create a dummy DataFrame that would be returned by pd.read_csv
+    mock_news_data = pd.DataFrame({
+        'timestamp': pd.to_datetime(['2023-01-01T10:00:00Z', '2023-01-02T12:00:00Z']),
+        'title': ["Good news for crypto, prices are up", "Bad news for crypto, prices are down"]
+    })
+
+    # 2. Act: Patch pandas.read_csv directly to avoid interfering with other file operations
+    with patch('pandas.read_csv', return_value=mock_news_data) as mock_read_csv:
+        df_features = generate_features(price_df.copy(), news_csv_path=dummy_news_path)
 
     # 3. Assert
-    # Check that the open mock was called with our dummy path
-    m.assert_called_with(dummy_news_path, encoding='utf-8-sig')
+    mock_read_csv.assert_called_once_with(dummy_news_path)
     
-    # Check that sentiment columns exist
     assert 'sent_mean' in df_features.columns
     assert 'count' in df_features.columns
 
-    # Check that sentiment values were correctly applied and forward-filled
-    # Day 1 (2023-01-01) should have a positive sentiment
     assert df_features.loc['2023-01-01']['sent_mean'].iloc[0] > 0
-    # Day 2 (2023-01-02) should have a negative sentiment
     assert df_features.loc['2023-01-02']['sent_mean'].iloc[0] < 0
-    # Day 3 (2023-01-03) should have the same sentiment as Day 2 due to ffill
     assert df_features.loc['2023-01-03']['sent_mean'].iloc[0] == df_features.loc['2023-01-02']['sent_mean'].iloc[0]
     
-    # Check counts
-    assert df_features.loc['2023-01-01']['count'].iloc[0] == 1
-    assert df_features.loc['2023-01-02']['count'].iloc[0] == 1
+    assert df_features.loc['2023-01-01', 'count'].iloc[0] == 1
+    assert df_features.loc['2023-01-02', 'count'].iloc[0] == 1
 
-def test_generate_features_news_file_not_found(capsys):
+@patch('builtins.open', new_callable=mock_open)
+def test_generate_features_news_file_not_found(mock_file_open, capsys):
     """
     Test that a warning is printed and dummy columns are created if news file is not found.
     """
-    # 1. Arrange
     price_df = create_base_df()
     non_existent_path = "/dummy/path/that/does/not/exist.csv"
+    mock_file_open.side_effect = FileNotFoundError
 
-    # 2. Act
     df_features = generate_features(price_df.copy(), news_csv_path=non_existent_path)
     
-    # 3. Assert
-    # Check that dummy columns were created
     assert 'sent_mean' in df_features.columns
     assert (df_features['sent_mean'] == 0.0).all()
     
-    # Check that a warning was printed to stderr/stdout
     captured = capsys.readouterr()
     assert "Warning: News file not found" in captured.out
 
 def test_generate_features_empty_input():
-    # Test with an empty DataFrame
-    df = pd.DataFrame(columns=['open', 'high', 'low', 'close', 'vol'])
+    df = pd.DataFrame(columns=['open', 'high', 'low', 'close', 'vol'], index=pd.to_datetime([]))
     df_features = generate_features(df)
     assert df_features.empty
 
 def test_generate_features_insufficient_data():
-    # Test with insufficient data for some indicators
-    data = {
-        'open': [100, 101, 102, 103, 104],
-        'high': [102, 103, 104, 105, 106],
-        'low': [99, 100, 101, 102, 103],
-        'close': [101, 102, 103, 104, 105],
-        'vol': [1000, 1100, 1200, 1300, 1400]
-    }
-    df = pd.DataFrame(data)
+    df = create_base_df(rows=5)
     df_features = generate_features(df.copy())
     
-    # SMA_5 should be calculable on the last row, but SMA_10 should not
-    assert not np.isnan(df_features['sma_5'].iloc[4])
+    # A 5-row dataframe cannot calculate a 10-period SMA.
     assert df_features['sma_10'].isnull().all()
     assert df_features['rsi_14'].isnull().all() # RSI needs 14 periods
 
@@ -182,25 +172,68 @@ def test_merge_price_and_sentiment():
     """
     Unit test for the merge_price_and_sentiment function.
     """
-    # Arrange
     price_df = create_base_df(rows=72) # 3 days
     
-    # Create a dummy daily sentiment DataFrame
-    sent_dates = pd.to_datetime(['2023-01-01', '2023-01-03'])
+    # --- 核心修复：确保情绪数据的索引也带有时区 ---
+    sent_dates = pd.to_datetime(['2023-01-01', '2023-01-03'], utc=True)
     sent_data = {'sent_mean': [0.5, -0.5], 'sent_median': [0.5, -0.5], 'count': [10, 5]}
     daily_sent_df = pd.DataFrame(sent_data, index=sent_dates)
 
-    # Act
     merged_df = merge_price_and_sentiment(price_df, daily_sent_df)
 
-    # Assert
-    # Check that the first day has the correct sentiment
     assert merged_df.loc['2023-01-01', 'sent_mean'].iloc[0] == 0.5
-    # Check that the second day is forward-filled from the first
     assert merged_df.loc['2023-01-02', 'sent_mean'].iloc[0] == 0.5
-    # Check that the third day has its own new sentiment
     assert merged_df.loc['2023-01-03', 'sent_mean'].iloc[0] == -0.5
-    # Check that the final row has the correct sentiment
     assert merged_df['sent_mean'].iloc[-1] == -0.5
-    # Check that there are no NaNs in the sentiment columns
     assert not merged_df[['sent_mean', 'sent_median', 'count']].isnull().values.any()
+
+def test_generate_programmatic_features_extensibility(monkeypatch):
+    """
+    Tests that the feature generation is extensible.
+    """
+    df = create_base_df(rows=300) 
+    
+    from features import feature_engineering
+
+    df_default = feature_engineering._generate_programmatic_features(df.copy())
+    num_cols_default = len(df_default.columns)
+
+    original_params = feature_engineering.FEATURE_PARAMS.copy()
+    extended_params = original_params.copy()
+    extended_params["ma_windows"] = original_params["ma_windows"] + [150, 250]
+    monkeypatch.setattr(feature_engineering, 'FEATURE_PARAMS', extended_params, raising=True)
+
+    df_extended = feature_engineering._generate_programmatic_features(df.copy())
+    num_cols_extended = len(df_extended.columns)
+
+    # We added 2 new MA windows. This should result in:
+    # sma_150, ema_150, sma_250, ema_250 (4 cols)
+    # sma_spread_x_150, ema_spread_x_150 (multiple new spread cols)
+    # The exact number of spread columns depends on the `fast` loop.
+    # The spread calculation is hardcoded and doesn't use the new windows, so exactly 4 columns are added.
+    assert num_cols_extended == num_cols_default + 4
+
+def test_generate_features_with_mined_feature(tmp_path):
+    """
+    Tests that generate_features can load a formula from a JSON file.
+    """
+    mined_feature_data = {
+        "name": "gp_test_feature_add_close_vol",
+        "formula": "add(X0, X1)",
+        "base_features": ["close", "vol"],
+        "performance": {"accuracy": 0.65}
+    }
+    mined_features_path = tmp_path / "mined_features.json"
+    with open(mined_features_path, 'w') as f:
+        json.dump(mined_feature_data, f)
+
+    df = create_base_df(rows=10)
+
+    df_with_mined_feature = generate_features(df.copy(), mined_features_path=str(mined_features_path))
+
+    expected_new_col = mined_feature_data["name"]
+    assert expected_new_col in df_with_mined_feature.columns, f"Mined feature column '{expected_new_col}' was not created."
+
+    expected_values = df['close'] + df['vol']
+    
+    pd.testing.assert_series_equal(df_with_mined_feature[expected_new_col], expected_values, check_names=False)

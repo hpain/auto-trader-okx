@@ -1,0 +1,42 @@
+{
+  "model_type": "lgb_classifier_improved",
+  "feature_cols": [
+    "low",
+    "close",
+    "vol",
+    "vol_lag_2",
+    "vol_lag_3",
+    "vol_lag_5",
+    "volatility_10",
+    "volatility_20",
+    "volatility_30",
+    "volatility_60",
+    "volatility_120",
+    "atr_14",
+    "bb_lband_14",
+    "bb_width_14",
+    "atr_20",
+    "bb_lband_20",
+    "bb_width_20",
+    "atr_30",
+    "bb_lband_30",
+    "bb_width_30"
+  ],
+  "best_params": {
+    "model": "lgb",
+    "lgb_n_estimators": 181,
+    "learning_rate": 0.04018190257799332,
+    "num_leaves": 80,
+    "max_depth": 3,
+    "min_child_samples": 27,
+    "subsample": 0.8378245614678236,
+    "colsample_bytree": 0.7478180120490987,
+    "confidence_threshold": 0.5899807630654715
+  },
+  "n_samples": 7717,
+  "best_score": -0.6847254589170518,
+  "val_return": 0.0,
+  "val_sharpe": 0.0,
+  "training_timestamp": "2025-11-10T09:48:47.511068+00:00",
+  "source_run_timestamp": "2025-11-10 17:48:45"
+}

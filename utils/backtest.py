@@ -7,10 +7,11 @@ def run_backtest(
     test_data: pd.DataFrame,
     confidence_threshold: float = 0.95,
     stop_loss_pct: float = 0.02,
-    take_profit_pct: float = 0.05, # New parameter
+    take_profit_pct: float = 0.05,
+    fee: float = 0.001  # Default fee at 0.1%
 ) -> tuple[float, float, float, int, pd.Series]:
     """
-    执行基于高置信度、止损和止盈的回测。
+    执行基于高置信度、止损、止盈和交易成本的回测。
 
     Args:
         predictions (pd.Series): 模型预测的标签 (0 或 1).
@@ -19,6 +20,7 @@ def run_backtest(
         confidence_threshold (float): 执行交易的最低置信度.
         stop_loss_pct (float): 止损百分比.
         take_profit_pct (float): 止盈百分比.
+        fee (float): 每笔交易的手续费率 (例如 0.001 代表 0.1%).
 
     Returns:
         tuple: (总收益率, 最大回撤, 达标交易成功率, 交易次数, 回报序列)
@@ -43,20 +45,24 @@ def run_backtest(
             stop_loss_price = entry_price * (1 - stop_loss_pct)
             take_profit_price = entry_price * (1 + take_profit_pct)
 
+            trade_return_gross = 0.0
+
             # 交易结果判断 (优先级: 止损 > 止盈 > 期末收盘)
             # 1. 检查是否触发止损
             if row["future_low"] <= stop_loss_price:
-                trade_return = -stop_loss_pct
+                trade_return_gross = -stop_loss_pct
             # 2. 检查是否触发止盈
             elif row["future_high"] >= take_profit_price:
-                trade_return = take_profit_pct
+                trade_return_gross = take_profit_pct
                 successful_trades += 1 # 止盈即为成功
             # 3. 如果都未触发，则以未来收盘价出场
             else:
-                trade_return = (row["future_close"] / entry_price) - 1
-                if trade_return >= 0.005: # 检查是否达到0.5%的目标
+                trade_return_gross = (row["future_close"] / entry_price) - 1
+                if trade_return_gross >= 0.005: # 检查是否达到0.5%的目标
                     successful_trades += 1
             
+            # 从毛利润中减去双边手续费
+            trade_return = trade_return_gross - (2 * fee)
             returns.append(trade_return)
         else:
             # 不交易，当日收益为0
@@ -127,9 +133,8 @@ def run_backtest_regression(
             # 3. 如果都未触发，则以未来收盘价出场
             else:
                 trade_return = (row["future_close"] / entry_price) - 1
-            
-            if trade_return > 0:
-                successful_trades += 1
+                if trade_return > 0:
+                    successful_trades += 1
             
             returns.append(trade_return)
         else:

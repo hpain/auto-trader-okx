@@ -1,16 +1,176 @@
+# ==============================================================================
+# Exchange Configuration
+# ==============================================================================
+exchange:
+  # The primary exchange is used for fetching long-term historical data for
+  # backtesting and model training. This should be the exchange with the most
+  # extensive and reliable historical data.
+  primary_exchange: 'binance'
+
+  # Secondary exchanges are used along with the primary for live/recent data
+  # aggregation. This provides redundancy and a more robust price feed.
+  # The system will automatically use all available sources.
+  secondary_exchanges:
+    - 'okx'
+    - 'bybit' # Example, can be any ccxt-supported exchange
+
+exchanges:
+  - 'binance'
+  - 'okx'
+  - 'bybit'
+
+# ==============================================================================
+# Derivatives Data Configuration
+# ==============================================================================
+derivatives_data:
+  fetch_funding_rates: true
+  fetch_open_interest: true
+
+# ==============================================================================
+# OKX API Configuration
+# ==============================================================================
 okx:
   api_key: "YOUR_API_KEY"
   secret_key: "YOUR_SECRET_KEY"
   passphrase: "YOUR_PASSPHRASE"
-  # flag: 1 for live trading, 0 for demo trading
+  # flag: 1 for live trading, 0 for demo/paper trading
   flag: "0"
 
-trade:
+# ==============================================================================
+# General Trading Parameters
+# ==============================================================================
+trading:
   symbol: "BTC-USDT"
   interval: "1H"
-  quantity: 0.001
+  # Strategy to use for live trading: 'ml' or 'ma_crossover'
+  strategy: "ml" 
 
+# ==============================================================================
+# Position Sizing & Risk Management
+# ==============================================================================
+position_sizing:
+  # Strategy: 'fixed' or 'fractional'
+  strategy: "fixed"
+  # Used if strategy is 'fixed'
+  fixed_quantity: 0.001
+  # Used if strategy is 'fractional'
+  risk_per_trade: 0.01 # e.g., 1% of total equity
+
+risk_management:
+  stop_loss_pct: 0.02  # 2%
+  take_profit_pct: 0.05 # 5%
+
+# ==============================================================================
+# Strategy-Specific Parameters
+# ==============================================================================
+strategy_params:
+  ma_crossover:
+    # Parameters for the fallback strategy in the executor
+    live_fallback:
+      short_window: 5
+      long_window: 20
+    # Parameters for the dedicated backtest script
+    backtest:
+      short_window: 7
+      long_window: 25
+
+# ==============================================================================
+# Machine Learning Model & Optuna Configuration
+# (Replaces model_config.py)
+# ==============================================================================
+model:
+  # The name of the target variable column
+  target_column: 'y'
+
+  optuna:
+    direction: 'maximize'
+    metric_to_optimize: 'sharpe_ratio'
+    n_trials: 100
+
+  # Model hyperparameter search spaces for Optuna
+  hyperparameters:
+    logreg:
+      C_range: [0.001, 100]
+      buy_th_range: [0.51, 0.7]
+      sell_th_range: [0.3, 0.49]
+      fee_range: [0.0002, 0.001]
+    rf:
+      n_estimators_range: [100, 1000]
+      max_depth_range: [3, 20]
+      min_samples_leaf_range: [1, 10]
+    lgb:
+      n_estimators_range: [100, 1000]
+      num_leaves_range: [20, 150]
+      learning_rate_range: [0.01, 0.3]
+      max_depth_range: [3, 15]
+      min_child_samples_range: [20, 100]
+
+# ==============================================================================
+# Backtesting Configuration
+# ==============================================================================
+backtest:
+  symbols_to_test:
+    - "BTC-USDT"
+    - "ETH-USDT"
+    - "SOL-USDT"
+    - "KDA-USDT"
+    - "CFX-USDT"
+    - "DOT-USDT"
+
+# ==============================================================================
+# File System Paths
+# ==============================================================================
 paths:
   model_dir: "models"
   feature_cache_dir: "data/cache"
   history_data_dir: "data/history"
+
+# ==============================================================================
+# Risk Monitoring & Alerting Configuration
+# ==============================================================================
+risk_monitoring:
+  # Risk thresholds for monitoring
+  daily_loss_threshold: -500.0    # Maximum daily loss in account currency
+  max_drawdown_threshold: 0.10    # Maximum drawdown (10%)
+  max_consecutive_losses: 5       # Maximum consecutive losing trades
+  max_single_loss_pct: -0.03      # Maximum single trade loss percentage (-3%)
+  min_account_balance: 1000.0     # Minimum account balance to maintain
+
+  # Email alerting configuration
+  email:
+    smtp_server: "smtp.gmail.com"    # SMTP server for sending alerts
+    smtp_port: 587                   # SMTP port
+    user: "your_email@gmail.com"     # Email account
+    password: "your_app_password"    # Email app password (not regular password)
+    recipients:                      # List of email addresses to receive alerts
+      - "admin@yourcompany.com"
+      - "risk@yourcompany.com"
+
+# ==============================================================================
+# Strategy Management Configuration
+# ==============================================================================
+strategy_management:
+  # List of enabled strategies
+  enabled_strategies:
+    - "lgb"        # Main ML strategy
+    - "ma_fast"    # Fast mean reversion strategy
+    - "ma_slow"    # Slow trend following strategy
+  
+  # Strategy-specific configurations
+  lgb_strategy:
+    model_dir: "models"
+    model_name: "best_model.pkl"
+    metadata_name: "metadata.json"
+  
+  ma_fast_strategy:
+    short_window: 5
+    long_window: 15
+  
+  ma_slow_strategy:
+    short_window: 20
+    long_window: 50
+  
+  # Strategy switching parameters
+  strategy_switch:
+    lookback_days: 7          # Number of days to evaluate strategy performance
+    performance_threshold: 0.5 # Minimum Sharpe ratio difference to trigger switch

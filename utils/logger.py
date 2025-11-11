@@ -1,41 +1,115 @@
 import logging
-import os
 from logging.handlers import RotatingFileHandler
-import sys
+import json
+from pathlib import Path
 
-def setup_logger():
+def setup_script_logger(log_dir: str = 'logs', file_name: str = 'script.log', level=logging.INFO):
     """
-    Set up the root logger to output to console and a rotating file.
-    This function is designed to be idempotent and avoid conflicts with other libraries.
+    Set up a basic logger for scripts that logs to both console and a file.
+    This configures the root logger.
     """
-    log_dir = "logs"
-    if not os.path.exists(log_dir):
-        os.makedirs(log_dir)
+    log_path = Path(log_dir)
+    log_path.mkdir(exist_ok=True)
 
-    log_file = os.path.join(log_dir, "trader.log")
+    # Get the root logger
+    logger = logging.getLogger()
+    logger.setLevel(level)
 
-    log_formatter = logging.Formatter(
-        "%(asctime)s - %(levelname)s - %(module)s - %(message)s"
-    )
+    # Clear existing handlers to avoid duplication
+    if logger.hasHandlers():
+        logger.handlers.clear()
 
-    root_logger = logging.getLogger()
-    root_logger.setLevel(logging.INFO)
+    # Create formatters
+    file_formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+    console_formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
 
-    # Avoid adding duplicate handlers by checking if handlers of the same type already exist.
-    # This is more robust than clearing all handlers.
-    if not any(isinstance(h, logging.StreamHandler) and not isinstance(h, logging.FileHandler) for h in root_logger.handlers):
-        console_handler = logging.StreamHandler(sys.stdout)
-        console_handler.setFormatter(log_formatter)
-        root_logger.addHandler(console_handler)
+    # File handler
+    file_handler = logging.FileHandler(log_path / file_name)
+    file_handler.setLevel(level)
+    file_handler.setFormatter(file_formatter)
+    logger.addHandler(file_handler)
 
-    if not any(isinstance(h, RotatingFileHandler) for h in root_logger.handlers):
-        file_handler = RotatingFileHandler(
-            log_file, maxBytes=5*1024*1024, backupCount=5, encoding='utf-8'
-        )
-        file_handler.setFormatter(log_formatter)
-        root_logger.addHandler(file_handler)
+    # Console handler
+    console_handler = logging.StreamHandler()
+    console_handler.setLevel(level)
+    console_handler.setFormatter(console_formatter)
+    logger.addHandler(console_handler)
+    
+    return logger
 
-    # Use a flag on the logger itself to ensure the configuration message is logged only once.
-    if not getattr(root_logger, '_configured', False):
-        logging.info("Logger has been configured.")
-        root_logger._configured = True
+# Initialize a default logger for modules to import
+logger = setup_script_logger()
+
+def setup_trader_logger(log_dir: str = 'logs', file_name: str = 'trading_cycles.log', max_bytes: int = 10*1024*1024, backup_count: int = 5):
+    """
+    配置并返回一个用于记录结构化JSON交易周期的logger。
+
+    :param log_dir: 存放日志文件的目录。
+    :param file_name: 日志文件的名称。
+    :param max_bytes: 每个日志文件的最大大小。
+    :param backup_count: 保留的旧日志文件数量。
+    :return: 配置好的logger实例。
+    """
+    log_path = Path(log_dir)
+    log_path.mkdir(exist_ok=True)
+    
+    trader_logger = logging.getLogger('TraderLogger')
+    trader_logger.setLevel(logging.INFO)
+    
+    # 防止重复添加handler
+    if trader_logger.hasHandlers():
+        trader_logger.handlers.clear()
+
+    # 创建一个只处理消息的handler，不做任何格式化
+    handler = RotatingFileHandler(log_path / file_name, maxBytes=max_bytes, backupCount=backup_count)
+    
+    # 我们直接记录JSON字符串，所以formatter不是必需的，但为了完整性可以定义一个
+    formatter = logging.Formatter('%(message)s')
+    handler.setFormatter(formatter)
+    
+    trader_logger.addHandler(handler)
+    
+    return trader_logger
+
+class CycleLogger:
+    """
+    一个辅助类，用于在单个交易周期内收集、组织和记录日志信息。
+    """
+    def __init__(self, logger: logging.Logger, cycle_id: str):
+        self.logger = logger
+        self.cycle_id = cycle_id
+        self.log_data = {
+            "cycle_id": self.cycle_id,
+            "status": "PENDING",
+            "decision": {},
+            "execution": {},
+            "portfolio": {},
+            "error": None
+        }
+
+    def set_status(self, status: str):
+        self.log_data['status'] = status
+
+    def add_decision_info(self, **kwargs):
+        self.log_data['decision'].update(kwargs)
+
+    def add_execution_info(self, **kwargs):
+        self.log_data['execution'].update(kwargs)
+
+    def add_portfolio_info(self, **kwargs):
+        self.log_data['portfolio'].update(kwargs)
+
+    def set_error(self, error_message: str):
+        self.log_data['status'] = 'FAILED'
+        self.log_data['error'] = error_message
+
+    def commit(self):
+        """
+        将收集到的日志信息作为一条JSON记录提交。
+        """
+        # 确保在最终提交前状态不是PENDING
+        if self.log_data['status'] == 'PENDING':
+            self.log_data['status'] = 'SUCCESS' if self.log_data['error'] is None else 'FAILED'
+            
+        log_string = json.dumps(self.log_data)
+        self.logger.info(log_string)

@@ -1,0 +1,178 @@
+"""
+生产环境运行脚本 - 统一的实盘交易入口
+"""
+import time
+import pandas as pd
+
+# 导入我们所有的新组件
+from strategies.moving_average import MovingAverageStrategy
+from strategies.lgb_strategy import LGBStrategy
+from trader.portfolio_manager import PortfolioManager
+from trader.execution_handler import ExecutionHandler
+from trader.strategy_manager import StrategyManager
+
+# 导入数据和客户端
+from data.binance import get_klines_bian
+from exchange.okx_exchange import OKXExchange
+from config import config
+from utils.data_normalization import normalize_binance_df
+from features.feature_engineering import generate_features
+from utils.logger import setup_trader_logger, CycleLogger
+
+
+def run():
+    """
+    运行交易系统
+    """
+    main_loop()
+
+
+def main_loop():
+    """
+    全新的自动化交易主循环，集成了市场状态检测和策略管理。
+    """
+    print("--- System Initializing ---")
+
+    # 1. 初始化日志记录器
+    trader_logger = setup_trader_logger()
+    print("Logger initialized.")
+
+    # 2. 初始化所有组件
+    # 2.1 初始化交易所客户端
+    exchange_client = OKXExchange(api_key=config["okx"]["api_key"], api_secret=config["okx"]["secret_key"], passphrase=config["okx"]["passphrase"], sandbox=config["okx"]["flag"] == '0')
+
+    # 2.2 初始化策略
+    strategy_1_config = {'short_window': 10, 'long_window': 30}
+    strategy_2_config = {'short_window': 20, 'long_window': 60}
+    strategy_3_config = {
+        'model_dir': 'models',
+        'model_name': 'best_model.pkl',
+        'metadata_name': 'metadata.json'
+    }
+    ma_strategy_1 = MovingAverageStrategy(strategy_name="MA_10_30", config=strategy_1_config)
+    ma_strategy_2 = MovingAverageStrategy(strategy_name="MA_20_60", config=strategy_2_config)
+    lgb_strategy = LGBStrategy(strategy_name="LGB_Main", config=strategy_3_config)
+    strategy_army = [ma_strategy_1, ma_strategy_2, lgb_strategy]
+    print(f"Initialized {len(strategy_army)} strategies.")
+
+    # 2.3 初始化StrategyManager
+    strategy_manager = StrategyManager(strategies=strategy_army)
+    print(f"Initialized StrategyManager with {len(strategy_army)} strategies.")
+
+    # 2.4 初始化PortfolioManager
+    initial_capital = 10000.0
+    risk_config = {
+        'risk_per_trade': 0.01,
+        'max_portfolio_risk': 0.05,
+        'stop_loss_window': 20
+    }
+    # 注意：我们将logger传递给PortfolioManager
+    portfolio_manager = PortfolioManager(strategies=strategy_army, capital=initial_capital, risk_config=risk_config, exchange_client=exchange_client)
+
+    # 2.5 初始化ExecutionHandler
+    # 注意：我们将logger传递给ExecutionHandler
+    execution_handler = ExecutionHandler(exchange_client=exchange_client)
+
+    print("--- Initialization Complete. Starting Live Trading Loop ---")
+
+    # 3. 主循环
+    while True:
+        cycle_timestamp = pd.Timestamp.now(tz='UTC').isoformat()
+        cycle_logger = CycleLogger(logger=trader_logger, cycle_id=cycle_timestamp)
+        
+        try:
+            print(f"\n{'='*20} New Cycle at {pd.Timestamp.now()} {'='*20}")
+            
+            # 3.1 获取多个交易对的最新市场数据
+            print("Fetching latest market data...")
+            symbols = ["BTC-USDT", "ETH-USDT"]  # 可以扩展为更多交易对
+            interval = "1H"
+            public_client = OKXExchange(sandbox=True)
+            
+            # 获取所有交易对的数据
+            data_for_pm = {}
+            for symbol in symbols:
+                raw_data = get_klines_bian(public_client, symbol, interval, years=0.1, ignore_local=True)
+                
+                if raw_data is None or raw_data.empty:
+                    print(f"Warning: Failed to fetch market data for {symbol}, skipping...")
+                    continue
+
+                # 数据清洗和特征工程
+                normalized_data = normalize_binance_df(raw_data)
+                featured_data = generate_features(normalized_data, news_csv_path=None)
+                data_for_pm[symbol] = featured_data
+
+            if not data_for_pm:
+                raise ValueError("Failed to fetch market data for any symbol.")
+
+            # 3.2 为每个资产分析市场状态并推荐策略
+            print("Analyzing market regime for each asset and selecting strategies...")
+            for symbol in data_for_pm.keys():
+                featured_data = data_for_pm[symbol]
+                
+                # 为每个资产单独分析市场状态
+                regime_info = strategy_manager.analyze_market_regime(featured_data, cycle_logger)
+                recommended_strategy_name = strategy_manager.get_recommended_strategy(regime_info, cycle_logger)
+                
+                # 根据市场状态切换策略（可以为不同的资产使用不同的策略）
+                strategy_manager.switch_strategy(recommended_strategy_name, cycle_logger)
+                
+                # 更新PortfolioManager中的策略（为每个资产设置）
+                selected_strategies = strategy_manager.get_active_strategies()
+                # 更新资产策略映射
+                portfolio_manager.asset_strategies[symbol] = selected_strategies
+
+            # 3.3 调用PortfolioManager进行投资组合级别的决策
+            # 我们将cycle_logger传递下去
+            trade_orders, _ = portfolio_manager.rebalance(data_for_pm, cycle_logger)
+
+            # 3.4 调用ExecutionHandler执行交易
+            if trade_orders:
+                # 我们将cycle_logger传递下去
+                execution_report = execution_handler.execute_trades(trade_orders, cycle_logger)
+                
+                # 3.5 根据执行报告更新仓位
+                portfolio_manager.update_positions(execution_report)
+            else:
+                print("No new trade orders to execute.")
+                cycle_logger.set_status("NO_ACTION")
+
+            # 3.5a 记录每个周期结束时的投资组合状态和总价值
+            # 为每个资产计算价值并汇总
+            total_position_value = 0.0
+            for symbol, qty in portfolio_manager.positions.items():
+                if symbol in data_for_pm and not data_for_pm[symbol].empty:
+                    current_price = data_for_pm[symbol].iloc[-1]['close']
+                    total_position_value += qty * current_price
+            
+            total_value = portfolio_manager.capital + total_position_value
+
+            cycle_logger.add_portfolio_info(
+                final_positions=portfolio_manager.positions,
+                capital=portfolio_manager.capital,
+                position_value=total_position_value,
+                total_value=total_value
+            )
+
+            # 3.6 等待下一个周期
+            wait_seconds = 3600 # 1 hour
+            print(f"Cycle finished. Waiting for {wait_seconds / 60:.1f} minutes...")
+            time.sleep(wait_seconds)
+
+        except KeyboardInterrupt:
+            print("\nUser interrupted the process. Shutting down.")
+            cycle_logger.set_error("User interrupted.")
+            cycle_logger.commit()
+            break
+        except Exception as e:
+            print(f"FATAL ERROR in main loop: {e}")
+            cycle_logger.set_error(str(e))
+            time.sleep(60)
+        finally:
+            # 确保每个周期都记录日志
+            cycle_logger.commit()
+
+
+if __name__ == "__main__":
+    main_loop()

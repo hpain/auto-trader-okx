@@ -13,3 +13,6 @@ okx-sdk
 matplotlib
 lightgbm
 pytest
+python-dotenv
+ccxt
+dune-client

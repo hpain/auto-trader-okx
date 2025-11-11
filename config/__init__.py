@@ -1,51 +1,54 @@
 # config/__init__.py
 import os
-import yaml
+from utils.config_loader import load_config
 
-def _load_config():
-    """
-    Loads configuration from settings.yaml and overrides with environment variables.
-    """
-    _here = os.path.dirname(__file__)
-    _yaml_path = os.path.join(_here, "settings.yaml")
+class ConfigProxy:
+    _config = None
+    _loaded = False
 
-    if not os.path.exists(_yaml_path):
-        # In a Docker environment, the file might not exist, which is fine.
-        # We can rely solely on environment variables.
-        config = {
-            "okx": {},
-            "trade": {},
-            "paths": {
-                "model_dir": "models",
-                "feature_cache_dir": "data/cache",
-                "history_data_dir": "data/history"
-            }
-        }
-    else:
-        with open(_yaml_path, "r", encoding="utf-8") as f:
-            config = yaml.safe_load(f)
+    def _load_config(self):
+        """
+        Private method to load the configuration on first access.
+        """
+        if not self._loaded:
+            # This is the core of the lazy loading. The expensive `load_config`
+            # is only called when a config attribute is first accessed.
+            _current_dir = os.path.dirname(os.path.abspath(__file__))
+            _root_dir = os.path.dirname(_current_dir)
+            _settings_path = os.path.join(_root_dir, 'config', 'settings.yaml')
 
-    # --- Override with Environment Variables ---
-    # OKX settings
-    config["okx"]["api_key"] = os.getenv("OKX_API_KEY", config.get("okx", {}).get("api_key"))
-    config["okx"]["secret_key"] = os.getenv("OKX_SECRET_KEY", config.get("okx", {}).get("secret_key"))
-    config["okx"]["passphrase"] = os.getenv("OKX_PASSPHRASE", config.get("okx", {}).get("passphrase"))
-    config["okx"]["flag"] = os.getenv("OKX_FLAG", config.get("okx", {}).get("flag", "0"))
+            # Fallback to the example file if the main one doesn't exist.
+            if not os.path.exists(_settings_path):
+                _settings_path = os.path.join(_root_dir, 'config', 'settings.yaml.example')
 
-    # Trade settings
-    config["trade"]["symbol"] = os.getenv("TRADE_SYMBOL", config.get("trade", {}).get("symbol", "BTC-USDT"))
-    config["trade"]["interval"] = os.getenv("TRADE_INTERVAL", config.get("trade", {}).get("interval", "1H"))
-    
-    # Ensure quantity is parsed as a float
-    trade_quantity_str = os.getenv("TRADE_QUANTITY")
-    if trade_quantity_str:
-        config["trade"]["quantity"] = float(trade_quantity_str)
-    elif "quantity" not in config.get("trade", {}):
-        config["trade"]["quantity"] = 0.001
+            self._config = load_config(_settings_path)
+            self._loaded = True
 
+    def __getattr__(self, name):
+        """
+        Magic method to intercept attribute access.
+        e.g., config.some_key
+        """
+        self._load_config()
+        # Return the attribute from the loaded config dictionary.
+        # This might raise an AttributeError if the key doesn't exist, which is expected.
+        return self._config[name]
 
-    return config
+    def __getitem__(self, key):
+        """
+        Magic method to intercept item access (like a dictionary).
+        e.g., config['some_key']
+        """
+        self._load_config()
+        return self._config[key]
 
-config = _load_config()
+    def get(self, key, default=None):
+        """
+        Provides a safe way to get a value, similar to dict.get().
+        """
+        self._load_config()
+        return self._config.get(key, default)
 
-__all__ = ["config"]
+# Instantiate the proxy.
+# When other modules `from config import config`, they get this instance.
+config = ConfigProxy()

@@ -1,0 +1,52 @@
+         集成衍生品市场数据（资金费率与持仓量）
+
+
+目标： 通过引入关键的衍生品市场指标，增强模型的预测能力。
+
+阶段 1: 数据获取
+识别数据源：
+
+资金费率和持仓量通常可以通过交易所（如 Binance, OKX, Bybit）的 API 直接获取。
+我们将扩展 AggregatedExchange 来获取这些数据。
+扩展 AggregatedExchange (exchange/aggregated_exchange.py)：
+
+添加新方法： 实现 fetch_funding_rates(symbol, timeframe) 和 fetch_open_interest(symbol, timeframe) 方法。
+实现聚合逻辑： 类似于 fetch_candles，这些方法将：
+调用底层 CcxtExchange 实例（Binance, OKX, Bybit）中对应的方法。
+处理单个交易所可能出现的错误或数据缺失情况。
+聚合数据（例如，平均资金费率，持仓量总和）。
+返回包含聚合衍生品数据的 DataFrame。
+修改 research/evolve.py：
+
+获取衍生品数据： 在获取所有交易对的历史 K 线数据之后，调用 AggregatedExchange 的新方法来获取主交易对以及（如果需要）特征交易对的资金费率和持仓量数据。
+存储衍生品数据： 将获取到的衍生品 DataFrame 存储在一个字典中，类似于 feature_dfs 的处理方式。
+传递给 generate_features： 将这个衍生品数据字典作为新的参数传递给 generate_features 函数。
+阶段 2: 特征工程
+扩展 features/feature_engineering.py：
+更新 generate_features 函数签名： 添加一个新的可选参数，例如 derivatives_dfs: dict = None。
+添加新的辅助函数 (_add_derivatives_features)：
+这个函数将接收主交易对的 DataFrame (df) 和 derivatives_dfs 字典。
+它将衍生品数据与主 K 线数据进行对齐（例如，通过重采样或重新索引到 K 线的时间周期）。
+从资金费率生成特征：
+原始资金费率。
+资金费率的变化/动量。
+资金费率与现货价格的溢价。
+从持仓量生成特征：
+原始持仓量。
+持仓量的变化/动量。
+持仓量与交易量的比率。
+返回包含这些新的衍生品特征的 DataFrame。
+调用 _add_derivatives_features： 在 generate_features 函数中调用这个新的辅助函数，并将其输出与其他特征合并。
+阶段 3: 配置（可选但推荐）
+更新 config/settings.yaml：
+添加一个新的配置节，例如 derivatives_data，用于控制是否获取特定的衍生品数据（例如，fetch_funding_rates: true, fetch_open_interest: true）。
+这将方便未来对衍生品数据获取的开关和扩展。
+阶段 4: 测试与验证
+单元测试：
+为 AggregatedExchange 中的新方法添加单元测试，确保数据获取和聚合的正确性。
+为 features/feature_engineering.py 中的 _add_derivatives_features 添加单元测试，验证特征生成的逻辑。
+集成测试：
+运行 research/evolve.py --ignore-local，确保整个数据管道（数据获取、包含衍生品特征的特征生成以及特征预筛选）无错误地运行。
+验证在特征生成和预筛选的日志中是否出现了基于衍生品的新特征。
+性能评估：
+在模型训练部分被启用后，评估新特征是否能提升模型性能。

@@ -4,6 +4,7 @@ import time
 import requests
 import pandas as pd
 from config import config
+from utils.data_normalization import normalize_binance_df
 
 def get_klines_bian(client, symbol, interval, years=1, limit=1000,
                     save=True, keep_ts_float=False, max_pages=5000,
@@ -32,13 +33,16 @@ def get_klines_bian(client, symbol, interval, years=1, limit=1000,
     if not ignore_local and os.path.exists(cache_path):
         try:
             df_local = pd.read_csv(cache_path, parse_dates=["ts"])
+            # attempt to normalize if columns use short names
+            if 'o' in df_local.columns:
+                df_local = normalize_binance_df(df_local)
             print(f"检测到本地历史: {len(df_local)} 条, 时间范围 {df_local['ts'].min()} → {df_local['ts'].max()}")
         except Exception as e:
-            print(f"⚠️ 本地文件读取失败: {e}")
+            print(f"WARN 本地文件读取失败: {e}")
             df_local = pd.DataFrame(columns=["ts"])
     else:
         if ignore_local:
-            print("⚠️ 已启用 ignore_local，忽略本地 CSV，直接全量抓取")
+            print("WARN 已启用 ignore_local，忽略本地 CSV，直接全量抓取")
         df_local = pd.DataFrame(columns=["ts"])
 
     # ===== 开始抓取（断点续传或全量）=====
@@ -64,11 +68,11 @@ def get_klines_bian(client, symbol, interval, years=1, limit=1000,
             r.raise_for_status()
             batch = r.json()
         except Exception as e:
-            print(f"❌ 请求失败: {e}")
+            print(f"FAIL 请求失败: {e}")
             break
 
         if not batch:
-            print("✅ 数据获取完毕")
+            print("OK 数据获取完毕")
             break
 
         # 去重
@@ -80,7 +84,7 @@ def get_klines_bian(client, symbol, interval, years=1, limit=1000,
                 fetched_timestamps.add(ts)
 
         if not new_rows:
-            print("⚠️ 本批全重复，结束")
+            print("WARN 本批全重复，结束")
             break
 
         # 转 DataFrame（批次降序）
@@ -89,18 +93,16 @@ def get_klines_bian(client, symbol, interval, years=1, limit=1000,
         df_new = df_new.sort_values("ts", ascending=False)
 
         newest, oldest = df_new['ts'].max(), df_new['ts'].min()
-        print(f"📥 第 {page_no} 页: {len(df_new)} 条, 最新: {newest}, 最旧: {oldest}")
-
-        # 命中目标时间
-        if oldest <= target_time:
-            df_new = df_new[df_new['ts'] >= target_time]
-            all_rows.extend(df_new.values.tolist())
-            total_fetched += len(df_new)
-            print(f"✅ 命中目标时间，收集完成 ({len(df_new)} 条)")
-            break
+        print(f"OK 第 {page_no} 页: {len(df_new)} 条, 最新: {newest}, 最旧: {oldest}")
 
         all_rows.extend(df_new.values.tolist())
         total_fetched += len(df_new)
+
+        # 命中目标时间
+        if oldest <= target_time:
+            print(f"OK 命中目标时间，停止抓取")
+            break
+
         before_param = int(oldest.timestamp() * 1000) - 1
         page_no += 1
         time.sleep(0.45)
@@ -110,32 +112,60 @@ def get_klines_bian(client, symbol, interval, years=1, limit=1000,
     if not df_new_all.empty:
         df_new_all['ts'] = pd.to_datetime(df_new_all['ts'], unit='ms', utc=True)
 
-    if not df_local.empty and not ignore_local:
-        df = pd.concat([df_local, df_new_all], ignore_index=True)
+    # --- 修复后的合并与清洗逻辑 ---
+    # 如果忽略本地缓存，则最终数据就是新抓取的数据
+    if ignore_local:
+        df_final = df_new_all
+    # 否则，合并本地数据和新抓取的数据
     else:
-        df = df_new_all
+        dfs_to_concat = [df for df in [df_local, df_new_all] if not df.empty]
+        if dfs_to_concat:
+            df_final = pd.concat(dfs_to_concat, ignore_index=True)
+        else:
+            df_final = pd.DataFrame()
 
     # 清洗
-    if not df.empty:
-        df = df.sort_values("ts").drop_duplicates(subset=["ts"]).reset_index(drop=True)
+    if not df_final.empty:
+        # --- 关键修复：在设置索引前，先排序并彻底去重 ---
+        # 1. 确保 'ts' 列是 datetime 类型
+        df_final['ts'] = pd.to_datetime(df_final['ts'])
+        # 2. 排序并基于 'ts' 列移除重复行，保留第一个出现的记录
+        df_final = df_final.sort_values("ts").drop_duplicates(subset=["ts"], keep='first')
+        # 3. 筛选出目标时间范围内的数据
+        df_final = df_final[df_final['ts'] >= target_time].reset_index(drop=True)
         for col in ["o", "h", "l", "c", "v"]:
-            if col in df.columns:
-                df[col] = pd.to_numeric(df[col], errors='coerce')
-        df = df.dropna(subset=["o", "h", "l", "c"])
+            if col in df_final.columns:
+                df_final[col] = pd.to_numeric(df_final[col], errors='coerce')
+        
+        required_cols = ["o", "h", "l", "c"]
+        if all(col in df_final.columns for col in required_cols):
+            df_final = df_final.dropna(subset=required_cols)
+        else:
+            print("WARN: Price data is missing required columns (o, h, l, c).")
+            df_final = pd.DataFrame() # Make df empty
 
-        if not keep_ts_float and "ct" in df.columns:
-            df = df.drop(columns=['ct', 'qv', 'tbuv', 'tqav', 'trades', 'ignore'], errors='ignore')
-        elif keep_ts_float:
-            df['ts_float'] = df['ts'].view('int64') / 1e9
+    # 在返回之前，删除不需要的列
+    if not df_final.empty and not keep_ts_float and "ct" in df_final.columns:
+        df_final = df_final.drop(columns=['ct', 'qv', 'tbuv', 'tqav', 'trades', 'ignore'], errors='ignore')
 
-    if save and not df.empty:
-        df.to_csv(cache_path, index=False)
-        print(f"💾 已保存到 {cache_path}")
+    # --- 关键修复：在返回前统一进行列名归一化 ---
+    if not df_final.empty and 'o' in df_final.columns:
+        print("Normalizing column names before returning...")
+        df_final = normalize_binance_df(df_final)
 
-    print(f"🏁 返回 {len(df)} 条有效K线 ({symbol}, {interval}, {years}y)")
-    
-    # Set timestamp as index before returning
-    if not df.empty:
-        df = df.set_index("ts", drop=True)
+    if save and not df_final.empty:
+        # 保存完整、干净的数据
+        df_to_save = df_final.copy()
+        if 'ts_float' in df_to_save.columns:
+             df_to_save = df_to_save.drop(columns=['ts_float'])
+        df_to_save.to_csv(cache_path, index=False)
+        print(f"SAVE 已保存到 {cache_path}")
 
-    return df
+    print(f"DONE 返回 {len(df_final)} 条有效K线 ({symbol}, {interval}, {years}y)")
+
+    # --- 修复: 在返回前将 'ts' 列设置为主索引 ---
+    # 下游的特征工程函数需要一个 DatetimeIndex。
+    if not df_final.empty and 'ts' in df_final.columns:
+        df_final = df_final.set_index('ts')
+
+    return df_final

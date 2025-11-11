@@ -1,0 +1,88 @@
+# Project State: Auto-Trader-OKX
+# This file documents the project's goals, status, and development plan.
+# It is intended to be read and updated by all developers and AI assistants
+# to ensure alignment and maintain context across different work sessions.
+
+file_management_rules:
+  - rule: "Ownership: This file is managed by the project's developers and any acting AI assistants. Changes should be proposed and agreed upon before being committed."
+  - rule: "Trigger for Change: Modifications are made when the project's state changes, such as completing a task, identifying a new issue, or altering the plan."
+  - rule: "Update Process: To modify, first read the file. Then, propose the changes to the team or lead developer. Once approved, apply the changes and commit the file."
+  - rule: "Status Updates: The `status` of a phase/task should be updated (e.g., Not Started -> In Progress -> Completed) to reflect the current state. Add notes to summarize outcomes."
+  - rule: "Archiving: Do not delete completed or obsolete tasks. Instead, update their `status` to `Completed`, `Cancelled`, or `Archived` to preserve historical context."
+  - rule: "Session Start: Any developer or AI assistant starting work on the project should first read this file to understand the current context, goals, and outstanding tasks."
+
+project_goal: >
+  To evolve the current trading bot into a fully autonomous system that can
+  monitor its own performance and market conditions to decide when to retrain
+  its trading model, creating a closed-loop feedback system.
+
+current_state_analysis:
+  strengths:
+    - "Data Layer: Mature modules for fetching data from exchanges (e.g., `data/`)."
+    - "Execution Layer: Encapsulated logic for exchange interactions (e.g., `exchange/`)."
+    - "Strategy Layer: Clear separation of trading strategies (e.g., `strategies/lgb_strategy.py`)."
+    - "Model Training: Dedicated scripts for building models (`models/build_model.py`)."
+    - "Advanced Research: Sophisticated model evolution and hyperparameter tuning capabilities (`models/evolution.py`, `research/`)."
+    - "Analysis Tools: Rich set of scripts for performance and market regime analysis (`analysis/`), including concepts for auto-adaptation."
+    - "Operational Modes: Clean separation between backtesting (`run_backtest.py`) and live trading (`run_live.py`)."
+  gaps:
+    - "Lack of a 'Master Controller': No central component to orchestrate the different modules into an autonomous loop."
+    - "Manual Feedback Loop: Model retraining, performance analysis, and deployment are likely manual, separate steps."
+    - "No Continuous Monitoring: The live system does not actively monitor its own performance in real-time to inform decisions."
+    - "No Automated Retraining Trigger: The system cannot automatically decide to retrain its model based on performance degradation or market shifts."
+    - "No Automated Deployment: Lacks a pipeline to automatically validate and deploy a newly trained model into the live environment."
+
+development_plan:
+  - phase: 1
+    name: "Standardize Monitoring and Logging"
+    objective: "To create a robust, real-time monitoring system by standardizing and structuring logs for all trading activities, positions, and performance metrics."
+    relevant_files:
+      - "logs/"
+      - "run_live.py"
+      - "trader/portfolio_manager.py"
+      - "trader/execution_handler.py"
+      - "utils/logger.py"
+    status: "Completed"
+    notes: >
+      Implemented a structured JSON logging system. Created `utils/logger.py` with a `CycleLogger` class
+      to capture the full lifecycle of each trade. Integrated this logger into `run_live.py`,
+      `trader/portfolio_manager.py` (to log decisions), and `trader/execution_handler.py` (to log outcomes).
+      The system now generates detailed, machine-readable logs in `logs/trading_cycles.log`.
+
+  - phase: 2
+    name: "Develop the Retraining Decision Engine"
+    objective: "To build the core logic that determines when a model retraining is necessary."
+    relevant_files:
+      - "analysis/performance_monitor.py"
+      - "analysis/market_regime_detection.py"
+      - "analysis/decision_maker.py"
+    status: "Completed"
+    notes: >
+      Created `analysis/performance_monitor.py` to read logs and calculate KPIs (Sharpe, Drawdown, etc.).
+      Refactored `analysis/market_regime_detection.py` to make it modular. Created `analysis/decision_maker.py`
+      which uses the monitor and regime detector to decide if a retrain is needed based on predefined rules.
+
+  - phase: 3
+    name: "Automate the Train-Validate-Deploy Pipeline"
+    objective: "To create a fully automated pipeline for model retraining, validation, and deployment."
+    relevant_files:
+      - "tools/model_pipeline.py"
+      - "models/evolution.py"
+      - "utils/backtest.py"
+    status: "Completed"
+    notes: >
+      Created `tools/model_pipeline.py` to orchestrate the end-to-end training process. The pipeline
+      splits data into train/validation sets, calls `models/evolution.py` to train a new model in a staging area,
+      and then uses a `validate_model` function to compare the new model against the production model on the validation set.
+      Only significantly better models are deployed.
+
+  - phase: 4
+    name: "Integration and Main Autonomous Loop"
+    objective: "To integrate all components into a single, autonomous process."
+    relevant_files:
+      - "run_autonomous.py"
+    status: "Completed"
+    notes: >
+      Created the final entry point `run_autonomous.py`. This script runs a main loop that periodically
+      calls the `DecisionMaker`. If the decision is to retrain, it triggers the `run_training_pipeline` function.
+      This completes the full feedback loop from live trading to monitoring, decision-making, and automated retraining.

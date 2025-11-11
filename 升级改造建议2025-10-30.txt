@@ -1,0 +1,35 @@
+改造和升级建议
+
+完善 StrategyManager 和 MarketRegimeDetector 的集成:
+
+当前状态: MarketRegimeDetector 可以推荐策略，但 StrategyManager 还没有完全利用这一点来实现策略的自动切换。
+建议: 在 run_live.py 的主循环中，每个周期首先调用 MarketRegimeDetector 来分析当前市场状态，然后调用 StrategyManager 的 switch_strategy 方法，将策略切换到 MarketRegimeDetector 推荐的那个。这将使系统能够动态适应市场变化。
+增强 PortfolioManager 的功能:
+
+当前状态: run_live.py 中简单地将多个策略实例化，但 PortfolioManager 在决策时似乎只考虑了单一资产（BTC-USDT）。
+建议:
+多资产交易: 真正实现 PortfolioManager 的设计初衷，在 config 文件中配置多个交易对（如 ['BTC-USDT', 'ETH-USDT']）。
+信号融合: 在 PortfolioManager 中实现更复杂的信号融合逻辑。例如，当多个策略（如LGB和均线）同时对一个资产发出买入信号时，可以给予更高的权重或分配更多的资金。
+资产配置: 实现 PortfolioManager 中的 calculate_target_allocations 方法，例如基于风险平价（Risk Parity）或波动率倒数加权，来动态决定在BTC和ETH等不同资产上分配多少资金。
+统一和清理执行入口:
+
+当前状态: 存在 main.py 和 run_live.py 两个看似都能启动交易的文件，以及一个旧的 trader/executor.py。
+建议:
+将 run_live.py 的代码逻辑移入 main.py，使其成为唯一的实盘/模拟交易入口。
+移除或归档旧的 trader/executor.py，避免混淆。
+run_backtest.py 可以保留，作为专门的回测执行入口。
+完善单元测试和集成测试:
+
+当前状态: tests 目录存在，但似乎是空的。项目的复杂性很高，缺乏测试会使未来的修改变得非常危险。
+建议:
+为每个模块编写单元测试。例如，测试 features/feature_engineering.py 中的特征计算是否正确；测试 strategies 中的策略在给定的数据下是否能产生预期的信号。
+编写集成测试，模拟一次完整的交易流程（数据获取 -> 特征生成 -> 信号生成 -> 风险评估 -> 下单），以确保各模块能协同工作。
+开发一个简单的Web仪表盘 (Dashboard):
+
+当前状态: 监控主要通过日志和 status.json 文件，不够直观。
+建议: 使用Flask或FastAPI等轻量级Web框架，创建一个简单的Web界面。这个界面可以定期请求 EnhancedMonitor 提供的 get_dashboard_data 接口，并以图表和表格的形式展示以下信息：
+当前仓位和账户总值。
+近期的盈亏曲线、胜率、夏普比率等。
+活跃的风险告警。
+系统资源使用情况。
+这些改造将使项目从一个强大的交易“内核”进化为一个更加完整、智能和易于管理的自动化交易平台。

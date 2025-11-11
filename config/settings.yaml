@@ -1,0 +1,204 @@
+# ==============================================================================
+# Exchange Configuration
+# ==============================================================================
+exchange:
+  primary_exchange: 'binance'
+  secondary_exchanges:
+    - 'okx'
+    - 'bybit'
+
+# ==============================================================================
+# OKX API Configuration
+# ==============================================================================
+okx:
+  api_key: "YOUR_API_KEY" # Preserved from current settings.yaml
+  secret_key: "YOUR_SECRET_KEY" # Preserved from current settings.yaml
+  passphrase: "YOUR_PASSPHRASE" # Preserved from current settings.yaml
+  sandbox: True # Preserved from current settings.yaml
+  flag: "0" # New from example, default value
+
+# ==============================================================================
+# General Trading Parameters
+# ==============================================================================
+trading:
+  symbol: "BTC-USDT" # Preserved from current settings.yaml (trader.symbol)
+  interval: "1H" # Preserved from current settings.yaml (trader.interval)
+  strategy: "ml" # New from example, default value
+  feature_pairs:
+    - "ETH-USDT"
+    - "SOL-USDT"
+
+
+# ==============================================================================
+# Position Sizing & Risk Management
+# ==============================================================================
+position_sizing:
+  strategy: "fixed" # From example
+  fixed_quantity: 100 # Mapped from current settings.yaml (trader.trade_amount_quote)
+  risk_per_trade: 0.01 # From example
+
+risk_management:
+  stop_loss_pct: 0.02 # From example
+  take_profit_pct: 0.05 # From example
+
+# ==============================================================================
+# Strategy-Specific Parameters
+# ==============================================================================
+strategy_params:
+  ma_crossover:
+    live_fallback:
+      short_window: 5
+      long_window: 20
+    backtest:
+      short_window: 7
+      long_window: 25
+
+# ==============================================================================
+# Machine Learning Model & Optuna Configuration
+# ==============================================================================
+model:
+  target_column: 'y'
+  optuna:
+    direction: 'maximize'
+    metric_to_optimize: 'sharpe_ratio'
+    n_trials: 100
+  hyperparameters:
+    logreg:
+      C_range: [0.001, 100]
+      buy_th_range: [0.51, 0.7]
+      sell_th_range: [0.3, 0.49]
+      fee_range: [0.0002, 0.001]
+    rf:
+      n_estimators_range: [100, 1000]
+      max_depth_range: [3, 20]
+      min_samples_leaf_range: [1, 10]
+    lgb:
+      n_estimators_range: [100, 1000]
+      num_leaves_range: [20, 150]
+      learning_rate_range: [0.01, 0.3]
+      max_depth_range: [3, 15]
+      min_child_samples_range: [20, 100]
+
+# ==============================================================================
+# Backtesting Configuration
+# ==============================================================================
+backtest:
+  symbols_to_test:
+    - "BTC-USDT"
+    - "ETH-USDT"
+    - "SOL-USDT"
+    - "KDA-USDT"
+    - "CFX-USDT"
+    - "DOT-USDT"
+
+# ==============================================================================
+# Derivatives Data Configuration
+# ==============================================================================
+derivatives_data:
+  fetch_funding_rates: False
+  fetch_open_interest: False
+
+# ==============================================================================
+# On-Chain Data Configuration
+# ==============================================================================
+onchain_data:
+  provider: "dune" # Can be "dune" or "glassnode"
+  enabled: True
+  api_key: "YOUR_DUNE_API_KEY" # Set your Dune API key here or via DUNE_API_KEY environment variable
+  
+  dune:
+    queries_to_fetch:
+      # - name: 'btc_exchange_netflow'
+      #   # query_id: 2222490 # 已禁用 query_id
+      #   sql: |
+      #     -- 最终修复：使用一个真实、有效的 SQL 查询来获取 BTC 交易所净流量
+      #     -- 这个查询统计了已知交易所地址的比特币流入和流出量
+      #     WITH cex_labels AS (
+      #         SELECT address, name
+      #         FROM labels.labels
+      #         WHERE "type" = 'cex'
+      #     )
+      #     SELECT * FROM dune.bitcoin.get_daily_net_flows(
+      #         ARRAY(SELECT address FROM cex_labels)
+      #     );
+
+      - name: 'eth_large_transactions_sql'
+        # 方法2: 直接在配置文件中编写原始 SQL 查询
+        sql: |
+          SELECT
+            block_time,
+            hash,
+            "from",
+            "to",
+            value / 1e18 AS eth_value
+          FROM ethereum.transactions
+          WHERE block_time >= NOW() - INTERVAL '7' DAY
+            AND value / 1e18 >= 1000
+          ORDER BY value DESC
+          LIMIT 100;
+
+  glassnode:
+    api_key: "YOUR_GLASSNODE_API_KEY" # Recommended to set via environment variable 'GLASSNODE_API_KEY'
+    metrics_to_fetch:
+      - path: 'metrics/exchange/net_position_change'
+        name: 'exchange_net_position_change'
+        resolution: '24h'
+      - path: 'metrics/hodlers/net_position_change'
+        name: 'hodler_net_position_change'
+        resolution: '24h'
+
+# ==============================================================================
+# File System Paths
+# ==============================================================================
+paths:
+  model_dir: "models"
+  feature_cache_dir: "data/cache"
+  history_data_dir: "data/history"
+
+# ==============================================================================
+# Risk Monitoring & Alerting Configuration
+# ==============================================================================
+risk_monitoring:
+  daily_loss_threshold: -500.0
+  max_drawdown_threshold: -15.0 # Mapped from current settings.yaml (trader.kpi_thresholds.max_drawdown_pct)
+  max_consecutive_losses: 5
+  max_single_loss_pct: -0.03
+  min_account_balance: 1000.0
+  email:
+    smtp_server: "smtp.gmail.com"
+    smtp_port: 587
+    user: "your_email@gmail.com"
+    password: "your_app_password"
+    recipients:
+      - "admin@yourcompany.com"
+      - "risk@yourcompany.com"
+
+# ==============================================================================
+# Strategy Management Configuration
+# ==============================================================================
+strategy_management:
+  enabled_strategies:
+    - "lgb"
+    - "ma_fast"
+    - "ma_slow"
+  lgb_strategy:
+    model_dir: "models"
+    model_name: "best_model.pkl"
+    metadata_name: "metadata.json"
+  ma_fast_strategy:
+    short_window: 5
+    long_window: 15
+  ma_slow_strategy:
+    short_window: 20
+    long_window: 50
+  strategy_switch:
+    lookback_days: 7
+    performance_threshold: 0.5
+
+# ==============================================================================
+# Legacy Trader Configuration (Preserved from old settings.yaml)
+# ==============================================================================
+trader_legacy:
+  performance_log_path: "logs/trading_cycles.log" # Preserved
+  kpi_thresholds:
+    min_sharpe_ratio: 0.5 # Preserved

@@ -26,7 +26,7 @@ class OKXClient:
         d = mac.digest()
         return base64.b64encode(d)
 
-    def _request(self, method, request_path, params=None, body=None, authenticated=False):
+    def _request(self, method, request_path, params=None, body=None, authenticated=False, max_retries=3, delay=2):
         url = self.base_url + request_path
         if params:
             url += '?' + '&'.join([f'{k}={v}' for k, v in params.items()])
@@ -44,23 +44,39 @@ class OKXClient:
             headers['OK-ACCESS-PASSPHRASE'] = self.passphrase
             headers['Content-Type'] = 'application/json'
 
-        try:
-            if method.upper() == 'GET':
-                response = requests.get(url, headers=headers)
-            elif method.upper() == 'POST':
-                response = requests.post(url, headers=headers, data=json.dumps(body) if body else None)
-            else:
-                raise ValueError("Unsupported HTTP method")
-            
-            response.raise_for_status()
-            return response.json()
+        for attempt in range(max_retries):
+            try:
+                if method.upper() == 'GET':
+                    response = requests.get(url, headers=headers, timeout=10) # Added timeout
+                elif method.upper() == 'POST':
+                    response = requests.post(url, headers=headers, data=json.dumps(body) if body else None, timeout=10) # Added timeout
+                else:
+                    raise ValueError("Unsupported HTTP method")
+                
+                response.raise_for_status() # Raises HTTPError for bad responses (4xx or 5xx)
+                return response.json()
 
-        except requests.exceptions.RequestException as e:
-            print(f"请求失败: {e}")
-            return None
-        except json.JSONDecodeError:
-            print(f"JSON解码失败: {response.text}")
-            return None
+            except requests.exceptions.HTTPError as e:
+                # For HTTP errors, especially client-side ones (4xx), retrying might not help.
+                print(f"HTTP Error: {e.response.status_code} {e.response.text}")
+                # You might want to handle specific codes differently, e.g., not retrying on 400 Bad Request
+                if e.response.status_code < 500:
+                    return e.response.json() # Return error response from server
+                # For server-side errors (5xx), retry.
+
+            except requests.exceptions.RequestException as e:
+                print(f"Request failed on attempt {attempt + 1}/{max_retries}: {e}")
+                if attempt < max_retries - 1:
+                    time.sleep(delay)
+                else:
+                    print("Max retries reached. Request failed.")
+                    return None # Return None after all retries fail
+            
+            except json.JSONDecodeError as e:
+                print(f"JSON decode failed: {e}. Response text: {response.text}")
+                return None # Do not retry on JSON decode error
+
+        return None # Should not be reached if loop completes, but as a fallback
 
     def get_kline(self, symbol="BTC-USDT", interval="1h", limit=100):
         VALID_BARS = {"1m", "3m", "5m", "15m", "30m", "1H", "2H", "4H", "6H", "12H", "1D", "1W", "1M"}

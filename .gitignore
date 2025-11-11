@@ -44,6 +44,7 @@ config.yaml
 *.pem
 *.key
 *.crt
+.env
 
 # OKX 交易项目数据
 data/*.csv

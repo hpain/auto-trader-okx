@@ -1,0 +1,7 @@
+2025-11-08 12:15 总结一下已完成的工作：
+
+创建了 data/onchain.py 文件，并实现了 GlassnodeClient。
+在 config/settings.yaml 中添加了 onchain_data 配置项。
+更新了 research/improved_evolution.py 脚本，使其能够根据配置拉取链上数据。
+更新了 features/feature_engineering.py，以处理这些新数据并生成相应特征。
+接下来，我们将进入计划的第二阶段：集成实时情绪数据。该阶段的目标是用 CryptoPanic 等实时新闻源替代当前静态的 sample_crypto_news.csv 文件。
