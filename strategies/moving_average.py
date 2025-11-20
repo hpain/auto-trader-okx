@@ -103,3 +103,12 @@ class MovingAverageStrategy(BaseStrategy):
             # 返回最后一个信号
             return int(signals_df['signal'].iloc[-1])
         return 0
+
+
+def generate_signal(data: pd.DataFrame) -> int:
+    """
+    Standalone function to generate a signal using default MovingAverageStrategy.
+    This provides backward compatibility for modules expecting a simple function.
+    """
+    strategy = MovingAverageStrategy()
+    return strategy.generate_signal(data)

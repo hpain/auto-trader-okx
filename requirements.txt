@@ -13,6 +13,10 @@ okx-sdk
 matplotlib
 lightgbm
 pytest
+pytest-cov
 python-dotenv
-ccxt
+ccxt>=4.0.0
 dune-client
+statsmodels
+pytest-asyncio
+pytest-mock

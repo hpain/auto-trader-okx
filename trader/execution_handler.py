@@ -15,9 +15,9 @@ class ExecutionHandler:
         """
         self.client = exchange_client
 
-    def execute_trades(self, trade_orders: list, cycle_logger) -> list:
+    async def execute_trades(self, trade_orders: list, cycle_logger) -> list:
         """
-        执行一个交易指令列表，并返回详细的执行报告。
+        异步执行一个交易指令列表，并返回详细的执行报告。
 
         :param trade_orders: 来自PortfolioManager的交易指令列表。
         :param cycle_logger: 用于记录本次循环日志的CycleLogger实例。
@@ -50,24 +50,27 @@ class ExecutionHandler:
                 side = 'buy' if action == 'BUY' else 'sell'
                 order_type = 'market'
 
-                if self.client and hasattr(self.client, 'place_order'):
-                    order_result = self.client.place_order(
+                if self.client and hasattr(self.client, 'create_order'):
+                    # 使用 await 调用异步方法，并修正方法名为 create_order
+                    order_result = await self.client.create_order(
                         symbol=symbol,
+                        order_type=order_type,
                         side=side,
-                        quantity=quantity,
-                        order_type=order_type
+                        amount=quantity
                     )
                     report_item['raw_response'] = order_result
                     
-                    if order_result and order_result.get('code') == '0':
+                    # 假设成功的API调用返回的字典中包含'info'和'status'
+                    if order_result and order_result.get('info', {}).get('sCode') == '0':
                         print(f"    - SUCCESS: Order API call successful.")
                         report_item['status'] = 'SUCCESS'
+                        # 假设市价单完全成交
                         report_item['filled_quantity'] = quantity
                     else:
                         print(f"    - FAILURE: Order placement failed. Response: {order_result}")
                         report_item['status'] = 'FAILURE'
                 else:
-                    report_item['raw_response'] = "Client not configured or method not found."
+                    report_item['raw_response'] = "Client not configured or method 'create_order' not found."
 
             except Exception as e:
                 print(f"    - CRITICAL ERROR: An exception occurred while placing order: {e}")
