@@ -1,40 +1,45 @@
-
 import pytest
-import asyncio
-from unittest.mock import MagicMock, AsyncMock
+from unittest.mock import patch, MagicMock, AsyncMock
 
 from ccxt.base.errors import InsufficientFunds, NetworkError
-
 from exchange.ccxt_exchange import CcxtExchange
 
-# Since we are dealing with async methods, we need to mark our tests with pytest-asyncio
 pytestmark = pytest.mark.asyncio
 
 @pytest.fixture
-def mock_ccxt_exchange_instance():
-    """Fixture to create a mocked CCXT exchange instance."""
-    # Mock the underlying ccxt exchange object
-    mock_exchange = MagicMock()
-    mock_exchange.create_order = AsyncMock()
-    
-    # Create an instance of our CcxtExchange wrapper
-    exchange = CcxtExchange(exchange_id='binance', sandbox=True)
-    # Replace the actual exchange object with our mock
-    exchange.exchange = mock_exchange
-    
-    return exchange
+def mock_exchange_instance():
+    """
+    A more robust fixture that mocks the ccxt library at the module level,
+    allowing CcxtExchange to perform its initialization logic.
+    """
+    # This is the mock for the exchange *instance* (e.g., what binance() returns)
+    mock_exchange_obj = MagicMock()
+    mock_exchange_obj.create_order = AsyncMock()
+    mock_exchange_obj.urls = {'test': 'https://test.binance.com'} # Needed for sandbox mode logic
+    mock_exchange_obj.set_sandbox_mode = MagicMock()
 
-async def test_create_order_sufficient_funds(mock_ccxt_exchange_instance):
+    # This is the mock for the exchange *class* (e.g., ccxt.async_support.binance)
+    mock_exchange_class = MagicMock(return_value=mock_exchange_obj)
+
+    # We patch the 'async_support' module that is imported in our ccxt_exchange.py
+    with patch('exchange.ccxt_exchange.async_support') as mock_async_support:
+        # Configure the mock module to return our mock class
+        # when getattr(async_support, 'binance') is called
+        setattr(mock_async_support, 'binance', mock_exchange_class)
+        
+        # Yield the configured mock object so we can inspect it in tests
+        yield mock_exchange_obj
+
+async def test_create_order_sufficient_funds(mock_exchange_instance):
     """
     Test that create_order returns the order dictionary when the API call is successful.
     """
-    exchange = mock_ccxt_exchange_instance
+    # The fixture has already mocked the backend, so we can just instantiate our class
+    exchange = CcxtExchange(exchange_id='binance', sandbox=True)
     
-    # Configure the mock to return a successful order
     expected_order = {'id': '123', 'symbol': 'BTC/USDT', 'status': 'open'}
-    exchange.exchange.create_order.return_value = expected_order
+    mock_exchange_instance.create_order.return_value = expected_order
     
-    # Call the method
     result = await exchange.create_order(
         symbol='BTC-USDT',
         order_type='limit',
@@ -43,20 +48,17 @@ async def test_create_order_sufficient_funds(mock_ccxt_exchange_instance):
         price=50000
     )
     
-    # Assert the result is what we expect
     assert result == expected_order
-    exchange.exchange.create_order.assert_called_once()
+    mock_exchange_instance.create_order.assert_called_once_with('BTC/USDT', 'limit', 'buy', 1, 50000)
 
-async def test_create_order_insufficient_funds(mock_ccxt_exchange_instance):
+async def test_create_order_insufficient_funds(mock_exchange_instance):
     """
     Test that create_order returns None when ccxt raises InsufficientFunds.
     """
-    exchange = mock_ccxt_exchange_instance
+    exchange = CcxtExchange(exchange_id='binance', sandbox=True)
     
-    # Configure the mock to raise an exception
-    exchange.exchange.create_order.side_effect = InsufficientFunds("Not enough balance")
+    mock_exchange_instance.create_order.side_effect = InsufficientFunds("Not enough balance")
     
-    # Call the method
     result = await exchange.create_order(
         symbol='BTC-USDT',
         order_type='limit',
@@ -65,20 +67,17 @@ async def test_create_order_insufficient_funds(mock_ccxt_exchange_instance):
         price=50000
     )
     
-    # Assert the result is None
     assert result is None
-    exchange.exchange.create_order.assert_called_once()
+    mock_exchange_instance.create_order.assert_called_once()
 
-async def test_create_order_network_error(mock_ccxt_exchange_instance):
+async def test_create_order_network_error(mock_exchange_instance):
     """
     Test that create_order returns None when ccxt raises a NetworkError.
     """
-    exchange = mock_ccxt_exchange_instance
+    exchange = CcxtExchange(exchange_id='binance', sandbox=True)
     
-    # Configure the mock to raise an exception
-    exchange.exchange.create_order.side_effect = NetworkError("Connection timed out")
+    mock_exchange_instance.create_order.side_effect = NetworkError("Connection timed out")
     
-    # Call the method
     result = await exchange.create_order(
         symbol='BTC-USDT',
         order_type='limit',
@@ -87,6 +86,5 @@ async def test_create_order_network_error(mock_ccxt_exchange_instance):
         price=50000
     )
     
-    # Assert the result is None
     assert result is None
-    exchange.exchange.create_order.assert_called_once()
+    mock_exchange_instance.create_order.assert_called_once()
