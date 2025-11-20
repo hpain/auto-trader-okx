@@ -47,7 +47,7 @@ class Exchange(ABC):
         pass
 
     @abstractmethod
-    def create_order(self, symbol: str, order_type: str, side: str, amount: float, price: Optional[float] = None) -> Dict[str, Any]:
+    def create_order(self, symbol: str, order_type: str, side: str, amount: float, price: Optional[float] = None) -> Optional[Dict[str, Any]]:
         """
         Create a new order.
         """
