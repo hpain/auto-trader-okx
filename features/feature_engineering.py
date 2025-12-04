@@ -1,20 +1,18 @@
 # features/feature_engineering.py
 import pandas as pd
+import numpy as np
 import os
 import json
-import numpy as np
+import logging
 import ta
+from ta.volatility import average_true_range
+from ta.momentum import rsi
+from ta.trend import adx
 
-    # Import news processing functions
-from data.news import load_news_from_csv
-from features.sentiment_analysis import process_news_sentiment
-# Import news processing functions
 from data.news import load_news_from_csv, aggregate_daily_sentiment
-# Import the new Bayesian detector
+from utils.helpers import check_data_length, handle_insufficient_data
 from analysis.bayesian_regime_detector import BayesianRegimeDetector
-# Import feature generation parameters from config
 from config.model_config import FEATURE_PARAMS
-# Import sentiment analysis utilities
 from features.sentiment_utils import merge_price_and_sentiment
 
 def check_data_length(df: pd.DataFrame, min_length: int = 200) -> bool:

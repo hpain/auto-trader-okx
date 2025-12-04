@@ -95,7 +95,7 @@ class TestModelConfig(unittest.TestCase):
             'close': np.random.random(100),
             'vol': np.random.random(100)
         }
-    index = pd.to_datetime(pd.date_range(start='2023-01-01', periods=100, freq='h'))
+        index = pd.to_datetime(pd.date_range(start='2023-01-01', periods=100, freq='h'))
         dummy_df = pd.DataFrame(data, index=index)
         
         # 2. 记录初始列名

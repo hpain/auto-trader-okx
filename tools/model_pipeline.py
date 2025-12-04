@@ -15,7 +15,8 @@ from models.evolution import train_evolve
 from utils.backtest import run_backtest
 
 # 配置日志
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+# logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+
 
 def _calculate_sharpe(returns: pd.Series, periods_per_year: int = 365*24) -> float:
     """根据回报序列计算年化夏普比率"""

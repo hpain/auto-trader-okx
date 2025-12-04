@@ -30,87 +30,69 @@ class AggregatedExchange(Exchange):
         
         all_exchange_ids = list(set([primary_exchange_id] + secondary_exchange_ids))
         
-        spot_tasks = []
-        swap_tasks = []
-        for exchange_id in all_exchange_ids:
-            # Create spot instance task
-            spot_tasks.append(ExchangeFactory.create_exchange(
-                exchange_id, market_type='spot', api_key=api_key, api_secret=api_secret, passphrase=passphrase, sandbox=sandbox
-            ))
-            # Create swap instance task
-            swap_tasks.append(ExchangeFactory.create_exchange(
-                exchange_id, market_type='swap', api_key=api_key, api_secret=api_secret, passphrase=passphrase, sandbox=sandbox
-            ))
+        # Create coroutines for all exchange creations
+        spot_creation_tasks = [ExchangeFactory.create_exchange(ex_id, market_type='spot', api_key=None, api_secret=None, passphrase=None, sandbox=sandbox) for ex_id in all_exchange_ids]
+        swap_creation_tasks = [ExchangeFactory.create_exchange(ex_id, market_type='swap', api_key=None, api_secret=None, passphrase=None, sandbox=sandbox) for ex_id in all_exchange_ids]
 
-        # Run all creation tasks concurrently
-        created_spot_exchanges = await asyncio.gather(*spot_tasks, return_exceptions=True)
-        created_swap_exchanges = await asyncio.gather(*swap_tasks, return_exceptions=True)
+        # Await them concurrently
+        spot_exchanges = await asyncio.gather(*spot_creation_tasks)
+        swap_exchanges = await asyncio.gather(*swap_creation_tasks)
+
+        # Asynchronously load markets for all created exchanges
+        all_created_exchanges = spot_exchanges + swap_exchanges
+        load_tasks = [exc.load() for exc in all_created_exchanges if hasattr(exc, 'load')]
+        logger.info(f"Loading markets for {len(load_tasks)} exchange instances...")
+        await asyncio.gather(*load_tasks, return_exceptions=True)
+        logger.info("Market loading complete.")
 
         # Initialize Dune Client
         dune_client = None
         try:
-            dune_client = DuneAnalyticsClient(api_key=dune_api_key)
-            logger.info("Successfully initialized Dune Analytics client.")
+            if dune_api_key:
+                dune_client = DuneAnalyticsClient(api_key=dune_api_key)
+                logger.info("Successfully initialized Dune Analytics client.")
         except Exception as e:
             logger.warning(f"Failed to initialize Dune Analytics client: {e}. On-chain data will be unavailable.")
 
-        # Process results
-        primary_spot_exchange = None
-        all_spot_exchanges = []
-        all_swap_exchanges = []
-
-        for i, exchange_id in enumerate(all_exchange_ids):
-            # Process spot results
-            spot_result = created_spot_exchanges[i]
-            if isinstance(spot_result, Exception):
-                logger.error(f"Failed to initialize SPOT exchange {exchange_id}: {spot_result}")
-            else:
-                all_spot_exchanges.append(spot_result)
-                if exchange_id == primary_exchange_id:
-                    primary_spot_exchange = spot_result
-            
-            # Process swap results
-            swap_result = created_swap_exchanges[i]
-            if isinstance(swap_result, Exception):
-                logger.error(f"Failed to initialize SWAP exchange {exchange_id}: {swap_result}")
-            else:
-                all_swap_exchanges.append(swap_result)
+        primary_spot_exchange = next((ex for ex in spot_exchanges if ex.exchange_id == primary_exchange_id), None)
 
         if not primary_spot_exchange:
             raise ConnectionError(f"Failed to initialize primary SPOT exchange {primary_exchange_id}")
 
-        return cls(primary_spot_exchange, all_spot_exchanges, all_swap_exchanges, dune_client)
+        return cls(primary_spot_exchange, spot_exchanges, swap_exchanges, dune_client)
+
+    async def close(self):
+        """
+        Closes all underlying exchange connections.
+        """
+        logger.info("Closing all exchange connections...")
+        all_exchanges = list(set(self.all_spot_exchanges + self.all_swap_exchanges))
+        close_tasks = [exc.close() for exc in all_exchanges if hasattr(exc, 'close')]
+        if close_tasks:
+            await asyncio.gather(*close_tasks, return_exceptions=True)
+        logger.info("All exchange connections have been closed.")
 
     async def fetch_candles_async(self, exchange: Exchange, symbol: str, timeframe: str, since: Optional[int] = None, limit: Optional[int] = None) -> Optional[tuple[str, pd.DataFrame]]:
         """Asynchronously fetch candles from a single exchange."""
         exchange_name = exchange.__class__.__name__
         try:
-            df = await asyncio.to_thread(exchange.fetch_candles, symbol, timeframe, since, limit)
+            # The underlying fetch_candles is now async
+            df = await exchange.fetch_candles(symbol, timeframe, since, limit)
             logger.info(f"OK: Successfully fetched {len(df)} candles from {exchange_name} for {symbol}")
             return exchange_name, df
         except Exception as e:
             logger.warning(f"FAIL: Failed to fetch candles from {exchange_name}: {e}")
             return exchange_name, None
 
-    def fetch_candles(self, symbol: str, timeframe: str, since: Optional[int] = None, limit: Optional[int] = 100) -> pd.DataFrame:
+    async def fetch_candles(self, symbol: str, timeframe: str, since: Optional[int] = None, limit: Optional[int] = 100) -> pd.DataFrame:
         """
-        Fetch recent candle data by aggregating results from all available SPOT exchanges.
+        Asynchronously fetch recent candle data by aggregating results from all available SPOT exchanges.
         """
         exchange_names = [exc.__class__.__name__ for exc in self.all_spot_exchanges]
         logger.info(f"Querying {len(self.all_spot_exchanges)} SPOT sources for recent candles: {exchange_names}")
         
-        async def _fetch_all():
-            tasks = [self.fetch_candles_async(exc, symbol, timeframe, since, limit) for exc in self.all_spot_exchanges]
-            results = await asyncio.gather(*tasks)
-            return results
-
-        try:
-            loop = asyncio.get_running_loop()
-        except RuntimeError:
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-
-        results = loop.run_until_complete(_fetch_all())
+        tasks = [self.fetch_candles_async(exc, symbol, timeframe, since, limit) for exc in self.all_spot_exchanges]
+        results = await asyncio.gather(*tasks)
         
         all_dfs = []
         successful_sources = []
@@ -286,30 +268,92 @@ class AggregatedExchange(Exchange):
     # The following methods delegate to the primary SPOT exchange for now.
     # ==========================================================================
 
-    def get_balance(self, currency: str) -> float:
-        return self.primary_spot_exchange.get_balance(currency)
+    async def get_balance(self, currency: str) -> float:
+        return await self.primary_spot_exchange.get_balance(currency)
 
-    def create_order(self, symbol: str, order_type: str, side: str, amount: float, price: Optional[float] = None) -> Dict[str, Any]:
-        return self.primary_spot_exchange.create_order(symbol, order_type, side, amount, price)
+    async def create_order(self, symbol: str, order_type: str, side: str, amount: float, price: Optional[float] = None) -> Dict[str, Any]:
+        return await self.primary_spot_exchange.create_order(symbol, order_type, side, amount, price)
 
-    def get_order(self, order_id: str, symbol: str) -> Dict[str, Any]:
-        return self.primary_spot_exchange.get_order(order_id, symbol)
+    async def get_order(self, order_id: str, symbol: str) -> Dict[str, Any]:
+        return await self.primary_spot_exchange.get_order(order_id, symbol)
 
-    def cancel_order(self, order_id: str, symbol: str) -> Dict[str, Any]:
-        return self.primary_spot_exchange.cancel_order(order_id, symbol)
+    async def cancel_order(self, order_id: str, symbol: str) -> Dict[str, Any]:
+        return await self.primary_spot_exchange.cancel_order(order_id, symbol)
 
-    def get_current_price(self, symbol: str) -> float:
-        prices = []
-        for exchange in self.all_spot_exchanges:
+    async def get_current_price(self, symbol: str) -> float:
+        async def _fetch_one_price(exchange):
             try:
-                prices.append(exchange.get_current_price(symbol))
+                # Assuming the underlying exchange method is now async
+                return await exchange.get_current_price(symbol)
             except Exception as e:
                 logger.warning(f"Could not fetch price from {exchange.__class__.__name__}: {e}")
-        
-        if not prices:
+                return None
+
+        tasks = [_fetch_one_price(exc) for exc in self.all_spot_exchanges]
+        prices = await asyncio.gather(*tasks)
+        valid_prices = [p for p in prices if p is not None]
+
+        if not valid_prices:
             raise ConnectionError("Failed to fetch current price from all exchanges.")
             
-        return sum(prices) / len(prices)
+        return sum(valid_prices) / len(valid_prices)
 
-    def place_oco_order(self, symbol: str, side: str, amount: float, take_profit_price: float, stop_loss_price: float) -> Dict[str, Any]:
-        return self.primary_spot_exchange.place_oco_order(symbol, side, amount, take_profit_price, stop_loss_price)
+    async def place_oco_order(self, symbol: str, side: str, amount: float, take_profit_price: float, stop_loss_price: float) -> Dict[str, Any]:
+        # Smart Routing: Check if primary is healthy
+        if self.is_primary_healthy():
+            return await self.primary_spot_exchange.place_oco_order(symbol, side, amount, take_profit_price, stop_loss_price)
+        else:
+            logger.warning("Primary exchange is unhealthy! Attempting to route OCO order to secondary exchange...")
+            # Try to find a secondary exchange that supports OCO
+            for exchange in self.all_spot_exchanges:
+                if exchange.exchange_id == self.primary_spot_exchange.exchange_id:
+                    continue
+                try:
+                    return await exchange.place_oco_order(symbol, side, amount, take_profit_price, stop_loss_price)
+                except Exception as e:
+                    logger.warning(f"Failed to route OCO to {exchange.exchange_id}: {e}")
+            
+            raise ConnectionError("Primary exchange unhealthy and no suitable secondary exchange found for OCO order.")
+
+    def is_primary_healthy(self) -> bool:
+        """Checks if the primary exchange is healthy (circuit breaker not tripped)."""
+        if hasattr(self.primary_spot_exchange, 'check_circuit_breaker'):
+            return self.primary_spot_exchange.check_circuit_breaker()
+        return True
+
+    async def hedge_position(self, symbol: str, quantity: float, side: str) -> Dict[str, Any]:
+        """
+        Places a hedging order on a secondary exchange.
+        This is typically called when the primary exchange fails or is unstable.
+        
+        Args:
+            symbol: The symbol to hedge (e.g., 'BTC/USDT')
+            quantity: The quantity to hedge
+            side: The side of the ORIGINAL position (hedge will be opposite)
+        """
+        hedge_side = 'sell' if side == 'buy' else 'buy'
+        logger.warning(f"INITIATING HEDGE: Attempting to {hedge_side} {quantity} {symbol} on secondary exchanges.")
+        
+        for exchange in self.all_spot_exchanges:
+            # Skip primary exchange
+            if exchange.exchange_id == self.primary_spot_exchange.exchange_id:
+                continue
+                
+            try:
+                # Check if secondary is healthy (optional but good practice)
+                if hasattr(exchange, 'check_circuit_breaker') and not exchange.check_circuit_breaker():
+                    logger.warning(f"Skipping secondary exchange {exchange.exchange_id} (Circuit Breaker Active).")
+                    continue
+
+                logger.info(f"Placing hedge order on {exchange.exchange_id}...")
+                # Market order for immediate execution
+                result = await exchange.create_order(symbol, 'market', hedge_side, quantity)
+                if result:
+                    logger.info(f"HEDGE SUCCESSFUL: Executed on {exchange.exchange_id}. Result: {result}")
+                    return result
+            except Exception as e:
+                logger.error(f"Hedge attempt failed on {exchange.exchange_id}: {e}")
+        
+        logger.critical("HEDGE FAILED: Could not execute hedge order on ANY secondary exchange!")
+        return None
+

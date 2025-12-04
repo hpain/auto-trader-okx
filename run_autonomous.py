@@ -1,15 +1,24 @@
+import sys
+print("DEBUG: Script started", file=sys.stderr)
 import time
 import logging
 import os
 import json
+import asyncio
 from datetime import datetime
 import pandas as pd
 import numpy as np
 import multiprocessing
+from typing import Optional
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
 
 # --- 导入我们需要的模块 ---
 from config import config
-from exchange.okx_exchange import OKXExchange
+# from exchange.okx_exchange import OKXExchange # 移除旧的同步实现
+from exchange.factory import ExchangeFactory # 使用工厂类
 from strategies.lgb_strategy import LGBStrategy
 from strategies.strategy_manager import StrategyManager
 from analysis.market_regime_detection import detect_regime_change
@@ -27,8 +36,8 @@ from utils.system_monitor import get_system_monitor
 
 class AutonomousTrader:
     def __init__(self):
-        # ... (之前的 __init__ 代码保持不变) ...
         self.logger = logging.getLogger(__name__)
+        self.config = config
         self.trader_config = config.get('trader', {})
         self.okx_config = config.get('okx', {})
         self.strategy_config = config.get('strategy', {})
@@ -36,31 +45,35 @@ class AutonomousTrader:
         self.training_lock_path = os.path.join(config.get('paths', {}).get('model_dir', 'models'), 'training.lock')
         self.training_state_path = os.path.join(config.get('paths', {}).get('model_dir', 'models'), 'training_state.json')
 
-        self.exchange = OKXExchange(
-            api_key=self.okx_config.get('api_key'),
-            api_secret=self.okx_config.get('secret_key'),
-            passphrase=self.okx_config.get('passphrase'),
-            sandbox=self.okx_config.get('sandbox', True)
-        )
-        self.logger.info("OKX Exchange Initialized.")
+        print("DEBUG: Starting AutonomousTrader initialization...")
+        # 交易所初始化延迟到 initialize_async 方法中
+        self.exchange = None
+
         # Initialize StrategyManager for multiple strategy support
         try:
+            print("DEBUG: Initializing StrategyManager...")
             # 从配置中获取策略管理配置
             sm_config = config.get('strategy_management', {})
             self.strategy_manager = StrategyManager(config=sm_config)
             self.strategy = self.strategy_manager.strategies.get('lgb')
             self.logger.info("StrategyManager Initialized with multiple strategies.")
         except Exception as e:
+            print(f"DEBUG: StrategyManager initialization failed: {e}")
             self.logger.error(f"Failed to initialize StrategyManager: {e}. Falling back to single LGB strategy.", exc_info=True)
             self.strategy = LGBStrategy(
                 strategy_name="LGBStrategy_Autonomous",
                 config=self.strategy_config
             )
         try:
+            print("DEBUG: Initializing PerformanceMonitor...")
             log_path = self.trader_config.get('performance_log_path', 'logs/trading_cycles.log')
             self.performance_monitor = PerformanceMonitor(log_file_path=log_path)
             self.logger.info("Performance Monitor Initialized.")
         except FileNotFoundError:
+            print("DEBUG: PerformanceMonitor initialization failed (FileNotFound).")
+            self.logger.warning(f"Performance log file not found. Monitor will not work until logs are generated.")
+            self.performance_monitor = None
+
             self.logger.warning(f"Performance log file not found. Monitor will not work until logs are generated.")
             self.performance_monitor = None
         
@@ -172,6 +185,7 @@ class AutonomousTrader:
         
         self.logger.info("Autonomous Trader Initialized Successfully.")
 
+<<<<<<< HEAD
     def sense(self):
         # ... (更新后的 sense 代码，支持多资产) ...
         self.logger.info("--- Stage: SENSE ---")
@@ -232,92 +246,58 @@ class AutonomousTrader:
         # 确定要交易的资产列表
         if hasattr(self, 'portfolio_manager') and self.portfolio_manager:
             symbols = self.config.get('multi_asset', {}).get('symbols', [self.trader_config.get('symbol', 'BTC-USDT')])
+=======
+    async def initialize_async(self):
+        """异步初始化交易所连接"""
+        print("DEBUG: Entering initialize_async()...")
+        # 优先使用环境变量 (Docker兼容)，否则使用配置文件
+        api_key = os.environ.get('OKX_API_KEY') or self.okx_config.get('api_key')
+        secret_key = os.environ.get('OKX_SECRET_KEY') or self.okx_config.get('secret_key')
+        passphrase = os.environ.get('OKX_PASSPHRASE') or self.okx_config.get('passphrase')
+        # 环境变量 OKX_FLAG=1 为实盘，0 为模拟盘
+        env_flag = os.environ.get('OKX_FLAG')
+        if env_flag is not None:
+            sandbox = str(env_flag) != "1"
+>>>>>>> c1be3869e66578d612657e0760fc53154ad191ea
         else:
-            symbols = [self.trader_config.get('symbol', 'BTC-USDT')]
-        
-        # 获取市场数据
-        all_market_data = {}
-        interval = self.trader_config.get('interval', '1H')
-        
-        for symbol in symbols:
-            self.logger.info(f"Fetching latest market data for {symbol}...")
-            try:
-                market_data = self.exchange.fetch_candles(symbol=symbol, timeframe=interval, limit=100)
-                if market_data.empty:
-                    self.logger.warning(f"Market data is empty for {symbol}. Skipping.")
-                    continue
-                market_data['timestamp'] = pd.to_datetime(market_data['timestamp'], unit='ms')
-                market_data.set_index('timestamp', inplace=True)
-                all_market_data[symbol] = market_data
-                self.logger.info(f"Successfully fetched {len(market_data)} candles for {symbol}.")
-            except Exception as e:
-                self.logger.error(f"Failed to fetch market data for {symbol}: {e}", exc_info=True)
-                continue
-        
-        if not all_market_data:
-            self.logger.warning("No valid market data fetched. Skipping cycle.")
-            return None, None, None
-        
-        # 为每个资产生成特征
-        all_featured_data = {}
-        for symbol, market_data in all_market_data.items():
-            self.logger.info(f"Generating features for {symbol}...")
-            try:
-                featured_data = generate_features(market_data.copy())
-                all_featured_data[symbol] = featured_data
-                self.logger.info(f"Feature generation for {symbol} complete. DataFrame shape: {featured_data.shape}")
-            except Exception as e:
-                self.logger.error(f"Failed to generate features for {symbol}: {e}", exc_info=True)
-                continue
-        
-        # 使用主要资产的数据进行市场制度检测和性能计算
-        primary_symbol = symbols[0]  # 主要资产为列表第一个
-        primary_featured_data = all_featured_data.get(primary_symbol)
-        if primary_featured_data is None:
-            self.logger.error(f"Failed to get featured data for primary symbol {primary_symbol}")
-            return None, None, None
-            
-        self.logger.info("Detecting market regime...")
-        regime_info = detect_regime_change(primary_featured_data)
-        self.logger.info(f"Analysis regime detection result: {regime_info.get('reason')}")
-        
-        # 使用我们自己的市场制度检测器
-        if self.market_regime_detector:
-            try:
-                market_regime = self.market_regime_detector.detect_regime(primary_featured_data)
-                self.logger.info(f"Market regime: {market_regime.get('regime', 'unknown')} - {market_regime.get('description', '')}")
-                
-                # 如果策略管理器存在，根据市场制度推荐策略
-                if hasattr(self, 'strategy_manager') and self.strategy_manager:
-                    recommended_strategy, reason = self.market_regime_detector.recommend_strategy(market_regime)
-                    self.logger.info(f"Strategy recommendation: {recommended_strategy} - {reason}")
-                    
-                    # 如果推荐的策略与当前不同，可以考虑切换（这里暂时只记录，不自动切换）
-                    current_strategy = self.strategy_manager.get_active_strategy_name()
-                    if current_strategy and recommended_strategy != current_strategy:
-                        self.logger.info(f"Different strategy recommended ({recommended_strategy}) vs current ({current_strategy})")
-                        
-            except Exception as e:
-                self.logger.error(f"Error in market regime detection: {e}", exc_info=True)
-                market_regime = {'regime': 'error', 'description': 'Error in regime detection'}
-        else:
-            market_regime = {'regime': 'unknown', 'description': 'Regime detector not available'}
-        
-        self.logger.info("Calculating performance KPIs...")
-        if self.performance_monitor:
-            performance_kpis = self.performance_monitor.calculate_kpis()
-            if performance_kpis.get('status') == 'SUCCESS':
-                self.logger.info(f"Latest Sharpe Ratio: {performance_kpis.get('sharpe_ratio_annualized_30_periods', 'N/A')}")
-        else:
-            performance_kpis = None
-            self.logger.info("Performance monitor not available.")
-        
-        return all_featured_data, regime_info, performance_kpis
+            sandbox = self.okx_config.get('sandbox', True)
 
-    def decide_and_act(self, all_featured_data, regime_info):
-        # ... (更新后的多资产 decide_and_act 代码) ...
+        # 检查是否启用 Mock 模式
+        mock_mode = os.environ.get('MOCK_MODE', '0') == '1'
+        if not (api_key and secret_key and passphrase) and not mock_mode:
+            self.logger.warning("Missing API credentials. Switching to MOCK MODE.")
+            mock_mode = True
+
+        if mock_mode:
+            self.logger.warning("!!! RUNNING IN MOCK MODE - NO REAL TRADES WILL BE EXECUTED !!!")
+
+        print(f"DEBUG: Creating exchange (mock={mock_mode})...")
+        # 使用工厂类创建异步交易所实例
+        self.exchange = await ExchangeFactory.create_exchange(
+            'okx',
+            market_type='swap', # 假设主要交易永续合约，根据需要调整
+            api_key=api_key,
+            api_secret=secret_key,
+            passphrase=passphrase,
+            sandbox=sandbox,
+            mock=mock_mode
+        )
+        print("DEBUG: Exchange created.")
+        # 加载市场信息
+        if hasattr(self.exchange, 'load'):
+            print("DEBUG: Loading exchange markets...")
+            await self.exchange.load()
+            print("DEBUG: Exchange markets loaded.")
+            
+        self.logger.info("Async Exchange Initialized.")
+
+    async def decide_and_act(self, all_featured_data, regime_info):
+        """
+        决策与执行阶段：根据感知到的数据生成信号并执行交易。
+        """
         self.logger.info("--- Stage: DECIDE & ACT ---")
         
+<<<<<<< HEAD
         # ========== BUG FIX 1: 强制执行每日止损 ==========
         if hasattr(self, 'enhanced_monitor') and self.enhanced_monitor:
             try:
@@ -405,71 +385,76 @@ class AutonomousTrader:
         else:
             self.news_position_multiplier = 1.0
         # ========== END 新增 ==========
+=======
+        if all_featured_data is None:
+            self.logger.warning("No data available for decision making.")
+            return
+
+        # 获取主要交易对
+        primary_symbol = self.trader_config.get('symbol', 'BTC-USDT')
+>>>>>>> c1be3869e66578d612657e0760fc53154ad191ea
         
         # 确定要交易的资产列表
         if hasattr(self, 'portfolio_manager') and self.portfolio_manager:
-            symbols = self.config.get('multi_asset', {}).get('symbols', [self.trader_config.get('symbol', 'BTC-USDT')])
+            symbols = self.config.get('multi_asset', {}).get('symbols', [primary_symbol])
         else:
-            symbols = [self.trader_config.get('symbol', 'BTC-USDT')]
-        
-        # 为每个资产生成交易信号
-        all_signals = {}
-        primary_symbol = symbols[0]  # 使用第一个资产作为主要资产决定交易信号
-        primary_featured_data = all_featured_data.get(primary_symbol)
-        
-        # 生成主要资产的信号
-        if hasattr(self, 'strategy_manager') and self.strategy_manager:
-            # 检查是否需要切换策略
-            if self.strategy_manager.should_switch_strategy(lookback_days=7):
-                best_strategy = self.strategy_manager.get_best_performing_strategy(lookback_days=7)
-                if best_strategy:
-                    self.strategy_manager.switch_strategy(best_strategy)
-                    self.logger.info(f"Switched to strategy: {best_strategy}")
+            symbols = [primary_symbol]
             
-            # 使用当前策略生成主要资产的信号
-            active_strategy_name = self.strategy_manager.get_active_strategy_name()
-            signals_df = self.strategy_manager.generate_signals(primary_featured_data, active_strategy_name)
-            self.logger.info(f"Generated signals for {primary_symbol} using strategy: {active_strategy_name}")
-        else:
-            # 后备策略
-            signals_df = self.strategy.generate_signals(primary_featured_data)
-            self.logger.info(f"Generated signals for {primary_symbol} using fallback LGB strategy")
+        all_signals = {}
+        main_signal = 0
         
-        # 将主要资产的信号用作主要决策信号
-        main_signal = signals_df['signal'].iloc[-1]
-        self.logger.info(f"Main signal from {primary_symbol}: {main_signal}")
-        
-        # 如果启用模型可解释性，生成预测解释
-        if hasattr(self, 'model_interpretability') and self.model_interpretability:
+        # 为主要资产生成信号（兼容旧逻辑）
+        if primary_symbol in all_featured_data:
+            primary_featured_data = all_featured_data[primary_symbol]
+            
+            # 使用策略生成信号
             try:
-                # 获取模型路径
-                model_dir = self.config.get('paths', {}).get('model_dir', 'models')
-                model_path = os.path.join(model_dir, 'best_model.pkl')
+                # 确保数据包含所需的特征
+                if primary_featured_data.empty:
+                    self.logger.warning(f"Featured data for {primary_symbol} is empty. Skipping strategy execution.")
+                    return
+
+                # 准备预测数据 (取最后一行)
+                latest_data = primary_featured_data.iloc[[-1]].copy()
                 
-                if os.path.exists(model_path):
-                    interpretation = self.model_interpretability.integrate_with_trading_system(
-                        model_path=model_path,
-                        X_current=primary_featured_data.tail(1),  # 使用最新的数据点
-                        model_type="lightgbm"
-                    )
+                # 生成信号
+                main_signal = self.strategy.generate_signal(latest_data)
+                self.logger.info(f"Strategy generated signal for {primary_symbol}: {main_signal}")
+                
+                # 模型可解释性分析
+                try:
+                    # 获取模型路径
+                    model_dir = self.config.get('paths', {}).get('model_dir', 'models')
+                    model_path = os.path.join(model_dir, 'best_model.pkl')
                     
-                    if interpretation:
-                        self.logger.info(f"Model interpretation completed:")
-                        self.logger.info(f"  Most positive contributor: {interpretation['prediction_explanation']['most_positive_contributor']}")
-                        self.logger.info(f"  Most negative contributor: {interpretation['prediction_explanation']['most_negative_contributor']}")
+                    if os.path.exists(model_path):
+                        interpretation = self.model_interpretability.integrate_with_trading_system(
+                            model_path=model_path,
+                            X_current=primary_featured_data.tail(1),  # 使用最新的数据点
+                            model_type="lightgbm"
+                        )
                         
-                        # 可以将解释信息保存到日志中供后续分析
-                        interpretation_log_path = 'logs/model_interpretation.log'
-                        os.makedirs(os.path.dirname(interpretation_log_path), exist_ok=True)
-                        with open(interpretation_log_path, 'a') as f:
-                            f.write(json.dumps({
-                                'timestamp': interpretation['timestamp'],
-                                'top_contributions': interpretation['top_feature_contributions'][:5]  # 只记录前5个贡献
-                            }) + '\n')
-                else:
-                    self.logger.warning("Model file not found for interpretability analysis.")
+                        if interpretation:
+                            self.logger.info(f"Model interpretation completed:")
+                            self.logger.info(f"  Most positive contributor: {interpretation['prediction_explanation']['most_positive_contributor']}")
+                            self.logger.info(f"  Most negative contributor: {interpretation['prediction_explanation']['most_negative_contributor']}")
+                            
+                            # 可以将解释信息保存到日志中供后续分析
+                            interpretation_log_path = 'logs/model_interpretation.log'
+                            os.makedirs(os.path.dirname(interpretation_log_path), exist_ok=True)
+                            with open(interpretation_log_path, 'a') as f:
+                                f.write(json.dumps({
+                                    'timestamp': interpretation['timestamp'],
+                                    'top_feature_contributions': interpretation['top_feature_contributions'][:5]  # 只记录前5个贡献
+                                }) + '\n')
+                    else:
+                        self.logger.warning("Model file not found for interpretability analysis.")
+                except Exception as e:
+                    self.logger.error(f"Error in model interpretability: {e}", exc_info=True)
+
             except Exception as e:
-                self.logger.error(f"Error in model interpretability: {e}", exc_info=True)
+                self.logger.error(f"Error in strategy execution: {e}", exc_info=True)
+                return
         
         # 如果有投资组合管理器，执行投资组合级别的决策
         if hasattr(self, 'portfolio_manager') and self.portfolio_manager:
@@ -487,19 +472,19 @@ class AutonomousTrader:
                 current_prices = {}
                 for symbol in symbols:
                     try:
-                        current_prices[symbol] = self.exchange.get_current_price(symbol)
+                        current_prices[symbol] = await self.exchange.get_current_price(symbol)
                     except Exception as e:
                         self.logger.error(f"Failed to get current price for {symbol}: {e}")
                 
                 # 计算再平衡订单
                 rebalance_orders = self.portfolio_manager.calculate_rebalance_orders(
                     current_prices, 
-                    self._get_total_portfolio_value()
+                    await self._get_total_portfolio_value()
                 )
                 
                 # 执行再平衡订单
                 for order in rebalance_orders:
-                    self._execute_single_order(order['symbol'], order['side'], order['quantity'], 
+                    await self._execute_single_order(order['symbol'], order['side'], order['quantity'], 
                                              current_prices[order['symbol']])
                 
                 # 更新再平衡时间
@@ -525,8 +510,8 @@ class AutonomousTrader:
             # 获取当前持仓
             base_currency, quote_currency = symbol.split('-')
             try:
-                base_balance = self.exchange.get_balance(currency=base_currency)
-                quote_balance = self.exchange.get_balance(currency=quote_currency)
+                base_balance = await self.exchange.get_balance(currency=base_currency)
+                quote_balance = await self.exchange.get_balance(currency=quote_currency)
                 self.logger.info(f"Current balance for {symbol}: {base_balance:.4f} {base_currency}, {quote_balance:.2f} {quote_currency}")
             except Exception as e:
                 self.logger.error(f"Failed to get balance for {symbol}: {e}", exc_info=True)
@@ -541,6 +526,7 @@ class AutonomousTrader:
 
             trade_amount_quote = self.trader_config.get('trade_amount_quote', 100)
             
+<<<<<<< HEAD
             # ========== BUG FIX 3: 使用价值而非数量判断仓位 ==========
             position_value = base_balance * current_price
             min_position_value = 10  # 最小持仓价值 $10
@@ -548,10 +534,33 @@ class AutonomousTrader:
             
             if signal == 1 and position_value < min_position_value:  # 修复: 使用价值判断
                 self.logger.info(f"BUY signal for {symbol} and no significant position held (value: ${position_value:.2f}). Executing BUY order.")
+=======
+            # --- 风险管理：计算止损和止盈 ---
+            # 尝试获取 ATR (假设在特征工程中已计算 'ATR_14')
+            atr = None
+            if 'ATR_14' in all_featured_data[symbol].columns:
+                atr = all_featured_data[symbol]['ATR_14'].iloc[-1]
+            
+            # 初始化 RiskManager (如果尚未初始化，这里只是为了使用 calculate_sl_tp)
+            # 注意：理想情况下 RiskManager 应该在 __init__ 中初始化并作为成员变量
+            if not hasattr(self, 'risk_manager'):
+                 from trader.risk_manager import RiskManager
+                 self.risk_manager = RiskManager(
+                     balance=quote_balance, # 暂用 quote balance
+                     config=self.config
+                 )
+
+            if signal == 1 and base_balance < 0.001:
+                self.logger.info(f"BUY signal for {symbol} and no significant position held. Executing BUY order.")
+                
+                # 预期价格（对于市价单，我们使用当前价格作为参考）
+                expected_buy_price = current_price
+>>>>>>> c1be3869e66578d612657e0760fc53154ad191ea
                 
                 try:
                     quantity = trade_amount_quote / current_price
                     
+<<<<<<< HEAD
                     # ========== BUG FIX 2: 改用限价单 ==========
                     # 计算限价 (允许 0.2% 滑点)
                     limit_price = current_price * 1.002
@@ -618,6 +627,45 @@ class AutonomousTrader:
                     
                     # 记录订单到状态管理器
                     if order_result and order_result.get('code') == '0' and order_result.get('data'):
+=======
+                    # 计算止损止盈
+                    stop_loss_price, take_profit_price = self.risk_manager.calculate_sl_tp(
+                        entry_price=current_price,
+                        side='buy',
+                        volatility=atr
+                    )
+                    
+                    self.logger.info(f"Preparing OCO Buy Order: Price={current_price}, SL={stop_loss_price}, TP={take_profit_price}")
+
+                    # 使用 OCO 订单代替普通市价单
+                    # 注意：place_oco_order 需要在 exchange 类中实现
+                    if hasattr(self.exchange, 'place_oco_order'):
+                        order_result = await self.exchange.place_oco_order(
+                            symbol=symbol,
+                            side='buy',
+                            amount=quantity,
+                            take_profit_price=take_profit_price,
+                            stop_loss_price=stop_loss_price
+                        )
+                    else:
+                        self.logger.warning("Exchange does not support OCO orders. Falling back to simple market order (RISKY!).")
+                        order_result = await self.exchange.create_order(
+                            symbol=symbol,
+                            order_type='market',
+                            side='buy',
+                            amount=quantity
+                        )
+
+                    self.logger.info(f"BUY order for {symbol} executed. Result: {order_result}")
+                    
+                    # 记录订单到状态管理器
+                    # 注意：ccxt 返回的结构可能与 okx_exchange 不同，这里做简单适配
+                    # ccxt 通常返回 'id' 作为订单ID
+                    if order_result and 'id' in order_result:
+                        order_id = order_result['id']
+                        executed_buy_price = current_price  # 对于市价单，实际成交价通常是执行时的价格
+                        
+>>>>>>> c1be3869e66578d612657e0760fc53154ad191ea
                         # 检查滑点
                         if hasattr(self, 'slippage_monitor') and self.slippage_monitor:
                             slippage_result = self.slippage_monitor.monitor_trade_execution(
@@ -632,15 +680,6 @@ class AutonomousTrader:
                                 self.logger.warning(f"Excessive slippage in BUY order for {symbol}: {slippage_result['warning']}")
                             elif not slippage_result['liquidity_ok']:
                                 self.logger.warning(f"Liquidity concern in BUY order for {symbol}: {slippage_result['warning']}")
-                        
-                        order_data = {
-                            'order_id': order_id,
-                            'symbol': symbol,
-                            'side': 'buy',
-                            'quantity': quantity,
-                            'price': executed_buy_price,
-                            'status': 'filled'  # 市场订单通常立即成交
-                        }
                         
                         # 使用StateManager的集成TradeTracker记录交易进入
                         self.state_manager.trade_tracker.record_trade_entry(
@@ -664,6 +703,7 @@ class AutonomousTrader:
                 self.logger.info(f"SELL signal for {symbol} and position held (value: ${position_value:.2f}). Executing SELL order.")
                 
                 try:
+<<<<<<< HEAD
                     # ========== BUG FIX 2: 改用限价单 ==========
                     # 计算限价 (允许 0.2% 滑点,卖出时价格略低)
                     limit_price = current_price * 0.998
@@ -672,6 +712,11 @@ class AutonomousTrader:
                     self.logger.info(f"Placing LIMIT SELL order: {base_balance:.6f} {base_currency} @ ${limit_price:.2f}")
                     
                     order_result = self.exchange.create_order(
+=======
+                    # 卖出时，通常是平仓，所以不需要 OCO (除非是做空)
+                    # 这里假设是平仓
+                    order_result = await self.exchange.create_order(
+>>>>>>> c1be3869e66578d612657e0760fc53154ad191ea
                         symbol=symbol,
                         order_type='limit',  # 改为限价单
                         side='sell',
@@ -729,7 +774,14 @@ class AutonomousTrader:
                     self.logger.info(f"SELL order for {symbol} executed. Result: {order_result}")
                     
                     # 记录订单到状态管理器，并完成交易记录
+<<<<<<< HEAD
                     if order_result and order_result.get('code') == '0' and order_result.get('data'):
+=======
+                    if order_result and 'id' in order_result:
+                        order_id = order_result['id']
+                        executed_sell_price = current_price  # 对于市价单，实际成交价通常是执行时的价格
+                        
+>>>>>>> c1be3869e66578d612657e0760fc53154ad191ea
                         # 检查滑点
                         if hasattr(self, 'slippage_monitor') and self.slippage_monitor:
                             slippage_result = self.slippage_monitor.monitor_trade_execution(
@@ -744,15 +796,6 @@ class AutonomousTrader:
                                 self.logger.warning(f"Excessive slippage in SELL order for {symbol}: {slippage_result['warning']}")
                             elif not slippage_result['liquidity_ok']:
                                 self.logger.warning(f"Liquidity concern in SELL order for {symbol}: {slippage_result['warning']}")
-                        
-                        order_data = {
-                            'order_id': order_id,
-                            'symbol': symbol,
-                            'side': 'sell',
-                            'quantity': base_balance,
-                            'price': executed_sell_price,
-                            'status': 'filled'
-                        }
                         
                         # 使用StateManager的集成TradeTracker记录交易退出
                         self.state_manager.trade_tracker.record_trade_exit(
@@ -772,7 +815,7 @@ class AutonomousTrader:
             else:
                 self.logger.info(f"No action needed for {symbol} based on current signal ({signal}) and position ({base_balance}).")
 
-    def _execute_single_order(self, symbol: str, side: str, quantity: float, price: float):
+    async def _execute_single_order(self, symbol: str, side: str, quantity: float, price: float):
         """
         执行单个订单（用于再平衡）
         """
@@ -786,14 +829,14 @@ class AutonomousTrader:
         expected_price = price
         try:
             if side == 'buy':
-                order_result = self.exchange.create_order(
+                order_result = await self.exchange.create_order(
                     symbol=symbol,
                     order_type='market',
                     side='buy',
                     amount=quantity
                 )
             elif side == 'sell':
-                order_result = self.exchange.create_order(
+                order_result = await self.exchange.create_order(
                     symbol=symbol,
                     order_type='market',
                     side='sell',
@@ -806,8 +849,8 @@ class AutonomousTrader:
             self.logger.info(f"{side.upper()} order for {symbol} executed. Result: {order_result}")
             
             # 记录订单到状态管理器
-            if order_result and order_result.get('code') == '0' and order_result.get('data'):
-                order_id = order_result['data'][0]['ordId']
+            if order_result and 'id' in order_result:
+                order_id = order_result['id']
                 executed_price = price  # 对于市价单，使用传入的价格
                 
                 # 检查滑点
@@ -867,7 +910,7 @@ class AutonomousTrader:
         except Exception as e:
             self.logger.error(f"Failed to execute {side} order for {symbol}: {e}", exc_info=True)
 
-    def _get_total_portfolio_value(self) -> float:
+    async def _get_total_portfolio_value(self) -> float:
         """
         获取投资组合总价值
         """
@@ -883,11 +926,11 @@ class AutonomousTrader:
             base_currency, quote_currency = symbol.split('-')
             try:
                 # 获取资产余额
-                base_balance = self.exchange.get_balance(currency=base_currency)
-                quote_balance = self.exchange.get_balance(currency=quote_currency)
+                base_balance = await self.exchange.get_balance(currency=base_currency)
+                quote_balance = await self.exchange.get_balance(currency=quote_currency)
                 
                 # 获取当前价格
-                current_price = self.exchange.get_current_price(symbol)
+                current_price = await self.exchange.get_current_price(symbol)
                 
                 # 计算该资产的价值
                 asset_value = quote_balance + base_balance * current_price
@@ -966,7 +1009,7 @@ class AutonomousTrader:
         else:
             self.logger.info("No retraining needed. Performance and market regime are stable.")
 
-    def log_portfolio_status(self):
+    async def log_portfolio_status(self):
         """记录当前投资组合的总价值到性能日志。"""
         self.logger.info("Logging portfolio status...")
         try:
@@ -982,9 +1025,9 @@ class AutonomousTrader:
             for symbol in symbols:
                 base_currency, quote_currency = symbol.split('-')
 
-                base_balance = self.exchange.get_balance(currency=base_currency)
-                quote_balance = self.exchange.get_balance(currency=quote_currency)
-                current_price = self.exchange.get_current_price(symbol)
+                base_balance = await self.exchange.get_balance(currency=base_currency)
+                quote_balance = await self.exchange.get_balance(currency=quote_currency)
+                current_price = await self.exchange.get_current_price(symbol)
 
                 if current_price > 0:
                     asset_value = quote_balance + base_balance * current_price
@@ -1063,150 +1106,45 @@ class AutonomousTrader:
                 os.remove(self.training_lock_path)
 
     def _load_last_training_time(self) -> Optional[datetime]:
-        """从状态文件中加载上次训练的时间。"""
-        if not os.path.exists(self.training_state_path):
-            return None
-        try:
-            with open(self.training_state_path, 'r') as f:
-                state = json.load(f)
-            return datetime.fromisoformat(state['last_training_time'])
-        except (Exception, json.JSONDecodeError):
-            self.logger.warning(f"Could not read or parse training state file at {self.training_state_path}.")
-            return None
+        """从文件加载上次训练时间。"""
+        if os.path.exists(self.training_state_path):
+            try:
+                with open(self.training_state_path, 'r') as f:
+                    data = json.load(f)
+                    return datetime.fromisoformat(data.get('last_training_time'))
+            except Exception as e:
+                self.logger.error(f"Failed to load last training time: {e}")
+        return None
 
     def _save_last_training_time(self):
-        """将当前的训练时间保存到状态文件。"""
+        """保存上次训练时间到文件。"""
         try:
             with open(self.training_state_path, 'w') as f:
                 json.dump({'last_training_time': self.last_training_time.isoformat()}, f)
         except Exception as e:
-            self.logger.error(f"Failed to save last training time: {e}", exc_info=True)
+            self.logger.error(f"Failed to save last training time: {e}")
 
-    def _monitor_risk(self):
-        """
-        监控风险指标并发出告警
-        """
-        if self.enhanced_monitor is None:
-            # Fallback to original risk monitor
-            if self.risk_monitor is None:
-                self.logger.debug("RiskMonitor not available, skipping risk monitoring.")
-                return
-
-            try:
-                # 获取当前账户余额
-                symbol = self.trader_config.get('symbol', 'BTC-USDT')
-                base_currency, quote_currency = symbol.split('-')
-                quote_balance = self.exchange.get_balance(currency=quote_currency)
-                base_balance = self.exchange.get_balance(currency=base_currency)
-                current_price = self.exchange.get_current_price(symbol)
-                
-                if current_price > 0:
-                    total_value = quote_balance + base_balance * current_price
-                    risk_alerts = self.risk_monitor.monitor_and_alert(current_balance=total_value)
-                    
-                    if risk_alerts:
-                        self.logger.warning(f"Risk monitoring detected {len(risk_alerts)} risk conditions:")
-                        for alert in risk_alerts:
-                            self.logger.warning(f"  - [{alert['severity']}] {alert['message']}")
-                    else:
-                        self.logger.debug("Risk monitoring: All indicators within normal range.")
-                else:
-                    self.logger.warning("Could not get current price for risk monitoring.")
-                    
-            except Exception as e:
-                self.logger.error(f"Error during risk monitoring: {e}", exc_info=True)
-            return
-
-        try:
-            # 获取当前账户余额
-            symbol = self.trader_config.get('symbol', 'BTC-USDT')
-            base_currency, quote_currency = symbol.split('-')
-            quote_balance = self.exchange.get_balance(currency=quote_currency)
-            base_balance = self.exchange.get_balance(currency=base_currency)
-            current_price = self.exchange.get_current_price(symbol)
-            
-            if current_price > 0:
-                total_value = quote_balance + base_balance * current_price
-                
-                # 使用增强监控器进行所有类型的监控
-                all_alerts = self.enhanced_monitor.monitor_all(current_balance=total_value)
-                
-                # 发送所有类型的告警
-                sent_alerts_results = self.enhanced_monitor.send_alerts(all_alerts)
-                
-                # 统计告警数量
-                total_alerts = sum(len(alerts) for alerts in all_alerts.values())
-                if total_alerts > 0:
-                    self.logger.warning(f"Enhanced monitoring detected {total_alerts} conditions:")
-                    for category, alerts in all_alerts.items():
-                        for alert in alerts:
-                            self.logger.warning(f"  - [{alert['severity']}] {alert['type']}: {alert['message']}")
-                else:
-                    self.logger.debug("Enhanced monitoring: All indicators within normal range.")
-            else:
-                self.logger.warning("Could not get current price for risk monitoring.")
-                
-        except Exception as e:
-            self.logger.error(f"Error during enhanced risk monitoring: {e}", exc_info=True)
-
-    def _evaluate_strategy_performance(self, featured_data: pd.DataFrame, current_signal: int):
-        """
-        评估当前策略的性能
-        """
-        if not hasattr(self, 'strategy_manager') or not self.strategy_manager:
-            return
-            
-        try:
-            # 获取当前使用的策略名称
-            active_strategy_name = self.strategy_manager.get_active_strategy_name()
-            if not active_strategy_name:
-                return
-                
-            # 这里我们可以基于一些指标来评估策略性能，比如回测最近的信号
-            # 暂时简单实现，实际应用中可能需要更复杂的逻辑
-            latest_price = featured_data['close'].iloc[-1]
-            previous_price = featured_data['close'].iloc[-2] if len(featured_data) > 1 else latest_price
-            price_change = (latest_price - previous_price) / previous_price if previous_price != 0 else 0
-            
-            # 模拟收益计算（这里只是示意，实际应用中需要更精确的计算）
-            # 根据信号和价格变化来评估策略表现
-            if current_signal != 0:  # 有交易信号
-                # 简单基于信号与价格变化的一致性来评估
-                if (current_signal > 0 and price_change > 0) or (current_signal < 0 and price_change < 0):
-                    simulated_return = abs(price_change)  # 正确方向的收益
-                else:
-                    simulated_return = -abs(price_change)  # 错误方向的损失
-            else:
-                simulated_return = 0  # 无信号，持币不动
-            
-            # 记录策略性能
-            returns_series = pd.Series([simulated_return])
-            performance = self.strategy_manager.evaluate_strategy_performance(
-                active_strategy_name, 
-                returns_series
-            )
-            
-            self.logger.debug(f"Strategy {active_strategy_name} performance updated: {performance}")
-            
-        except Exception as e:
-            self.logger.error(f"Error evaluating strategy performance: {e}", exc_info=True)
-
-    def _handle_system_alert(self, status: Dict):
-        """
-        处理系统警报
-        """
+    def _handle_system_alert(self, alert_data: dict):
+        """处理系统监控告警"""
         if hasattr(self, 'enhanced_monitor') and self.enhanced_monitor:
-            # 发送系统警报
-            alert_message = f"System Alert: {', '.join(status['alerts'])}"
-            self.enhanced_monitor.notification_manager.send_risk_alert("SYSTEM_RESOURCE_ALERT", alert_message)
-        else:
-            # 如果没有增强监控器，记录日志
-            self.logger.warning(f"System Alert: {', '.join(status['alerts'])}")
+            self.enhanced_monitor.record_alert(
+                alert_type='SYSTEM_RESOURCE',
+                message=f"{alert_data['metric']} usage high: {alert_data['value']}%",
+                severity='WARNING'
+            )
 
-    def run_loop(self):
-        # 主循环
+    async def run(self):
+        """
+        启动自主交易循环。
+        """
+        self.logger.info("Starting Autonomous Trader Loop...")
+        
+        # 异步初始化
+        await self.initialize_async()
+        
         while True:
             try:
+<<<<<<< HEAD
                 # ========== BUG FIX 5: 紧急停止开关 ==========
                 emergency_flag = 'emergency_stop.flag'
                 if os.path.exists(emergency_flag):
@@ -1235,63 +1173,57 @@ class AutonomousTrader:
                 # ========== END BUG FIX 5 ==========
                 
                 # 0. 检查模型是否已更新并重载
+=======
+                # Circuit Breaker Check
+                if hasattr(self.exchange, 'check_circuit_breaker'):
+                    if not self.exchange.check_circuit_breaker():
+                        self.logger.warning("Circuit breaker active. Skipping cycle.")
+                        await asyncio.sleep(10)
+                        continue
+
+                # 0. 检查并热重载模型
+>>>>>>> c1be3869e66578d612657e0760fc53154ad191ea
                 self._check_and_reload_model()
-
-                # 1. 感知
-                featured_data, regime_info, performance_kpis = self.sense()
-
-                # 如果感知阶段失败，则跳过此循环
-                if featured_data is None:
-                    time.sleep(60)
-                    continue
-
-                # 2. 决策与行动
-                self.decide_and_act(featured_data, regime_info)
-
-                # 3. 记录状态 (为下一次学习做准备)
-                self.log_portfolio_status()
-
-                # 4. 监控风险
-                self._monitor_risk()
-
-                # 5. 学习
-                self.learn(performance_kpis, regime_info)
-
-                self.logger.info("Cycle complete. Waiting for next iteration...")
-                time.sleep(60) # 每分钟循环一次
+                
+                # 1. Sense
+                all_featured_data, regime_info, performance_kpis = await self.sense()
+                
+                if all_featured_data is not None:
+                    # 2. Decide & Act
+                    await self.decide_and_act(all_featured_data, regime_info)
+                    
+                    # 3. Learn (异步触发训练，不阻塞主循环)
+                    self.learn(performance_kpis, regime_info)
+                    
+                    # 4. Log Status
+                    await self.log_portfolio_status()
+                
+                # Sleep for the interval
+                # 简单起见，这里固定休眠，实际应用可能需要更精确的定时
+                self.logger.info("Cycle completed. Sleeping for 60 seconds...")
+                await asyncio.sleep(60)
 
             except KeyboardInterrupt:
-                self.logger.info("Shutdown signal received.")
+                self.logger.info("Stopping Autonomous Trader...")
                 break
             except Exception as e:
-                self.logger.error(f"An error occurred: {e}", exc_info=True)
-                time.sleep(300) # 出错后等待5分钟
+                self.logger.critical(f"Unhandled exception in main loop: {e}", exc_info=True)
+                await asyncio.sleep(60) # 出错后等待一段时间再重试
+        
+        # 关闭交易所连接
+        if self.exchange:
+            await self.exchange.close()
 
-def main():
-    logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-    # 确保在Windows上使用 'spawn' 启动方式以避免问题
-    if os.name == 'nt':
-        multiprocessing.set_start_method('spawn', force=True)
-    trader = AutonomousTrader()
+if __name__ == "__main__":
+    # 配置日志
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+        handlers=[
+            logging.FileHandler("logs/autonomous_trader.log"),
+            logging.StreamHandler()
+        ]
+    )
     
-    try:
-        trader.run_loop()
-    except KeyboardInterrupt:
-        logging.info("Received shutdown signal.")
-    finally:
-        # 确保所有连接都被正确关闭
-        if hasattr(trader, 'state_manager') and trader.state_manager:
-            trader.state_manager.close()
-        if hasattr(trader, 'risk_monitor') and hasattr(trader.risk_monitor, 'trade_tracker') and trader.risk_monitor.trade_tracker:
-            trader.risk_monitor.trade_tracker.conn.close()
-        if hasattr(trader, 'enhanced_monitor') and trader.enhanced_monitor and hasattr(trader.enhanced_monitor, 'risk_monitor') and trader.enhanced_monitor.risk_monitor.trade_tracker:
-            trader.enhanced_monitor.risk_monitor.trade_tracker.conn.close()
-        
-        # 停止系统监控
-        if hasattr(trader, 'system_monitor') and trader.system_monitor:
-            trader.system_monitor.stop_monitoring()
-        
-        logging.info("All connections closed. Shutdown complete.")
-
-if __name__ == '__main__':
-    main()
+    trader = AutonomousTrader()
+    asyncio.run(trader.run())

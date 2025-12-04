@@ -47,6 +47,7 @@ class RiskManager:
         """Initialize the database and create necessary tables if they don't exist."""
         try:
             self.conn = sqlite3.connect(self.db_path, check_same_thread=False)
+            self.conn.execute("PRAGMA journal_mode=WAL;")  # Enable Write-Ahead Logging for concurrency
             self.conn.row_factory = sqlite3.Row  # Enable column access by name
             self.cursor = self.conn.cursor()
             
@@ -281,3 +282,39 @@ class RiskManager:
             logging.warning(f"Error calculating volatility-adjusted position size: {e}. Using base position size.")
             return base_size
 
+
+    def calculate_sl_tp(self, entry_price, side, volatility=None, atr_multiple=2.0):
+        """
+        Calculate Stop Loss and Take Profit prices.
+        
+        :param entry_price: The entry price of the trade
+        :param side: 'buy' or 'sell'
+        :param volatility: Current volatility (e.g., ATR). If None, uses fixed percentage.
+        :param atr_multiple: Multiplier for ATR-based SL/TP
+        :return: tuple(stop_loss_price, take_profit_price)
+        """
+        # Default fixed percentage if volatility is not provided
+        sl_pct = 0.02 # 2% stop loss
+        tp_pct = 0.04 # 4% take profit (1:2 risk-reward)
+        
+        if volatility:
+            # Dynamic SL based on volatility
+            sl_distance = volatility * atr_multiple
+            tp_distance = sl_distance * 2 # 1:2 risk-reward
+            
+            if side == 'buy':
+                stop_loss = entry_price - sl_distance
+                take_profit = entry_price + tp_distance
+            else:
+                stop_loss = entry_price + sl_distance
+                take_profit = entry_price - tp_distance
+        else:
+            # Fixed percentage fallback
+            if side == 'buy':
+                stop_loss = entry_price * (1 - sl_pct)
+                take_profit = entry_price * (1 + tp_pct)
+            else:
+                stop_loss = entry_price * (1 + sl_pct)
+                take_profit = entry_price * (1 - tp_pct)
+                
+        return stop_loss, take_profit
