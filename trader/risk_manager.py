@@ -47,6 +47,7 @@ class RiskManager:
         """Initialize the database and create necessary tables if they don't exist."""
         try:
             self.conn = sqlite3.connect(self.db_path, check_same_thread=False)
+            self.conn.execute("PRAGMA journal_mode=WAL;")  # Enable Write-Ahead Logging for concurrency
             self.conn.row_factory = sqlite3.Row  # Enable column access by name
             self.cursor = self.conn.cursor()
             
