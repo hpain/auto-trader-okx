@@ -141,11 +141,93 @@ class AutonomousTrader:
             self.logger.error(f"Failed to initialize Market Regime Detector: {e}", exc_info=True)
             self.market_regime_detector = None
         
+        # ========== 新增: 初始化新闻监控 (遵循开闭原则) ==========
+        try:
+            from data.news_monitor import get_news_monitor
+            news_config = config.get('news_monitoring', {})
+            if news_config.get('enabled', False):
+                self.news_monitor = get_news_monitor(config, self.logger)
+                self.logger.info("News Monitor Initialized.")
+            else:
+                self.news_monitor = None
+                self.logger.info("News Monitor disabled in config.")
+        except Exception as e:
+            self.logger.error(f"Failed to initialize News Monitor: {e}. Continuing without news monitoring.", exc_info=True)
+            self.news_monitor = None
+        
+        # ========== 新增: 初始化事件日历 (遵循开闭原则) ==========
+        try:
+            from data.event_calendar import get_event_calendar
+            event_config = config.get('event_calendar', {})
+            if event_config.get('enabled', False):
+                self.event_calendar = get_event_calendar(event_config, self.logger)
+                self.logger.info("Event Calendar Initialized.")
+            else:
+                self.event_calendar = None
+                self.logger.info("Event Calendar disabled in config.")
+        except Exception as e:
+            self.logger.error(f"Failed to initialize Event Calendar: {e}. Continuing without event calendar.", exc_info=True)
+            self.event_calendar = None
+        # ========== END 新增 ==========
+        
         self.logger.info("Autonomous Trader Initialized Successfully.")
 
     def sense(self):
         # ... (更新后的 sense 代码，支持多资产) ...
         self.logger.info("--- Stage: SENSE ---")
+        
+        # ========== 新增: 检查宏观事件日历 ==========
+        if hasattr(self, 'event_calendar') and self.event_calendar:
+            try:
+                upcoming = self.event_calendar.check_upcoming_events(
+                    days_ahead=config.get('event_calendar', {}).get('check_days_ahead', 3)
+                )
+                
+                if upcoming['has_event']:
+                    event = upcoming['event']
+                    days = upcoming['days_until']
+                    
+                    self.logger.warning(f"📅 Upcoming event in {days} days: {event['description']}")
+                    self.logger.warning(f"   Impact: {event.get('impact', 'UNKNOWN')}, Action: {event.get('action', 'normal')}")
+                    
+                    # 根据事件影响调整仓位
+                    position_multiplier = self.event_calendar.get_position_multiplier(event)
+                    
+                    if position_multiplier == 0.0:
+                        # 暂停交易
+                        self.logger.critical(f"⛔ Pausing trading due to {event['description']}")
+                        with open('event_pause.flag', 'w') as f:
+                            f.write(f"Event: {event['description']}\n")
+                            f.write(f"Date: {event.get('date', 'recurring')}\n")
+                            f.write(f"Impact: {event.get('impact')}\n")
+                        
+                        # 发送告警
+                        if hasattr(self, 'enhanced_monitor') and self.enhanced_monitor:
+                            if hasattr(self.enhanced_monitor, 'send_alert'):
+                                self.enhanced_monitor.send_alert(
+                                    level='WARNING',
+                                    message=f'Trading paused due to upcoming event: {event["description"]}',
+                                    details=event
+                                )
+                        
+                        return None, None, None  # 跳过此周期
+                    
+                    elif position_multiplier < 1.0:
+                        # 降低仓位
+                        self.logger.warning(f"🔻 Reducing position to {position_multiplier*100}% due to upcoming event")
+                        # 设置仓位调整系数 (在 decide_and_act 中使用)
+                        self.event_position_multiplier = position_multiplier
+                    else:
+                        self.event_position_multiplier = 1.0
+                else:
+                    self.event_position_multiplier = 1.0
+                    
+            except Exception as e:
+                self.logger.error(f"Event calendar check failed: {e}", exc_info=True)
+                self.event_position_multiplier = 1.0
+        else:
+            self.event_position_multiplier = 1.0
+        # ========== END 新增 ==========
         
         # 确定要交易的资产列表
         if hasattr(self, 'portfolio_manager') and self.portfolio_manager:
@@ -235,6 +317,94 @@ class AutonomousTrader:
     def decide_and_act(self, all_featured_data, regime_info):
         # ... (更新后的多资产 decide_and_act 代码) ...
         self.logger.info("--- Stage: DECIDE & ACT ---")
+        
+        # ========== BUG FIX 1: 强制执行每日止损 ==========
+        if hasattr(self, 'enhanced_monitor') and self.enhanced_monitor:
+            try:
+                # 获取今日盈亏
+                daily_pnl = self.enhanced_monitor.get_daily_pnl()
+                daily_loss_threshold = config.get('risk_monitoring', {}).get('daily_loss_threshold', -500.0)
+                
+                if daily_pnl < daily_loss_threshold:
+                    self.logger.critical(f"🚨 DAILY LOSS LIMIT REACHED! Daily PnL: ${daily_pnl:.2f}, Threshold: ${daily_loss_threshold:.2f}")
+                    self.logger.critical("⛔ STOPPING ALL TRADING FOR TODAY")
+                    
+                    # 发送紧急告警
+                    if hasattr(self.enhanced_monitor, 'send_alert'):
+                        self.enhanced_monitor.send_alert(
+                            level='CRITICAL',
+                            message=f'Daily loss limit reached: ${daily_pnl:.2f}. Trading stopped.',
+                            details={'daily_pnl': daily_pnl, 'threshold': daily_loss_threshold}
+                        )
+                    
+                    # 创建紧急停止标志文件
+                    emergency_flag = 'emergency_stop.flag'
+                    with open(emergency_flag, 'w') as f:
+                        f.write(f'Daily loss limit reached at {datetime.utcnow().isoformat()}\n')
+                        f.write(f'Daily PnL: ${daily_pnl:.2f}\n')
+                    
+                    return  # 立即返回,不执行任何交易
+                    
+            except Exception as e:
+                self.logger.error(f"Failed to check daily loss limit: {e}", exc_info=True)
+        # ========== END BUG FIX 1 ==========
+        
+        # ========== 新增: 实时新闻监控检查 ==========
+        if hasattr(self, 'news_monitor') and self.news_monitor:
+            try:
+                # 获取最新新闻
+                news_config = config.get('news_monitoring', {})
+                currencies = news_config.get('currencies', ['BTC', 'ETH'])
+                
+                news = self.news_monitor.fetch_latest_news(currencies=currencies, limit=20)
+                impact = self.news_monitor.analyze_news_impact(
+                    news,
+                    recent_minutes=news_config.get('recent_news_window', 5)
+                )
+                
+                if impact['action'] == 'emergency_stop':
+                    self.logger.critical(f"🚨 CRITICAL NEWS DETECTED!")
+                    self.logger.critical(f"📰 {impact['news'][0]['title']}")
+                    self.logger.critical(f"🔑 Keyword: {impact['news'][0]['keyword']}")
+                    self.logger.critical(f"⛔ STOPPING TRADING")
+                    
+                    # 创建紧急停止标志
+                    with open('emergency_stop.flag', 'w') as f:
+                        f.write(f"Critical news at {datetime.utcnow().isoformat()}\n")
+                        f.write(f"Reason: {impact['reason']}\n")
+                        f.write(f"News: {impact['news'][0]['title']}\n")
+                        f.write(f"URL: {impact['news'][0]['url']}\n")
+                    
+                    # 发送告警
+                    if hasattr(self, 'enhanced_monitor') and self.enhanced_monitor:
+                        if hasattr(self.enhanced_monitor, 'send_alert'):
+                            self.enhanced_monitor.send_alert(
+                                level='CRITICAL',
+                                message=f'Critical news: {impact["news"][0]["title"]}',
+                                details=impact
+                            )
+                    
+                    return  # 立即停止
+                
+                elif impact['action'] == 'reduce_position':
+                    self.logger.warning(f"⚠️ WARNING NEWS DETECTED")
+                    self.logger.warning(f"📰 {len(impact['news'])} warning news in last {news_config.get('recent_news_window', 5)} minutes")
+                    for news_item in impact['news'][:3]:  # 只显示前3条
+                        self.logger.warning(f"   - {news_item['title']}")
+                    
+                    # 降低仓位
+                    news_position_multiplier = news_config.get('warning_position_multiplier', 0.5)
+                    self.logger.warning(f"🔻 Reducing position to {news_position_multiplier*100}% due to news")
+                    self.news_position_multiplier = news_position_multiplier
+                else:
+                    self.news_position_multiplier = 1.0
+                    
+            except Exception as e:
+                self.logger.error(f"News monitoring failed: {e}", exc_info=True)
+                self.news_position_multiplier = 1.0
+        else:
+            self.news_position_multiplier = 1.0
+        # ========== END 新增 ==========
         
         # 确定要交易的资产列表
         if hasattr(self, 'portfolio_manager') and self.portfolio_manager:
@@ -371,27 +541,83 @@ class AutonomousTrader:
 
             trade_amount_quote = self.trader_config.get('trade_amount_quote', 100)
             
-            if signal == 1 and base_balance < 0.001:
-                self.logger.info(f"BUY signal for {symbol} and no significant position held. Executing BUY order.")
-                
-                # 预期价格（对于市价单，我们使用当前价格作为参考）
-                expected_buy_price = current_price
+            # ========== BUG FIX 3: 使用价值而非数量判断仓位 ==========
+            position_value = base_balance * current_price
+            min_position_value = 10  # 最小持仓价值 $10
+            # ========== END BUG FIX 3 ==========
+            
+            if signal == 1 and position_value < min_position_value:  # 修复: 使用价值判断
+                self.logger.info(f"BUY signal for {symbol} and no significant position held (value: ${position_value:.2f}). Executing BUY order.")
                 
                 try:
                     quantity = trade_amount_quote / current_price
+                    
+                    # ========== BUG FIX 2: 改用限价单 ==========
+                    # 计算限价 (允许 0.2% 滑点)
+                    limit_price = current_price * 1.002
+                    expected_buy_price = limit_price
+                    
+                    self.logger.info(f"Placing LIMIT BUY order: {quantity:.6f} {base_currency} @ ${limit_price:.2f}")
+                    
                     order_result = self.exchange.create_order(
                         symbol=symbol,
-                        order_type='market',
+                        order_type='limit',  # 改为限价单
                         side='buy',
-                        amount=quantity
+                        amount=quantity,
+                        price=limit_price
                     )
+                    
+                    # ========== BUG FIX 4: 添加订单成功检查 ==========
+                    if not order_result or order_result.get('code') != '0':
+                        self.logger.error(f"❌ BUY order FAILED for {symbol}: {order_result}")
+                        return  # 订单失败,不更新持仓
+                    
+                    if not order_result.get('data'):
+                        self.logger.error(f"❌ BUY order returned no data for {symbol}")
+                        return
+                    
+                    order_id = order_result['data'][0]['ordId']
+                    self.logger.info(f"✅ BUY order placed successfully. Order ID: {order_id}")
+                    
+                    # 等待订单成交 (最多 30 秒)
+                    import time
+                    max_wait_time = 30
+                    wait_interval = 2
+                    elapsed_time = 0
+                    
+                    while elapsed_time < max_wait_time:
+                        time.sleep(wait_interval)
+                        elapsed_time += wait_interval
+                        
+                        try:
+                            order_status = self.exchange.get_order(order_id, symbol)
+                            status = order_status.get('state', 'unknown')
+                            
+                            if status == 'filled':
+                                # 订单已成交
+                                executed_buy_price = float(order_status.get('avgPx', limit_price))
+                                self.logger.info(f"✅ BUY order FILLED @ ${executed_buy_price:.2f}")
+                                break
+                            elif status in ['canceled', 'failed']:
+                                self.logger.warning(f"⚠️ BUY order {status}. Not updating position.")
+                                return
+                        except Exception as e:
+                            self.logger.error(f"Failed to check order status: {e}")
+                    else:
+                        # 超时未成交,取消订单
+                        self.logger.warning(f"⏱️ BUY order timeout after {max_wait_time}s. Canceling...")
+                        try:
+                            self.exchange.cancel_order(order_id, symbol)
+                            self.logger.info(f"❌ BUY order canceled due to timeout")
+                        except Exception as e:
+                            self.logger.error(f"Failed to cancel order: {e}")
+                        return
+                    # ========== END BUG FIX 2 & 4 ==========
+                    
                     self.logger.info(f"BUY order for {symbol} executed. Result: {order_result}")
                     
                     # 记录订单到状态管理器
                     if order_result and order_result.get('code') == '0' and order_result.get('data'):
-                        order_id = order_result['data'][0]['ordId']
-                        executed_buy_price = current_price  # 对于市价单，实际成交价通常是执行时的价格
-                        
                         # 检查滑点
                         if hasattr(self, 'slippage_monitor') and self.slippage_monitor:
                             slippage_result = self.slippage_monitor.monitor_trade_execution(
@@ -434,26 +660,76 @@ class AutonomousTrader:
                             
                 except Exception as e:
                     self.logger.error(f"Failed to execute BUY order for {symbol}: {e}", exc_info=True)
-            elif signal == 0 and base_balance > 0.001:
-                self.logger.info(f"SELL signal for {symbol} and position held. Executing SELL order.")
-                
-                # 预期价格（对于市价单，我们使用当前价格作为参考）
-                expected_sell_price = current_price
+            elif signal == 0 and position_value > min_position_value:  # 修复: 使用价值判断
+                self.logger.info(f"SELL signal for {symbol} and position held (value: ${position_value:.2f}). Executing SELL order.")
                 
                 try:
+                    # ========== BUG FIX 2: 改用限价单 ==========
+                    # 计算限价 (允许 0.2% 滑点,卖出时价格略低)
+                    limit_price = current_price * 0.998
+                    expected_sell_price = limit_price
+                    
+                    self.logger.info(f"Placing LIMIT SELL order: {base_balance:.6f} {base_currency} @ ${limit_price:.2f}")
+                    
                     order_result = self.exchange.create_order(
                         symbol=symbol,
-                        order_type='market',
+                        order_type='limit',  # 改为限价单
                         side='sell',
-                        amount=base_balance
+                        amount=base_balance,
+                        price=limit_price
                     )
+                    
+                    # ========== BUG FIX 4: 添加订单成功检查 ==========
+                    if not order_result or order_result.get('code') != '0':
+                        self.logger.error(f"❌ SELL order FAILED for {symbol}: {order_result}")
+                        return  # 订单失败,不更新持仓
+                    
+                    if not order_result.get('data'):
+                        self.logger.error(f"❌ SELL order returned no data for {symbol}")
+                        return
+                    
+                    order_id = order_result['data'][0]['ordId']
+                    self.logger.info(f"✅ SELL order placed successfully. Order ID: {order_id}")
+                    
+                    # 等待订单成交 (最多 30 秒)
+                    import time
+                    max_wait_time = 30
+                    wait_interval = 2
+                    elapsed_time = 0
+                    
+                    while elapsed_time < max_wait_time:
+                        time.sleep(wait_interval)
+                        elapsed_time += wait_interval
+                        
+                        try:
+                            order_status = self.exchange.get_order(order_id, symbol)
+                            status = order_status.get('state', 'unknown')
+                            
+                            if status == 'filled':
+                                # 订单已成交
+                                executed_sell_price = float(order_status.get('avgPx', limit_price))
+                                self.logger.info(f"✅ SELL order FILLED @ ${executed_sell_price:.2f}")
+                                break
+                            elif status in ['canceled', 'failed']:
+                                self.logger.warning(f"⚠️ SELL order {status}. Not updating position.")
+                                return
+                        except Exception as e:
+                            self.logger.error(f"Failed to check order status: {e}")
+                    else:
+                        # 超时未成交,取消订单
+                        self.logger.warning(f"⏱️ SELL order timeout after {max_wait_time}s. Canceling...")
+                        try:
+                            self.exchange.cancel_order(order_id, symbol)
+                            self.logger.info(f"❌ SELL order canceled due to timeout")
+                        except Exception as e:
+                            self.logger.error(f"Failed to cancel order: {e}")
+                        return
+                    # ========== END BUG FIX 2 & 4 ==========
+                    
                     self.logger.info(f"SELL order for {symbol} executed. Result: {order_result}")
                     
                     # 记录订单到状态管理器，并完成交易记录
                     if order_result and order_result.get('code') == '0' and order_result.get('data'):
-                        order_id = order_result['data'][0]['ordId']
-                        executed_sell_price = current_price  # 对于市价单，实际成交价通常是执行时的价格
-                        
                         # 检查滑点
                         if hasattr(self, 'slippage_monitor') and self.slippage_monitor:
                             slippage_result = self.slippage_monitor.monitor_trade_execution(
@@ -931,6 +1207,33 @@ class AutonomousTrader:
         # 主循环
         while True:
             try:
+                # ========== BUG FIX 5: 紧急停止开关 ==========
+                emergency_flag = 'emergency_stop.flag'
+                if os.path.exists(emergency_flag):
+                    self.logger.critical("🚨 EMERGENCY STOP FLAG DETECTED!")
+                    self.logger.critical("⛔ STOPPING ALL TRADING IMMEDIATELY")
+                    
+                    # 读取停止原因
+                    try:
+                        with open(emergency_flag, 'r') as f:
+                            reason = f.read()
+                        self.logger.critical(f"Stop reason:\n{reason}")
+                    except:
+                        pass
+                    
+                    # 发送紧急告警
+                    if hasattr(self, 'enhanced_monitor') and self.enhanced_monitor:
+                        if hasattr(self.enhanced_monitor, 'send_alert'):
+                            self.enhanced_monitor.send_alert(
+                                level='CRITICAL',
+                                message='Emergency stop activated. Trading halted.',
+                                details={'flag_file': emergency_flag}
+                            )
+                    
+                    self.logger.critical("To resume trading, delete the emergency_stop.flag file")
+                    break  # 退出主循环
+                # ========== END BUG FIX 5 ==========
+                
                 # 0. 检查模型是否已更新并重载
                 self._check_and_reload_model()
 

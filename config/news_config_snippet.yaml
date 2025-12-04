@@ -1,0 +1,54 @@
+# ==============================================================================
+# News Monitoring Configuration
+# ==============================================================================
+news_monitoring:
+  # Enable/disable news monitoring
+  enabled: true
+  
+  # CryptoPanic API configuration (optional, free version works without API key)
+  cryptopanic_api_key: null  # Set to your API key if you have one
+  
+  # How often to check news (in seconds)
+  check_interval: 60  # Check every 60 seconds
+  
+  # Time window for recent news analysis (in minutes)
+  recent_news_window: 5  # Only analyze news from last 5 minutes
+  
+  # Monitored currencies
+  currencies:
+    - "BTC"
+    - "ETH"
+  
+  # Action on critical news
+  critical_action: "emergency_stop"  # or "reduce_position"
+  
+  # Action on warning news
+  warning_action: "reduce_position"
+  
+  # Position multiplier when warnings detected
+  warning_position_multiplier: 0.5  # Reduce to 50%
+
+# ==============================================================================
+# Event Calendar Configuration
+# ==============================================================================
+event_calendar:
+  # Enable/disable event calendar
+  enabled: true
+  
+  # How many days ahead to check for events
+  check_days_ahead: 3
+  
+  # Position multipliers for different impact levels
+  position_multipliers:
+    CRITICAL: 0.0   # Pause trading
+    HIGH: 0.3       # Reduce to 30%
+    MEDIUM: 0.5     # Reduce to 50%
+    LOW: 1.0        # Normal
+  
+  # Custom one-time events (add manually as needed)
+  custom_events: []
+    # Example:
+    # - date: "2025-12-01"
+    #   description: "Important Event"
+    #   impact: "HIGH"
+    #   action: "reduce_position"
