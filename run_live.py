@@ -1,4 +1,5 @@
 import time
+import asyncio
 import pandas as pd
 
 # 导入我们所有的新组件
@@ -14,7 +15,7 @@ from utils.config_loader import load_config
 from features.feature_engineering import generate_features
 from utils.logger import setup_trader_logger, CycleLogger
 
-def main_loop():
+async def main_loop():
     """
     全新的自动化交易主循环，集成了市场状态检测和策略管理。
     """
@@ -32,7 +33,9 @@ def main_loop():
     # 3.1 初始化聚合交易所客户端
     # 使用 ExchangeFactory 创建聚合交易所实例
     api_credentials = config.get('okx', {}) # 以okx的凭证为例，将来可以做得更通用
-    exchange_client = ExchangeFactory.create_exchange(
+    
+    # 修复：使用 await 调用异步工厂方法
+    exchange_client = await ExchangeFactory.create_exchange(
         'aggregated',
         api_key=api_credentials.get('api_key'),
         api_secret=api_credentials.get('secret_key'),
@@ -90,8 +93,9 @@ def main_loop():
             data_for_pm = {}
             for symbol in symbols:
                 # 使用新的聚合交易所客户端获取数据
+                # 修复：使用 await 调用异步方法
                 # 获取最近200条K线用于特征计算
-                raw_data = exchange_client.fetch_candles(symbol, interval, limit=200)
+                raw_data = await exchange_client.fetch_candles(symbol, interval, limit=200)
                 
                 if raw_data is None or raw_data.empty:
                     print(f"Warning: Failed to fetch market data for {symbol}, skipping...")
@@ -102,7 +106,10 @@ def main_loop():
                 data_for_pm[symbol] = featured_data
 
             if not data_for_pm:
-                raise ValueError("Failed to fetch market data for any symbol.")
+                # 如果获取失败，不要抛出异常退出，而是等待重试
+                print("Failed to fetch market data for any symbol. Retrying in 60 seconds...")
+                await asyncio.sleep(60)
+                continue
 
             # 4.2 (后续逻辑与之前相同...)
             print("Analyzing market regime for each asset and selecting strategies...")
@@ -120,7 +127,8 @@ def main_loop():
             trade_orders, _ = portfolio_manager.rebalance(data_for_pm, cycle_logger)
 
             if trade_orders:
-                execution_report = execution_handler.execute_trades(trade_orders, cycle_logger)
+                # 修复：使用 await 调用异步方法
+                execution_report = await execution_handler.execute_trades(trade_orders, cycle_logger)
                 portfolio_manager.update_positions(execution_report)
             else:
                 print("No new trade orders to execute.")
@@ -143,7 +151,8 @@ def main_loop():
 
             wait_seconds = 3600 # 1 hour
             print(f"Cycle finished. Waiting for {wait_seconds / 60:.1f} minutes...")
-            time.sleep(wait_seconds)
+            # 修复：使用 asyncio.sleep
+            await asyncio.sleep(wait_seconds)
 
         except KeyboardInterrupt:
             print("\nUser interrupted the process. Shutting down.")
@@ -153,9 +162,12 @@ def main_loop():
         except Exception as e:
             print(f"FATAL ERROR in main loop: {e}")
             cycle_logger.set_error(str(e))
-            time.sleep(60)
+            await asyncio.sleep(60)
         finally:
             cycle_logger.commit()
+    
+    # 关闭交易所连接
+    await exchange_client.close()
 
 if __name__ == "__main__":
-    main_loop()
+    asyncio.run(main_loop())

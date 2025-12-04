@@ -9,6 +9,7 @@ from typing import List, Dict, Any, Optional
 from exchange.base import Exchange
 import logging
 import asyncio
+from datetime import datetime, timedelta
 
 logger = logging.getLogger(__name__)
 
@@ -46,7 +47,58 @@ class CcxtExchange(Exchange):
                 logger.warning(f"{self.exchange.id} does not support sandbox mode. Live mode will be used.")
         
         self.is_loaded = False
+        
+        # Circuit Breaker State
+        self.error_count = 0
+        self.last_error_time = None
+        self.circuit_breaker_triggered = False
+        self.circuit_breaker_reset_time = None
+        
+        # Circuit Breaker Config
+        self.cb_error_threshold = 5  # 5 errors
+        self.cb_time_window = 60     # within 60 seconds
+        self.cb_cooldown_time = 300  # pause for 5 minutes
+        
         logger.info(f"Initialized CcxtExchange for {self.exchange.id} with market_type='{market_type}' (Sandbox: {sandbox})")
+
+    def check_circuit_breaker(self) -> bool:
+        """
+        Checks if the circuit breaker is active.
+        Returns True if trading is allowed (circuit closed), False if broken (circuit open).
+        """
+        now = datetime.utcnow()
+        
+        # If triggered, check if cooldown has passed
+        if self.circuit_breaker_triggered:
+            if now >= self.circuit_breaker_reset_time:
+                self.circuit_breaker_triggered = False
+                self.error_count = 0
+                self.last_error_time = None
+                logger.info(f"Circuit breaker cooldown ended. Resuming operations.")
+                return True
+            else:
+                remaining = (self.circuit_breaker_reset_time - now).total_seconds()
+                logger.warning(f"Circuit breaker active. Operations paused for {remaining:.0f}s.")
+                return False
+        
+        # Check if error count needs reset (sliding window-ish)
+        if self.last_error_time and (now - self.last_error_time).total_seconds() > self.cb_time_window:
+            if self.error_count > 0:
+                logger.debug("Circuit breaker error window passed. Resetting error count.")
+                self.error_count = 0
+                
+        return True
+
+    def _record_error(self):
+        """Records an API error and triggers circuit breaker if threshold reached."""
+        now = datetime.utcnow()
+        self.last_error_time = now
+        self.error_count += 1
+        
+        if self.error_count >= self.cb_error_threshold:
+            self.circuit_breaker_triggered = True
+            self.circuit_breaker_reset_time = now + timedelta(seconds=self.cb_cooldown_time)
+            logger.critical(f"CIRCUIT BREAKER TRIGGERED! {self.error_count} errors in window. Pausing for {self.cb_cooldown_time}s.")
 
     async def load(self):
         """Asynchronously load markets. Must be called after initialization."""
@@ -102,7 +154,7 @@ class CcxtExchange(Exchange):
             return pd.DataFrame()
 
     async def fetch_historical_data(self, symbol: str, timeframe: str, years: float) -> pd.DataFrame:
-        from datetime import datetime, timedelta
+        # from datetime import datetime, timedelta # Moved to top level
 
         timeframe_ms = self.exchange.parse_timeframe(timeframe.lower()) * 1000
         since_dt = datetime.utcnow() - timedelta(days=years * 365.25)
@@ -161,6 +213,7 @@ class CcxtExchange(Exchange):
                 f"Temporary, retryable error creating order on {self.exchange.id}: {type(e).__name__}. "
                 f"{order_details_for_logging}. Error: {e}"
             )
+            self._record_error()
             # In a full implementation, this might raise a custom RetryableError
             return None
 
@@ -179,6 +232,7 @@ class CcxtExchange(Exchange):
                 f"{order_details_for_logging}. Error: {e}",
                 exc_info=True
             )
+            self._record_error()
             return None
             
         except BaseError as e:
@@ -187,6 +241,7 @@ class CcxtExchange(Exchange):
                 f"{order_details_for_logging}. Error: {e}",
                 exc_info=True
             )
+            self._record_error()
             return None
 
     async def get_order(self, order_id: str, symbol: str) -> Optional[Dict[str, Any]]:

@@ -8,9 +8,15 @@ from typing import Dict, List, Optional, Any
 import pandas as pd
 import numpy as np
 import joblib
-import shap
+try:
+    import shap
+except ImportError:
+    shap = None
 import matplotlib.pyplot as plt
-import seaborn as sns
+try:
+    import seaborn as sns
+except ImportError:
+    sns = None
 from pathlib import Path
 
 from config import config
@@ -22,12 +28,14 @@ class ModelInterpretability:
     """
     
     def __init__(self, config: Dict):
+        self.logger = logging.getLogger(__name__)
         self.config = config.get('model_interpretability', {})
-        self.enable_shap = self.config.get('enable_shap', True)
+        self.enable_shap = self.config.get('enable_shap', True) and (shap is not None)
+        if self.config.get('enable_shap', True) and shap is None:
+            self.logger.warning("SHAP library not found. Model interpretability will be disabled.")
         self.shap_sample_size = self.config.get('shap_sample_size', 1000)
         self.feature_importance_top_n = self.config.get('feature_importance_top_n', 10)
         
-        self.logger = logging.getLogger(__name__)
         self.model_path = config.get('paths', {}).get('model_dir', 'models')
         
         # 确保输出目录存在

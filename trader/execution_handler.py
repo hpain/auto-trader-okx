@@ -75,6 +75,19 @@ class ExecutionHandler:
             except Exception as e:
                 print(f"    - CRITICAL ERROR: An exception occurred while placing order: {e}")
                 report_item['raw_response'] = str(e)
+                
+                # Hedging Logic
+                if hasattr(self.client, 'hedge_position'):
+                    print(f"    - ATTEMPTING HEDGE for {symbol} due to critical error...")
+                    try:
+                        hedge_result = await self.client.hedge_position(symbol, quantity, action.lower())
+                        if hedge_result:
+                            print(f"    - HEDGE EXECUTED: {hedge_result}")
+                            report_item['status'] = 'HEDGED'
+                        else:
+                            print(f"    - HEDGE FAILED.")
+                    except Exception as he:
+                        print(f"    - HEDGE EXCEPTION: {he}")
             
             execution_report.append(report_item)
         

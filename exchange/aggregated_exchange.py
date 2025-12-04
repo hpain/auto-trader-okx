@@ -31,8 +31,8 @@ class AggregatedExchange(Exchange):
         all_exchange_ids = list(set([primary_exchange_id] + secondary_exchange_ids))
         
         # Create coroutines for all exchange creations
-        spot_creation_tasks = [ExchangeFactory.create_exchange(ex_id, market_type='spot', api_key=api_key, api_secret=api_secret, passphrase=passphrase, sandbox=sandbox) for ex_id in all_exchange_ids]
-        swap_creation_tasks = [ExchangeFactory.create_exchange(ex_id, market_type='swap', api_key=api_key, api_secret=api_secret, passphrase=passphrase, sandbox=sandbox) for ex_id in all_exchange_ids]
+        spot_creation_tasks = [ExchangeFactory.create_exchange(ex_id, market_type='spot', api_key=None, api_secret=None, passphrase=None, sandbox=sandbox) for ex_id in all_exchange_ids]
+        swap_creation_tasks = [ExchangeFactory.create_exchange(ex_id, market_type='swap', api_key=None, api_secret=None, passphrase=None, sandbox=sandbox) for ex_id in all_exchange_ids]
 
         # Await them concurrently
         spot_exchanges = await asyncio.gather(*spot_creation_tasks)
@@ -299,5 +299,61 @@ class AggregatedExchange(Exchange):
         return sum(valid_prices) / len(valid_prices)
 
     async def place_oco_order(self, symbol: str, side: str, amount: float, take_profit_price: float, stop_loss_price: float) -> Dict[str, Any]:
-        return await self.primary_spot_exchange.place_oco_order(symbol, side, amount, take_profit_price, stop_loss_price)
+        # Smart Routing: Check if primary is healthy
+        if self.is_primary_healthy():
+            return await self.primary_spot_exchange.place_oco_order(symbol, side, amount, take_profit_price, stop_loss_price)
+        else:
+            logger.warning("Primary exchange is unhealthy! Attempting to route OCO order to secondary exchange...")
+            # Try to find a secondary exchange that supports OCO
+            for exchange in self.all_spot_exchanges:
+                if exchange.exchange_id == self.primary_spot_exchange.exchange_id:
+                    continue
+                try:
+                    return await exchange.place_oco_order(symbol, side, amount, take_profit_price, stop_loss_price)
+                except Exception as e:
+                    logger.warning(f"Failed to route OCO to {exchange.exchange_id}: {e}")
+            
+            raise ConnectionError("Primary exchange unhealthy and no suitable secondary exchange found for OCO order.")
+
+    def is_primary_healthy(self) -> bool:
+        """Checks if the primary exchange is healthy (circuit breaker not tripped)."""
+        if hasattr(self.primary_spot_exchange, 'check_circuit_breaker'):
+            return self.primary_spot_exchange.check_circuit_breaker()
+        return True
+
+    async def hedge_position(self, symbol: str, quantity: float, side: str) -> Dict[str, Any]:
+        """
+        Places a hedging order on a secondary exchange.
+        This is typically called when the primary exchange fails or is unstable.
+        
+        Args:
+            symbol: The symbol to hedge (e.g., 'BTC/USDT')
+            quantity: The quantity to hedge
+            side: The side of the ORIGINAL position (hedge will be opposite)
+        """
+        hedge_side = 'sell' if side == 'buy' else 'buy'
+        logger.warning(f"INITIATING HEDGE: Attempting to {hedge_side} {quantity} {symbol} on secondary exchanges.")
+        
+        for exchange in self.all_spot_exchanges:
+            # Skip primary exchange
+            if exchange.exchange_id == self.primary_spot_exchange.exchange_id:
+                continue
+                
+            try:
+                # Check if secondary is healthy (optional but good practice)
+                if hasattr(exchange, 'check_circuit_breaker') and not exchange.check_circuit_breaker():
+                    logger.warning(f"Skipping secondary exchange {exchange.exchange_id} (Circuit Breaker Active).")
+                    continue
+
+                logger.info(f"Placing hedge order on {exchange.exchange_id}...")
+                # Market order for immediate execution
+                result = await exchange.create_order(symbol, 'market', hedge_side, quantity)
+                if result:
+                    logger.info(f"HEDGE SUCCESSFUL: Executed on {exchange.exchange_id}. Result: {result}")
+                    return result
+            except Exception as e:
+                logger.error(f"Hedge attempt failed on {exchange.exchange_id}: {e}")
+        
+        logger.critical("HEDGE FAILED: Could not execute hedge order on ANY secondary exchange!")
+        return None
 
