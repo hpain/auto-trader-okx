@@ -16,7 +16,7 @@ class RiskManager:
         :param config: A dictionary containing risk management settings.
                        Expected keys: 'position_sizing', 'risk_management'.
         :param db_path: Path to the database for storing trade records
-        :param state_manager: Optional StateManager instance for position tracking
+        :param state_manager: Optional instance of StateManager to access real-time positions
         """
         self.balance = balance
         self.config = config
@@ -39,6 +39,11 @@ class RiskManager:
         self._init_db()
         
         logging.info("RiskManager initialized.")
+        if self.state_manager:
+            logging.info("RiskManager connected to StateManager.")
+        else:
+            logging.warning("RiskManager NOT connected to StateManager. Position limits may be inaccurate.")
+            
         logging.info(f"Position sizing strategy: {self.position_sizing_strategy}")
         logging.info(f"Daily loss limit: {self.daily_loss_limit*100:.2f}%")
         logging.info(f"Weekly loss limit: {self.weekly_loss_limit*100:.2f}%")
@@ -176,6 +181,8 @@ class RiskManager:
                 position = self.state_manager.get_position(symbol)
                 if position:
                     quantity = position.get('quantity', 0.0)
+                    # Use absolute quantity for exposure calculation
+                    quantity = abs(quantity)
                     position_value = quantity * current_price
                     if self.balance > 0:
                         return position_value / self.balance
@@ -189,6 +196,8 @@ class RiskManager:
                 total_value = 0.0
                 for row in rows:
                     quantity = row['quantity'] if row else 0.0
+                    # Use absolute quantity for exposure calculation
+                    quantity = abs(quantity)
                     entry_price = row['entry_price'] if row else 0.0
                     # Use entry_price as approximation if current_price not available for each symbol
                     total_value += quantity * (current_price if current_price else entry_price)

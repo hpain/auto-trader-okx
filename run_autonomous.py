@@ -26,6 +26,7 @@ from analysis.performance_monitor import PerformanceMonitor
 from tools.model_pipeline import run_training_pipeline
 from features.feature_engineering import generate_features
 from trader.risk_monitor import RiskMonitor
+from trader.risk_manager import RiskManager
 from trader.market_regime_detector import MarketRegimeDetector
 from trader.enhanced_monitor import get_enhanced_monitor
 from trader.slippage_monitor import get_slippage_monitor
@@ -144,8 +145,22 @@ class AutonomousTrader:
             self.logger.info("StateManager Initialized.")
         except Exception as e:
             self.logger.error(f"Failed to initialize StateManager: {e}. This is critical for operation.", exc_info=True)
+        except Exception as e:
+            self.logger.error(f"Failed to initialize StateManager: {e}. This is critical for operation.", exc_info=True)
             raise
         
+        # Initialize Risk Manager (Pre-trade checks)
+        try:
+            self.risk_manager = RiskManager(
+                balance=0.0, # Will be updated before checks
+                config=config,
+                db_path=config.get('paths', {}).get('database_path', 'trader_state.db'),
+                state_manager=self.state_manager
+            )
+            self.logger.info("RiskManager Initialized.")
+        except Exception as e:
+            self.logger.error(f"Failed to initialize RiskManager: {e}", exc_info=True)
+            self.risk_manager = None
         # Initialize Market Regime Detector
         try:
             self.market_regime_detector = MarketRegimeDetector()
@@ -260,12 +275,34 @@ class AutonomousTrader:
                 timeframe = self.trader_config.get('timeframe', '1h')
                 
                 candles = await self.exchange.fetch_candles(symbol, timeframe=timeframe, limit=limit)
-                if not candles:
+                
+                # DEBUG: Inspect candles type
+                # print(f"DEBUG: Fetched candles for {symbol}, type: {type(candles)}")
+                
+                is_df = isinstance(candles, pd.DataFrame)
+                if not is_df and hasattr(candles, 'columns') and hasattr(candles, 'empty'):
+                    is_df = True
+                
+                if is_df:
+                    if candles.empty:
+                        self.logger.warning(f"No candles fetched for {symbol}")
+                        continue
+                    df = candles
+                    if 'volume' in df.columns and 'vol' not in df.columns:
+                        df = df.rename(columns={'volume': 'vol'})
+                    if 'timestamp' not in df.columns and df.index.name == 'timestamp':
+                        df = df.reset_index()
+                elif not candles:
                     self.logger.warning(f"No candles fetched for {symbol}")
                     continue
-
-                df = pd.DataFrame(candles, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
-                df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
+                else:
+                    df = pd.DataFrame(candles, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+                
+                if not pd.api.types.is_datetime64_any_dtype(df['timestamp']):
+                    df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
+                
+                # Ensure timestamp is index for feature engineering
+                df = df.set_index('timestamp')
                 
                 # 特征工程
                 featured_df = generate_features(df)
@@ -571,20 +608,26 @@ class AutonomousTrader:
             if 'ATR_14' in all_featured_data[symbol].columns:
                 atr = all_featured_data[symbol]['ATR_14'].iloc[-1]
             
-            # 初始化 RiskManager
-            if not hasattr(self, 'risk_manager'):
-                 from trader.risk_manager import RiskManager
-                 self.risk_manager = RiskManager(
-                     balance=quote_balance, 
-                     config=self.config,
-                     state_manager=self.state_manager
-                 )
+            # 更新 RiskManager 余额
+            if self.risk_manager:
+                self.risk_manager.balance = quote_balance
 
             if signal == 1 and position_value < min_position_value:
                 self.logger.info(f"BUY signal for {symbol} and no significant position held (value: ${position_value:.2f}). Executing BUY order.")
                 
                 try:
                     quantity = trade_amount_quote / current_price
+                    
+                    # 风险检查
+                    if self.risk_manager:
+                        is_approved, reason = self.risk_manager.assess_trade(
+                            proposed_quantity=quantity,
+                            current_price=current_price,
+                            symbol=symbol
+                        )
+                        if not is_approved:
+                            self.logger.warning(f"Risk check failed for {symbol}: {reason}")
+                            continue
                     
                     # 计算止损止盈
                     stop_loss_price, take_profit_price = self.risk_manager.calculate_sl_tp(
@@ -673,11 +716,10 @@ class AutonomousTrader:
                         if hasattr(self, 'portfolio_manager') and self.portfolio_manager:
                             self.portfolio_manager.update_position(symbol, quantity, executed_buy_price)
                             
-                except Exception as e:
-                    self.logger.error(f"Failed to execute BUY order for {symbol}: {e}", exc_info=True)
-            elif signal == -1 and position_value > min_position_value:
-                self.logger.info(f"SELL signal for {symbol} and position held (value: ${position_value:.2f}). Executing SELL order.")
-                
+                            except Exception as e:
+                                self.logger.error(f"Failed to execute BUY order for {symbol}: {e}", exc_info=True)
+                            elif signal == -1 and position_value > min_position_value:  # 修复: 只有明确的卖出信号(-1)才卖出
+                                self.logger.info(f"SELL signal (-1) for {symbol} and position held (value: ${position_value:.2f}). Executing SELL order.")                
                 try:
                     # ========== 使用限价单 ==========
                     # 计算限价 (允许 0.2% 滑点,卖出时价格略低)
@@ -741,7 +783,7 @@ class AutonomousTrader:
                 except Exception as e:
                     self.logger.error(f"Failed to execute SELL order for {symbol}: {e}", exc_info=True)
             else:
-                self.logger.info(f"No action needed for {symbol} based on current signal ({signal}) and position ({base_balance}).")
+                self.logger.info(f"No action needed for {symbol}. Signal: {signal} (0=Hold), Position Value: ${position_value:.2f}")
 
     async def _execute_single_order(self, symbol: str, side: str, quantity: float, price: float):
         """
@@ -1110,21 +1152,26 @@ class AutonomousTrader:
                 self._check_and_reload_model()
                 
                 # 1. Sense
+                print("DEBUG: Entering SENSE stage...")
                 all_featured_data, regime_info, performance_kpis = await self.sense()
                 
                 if all_featured_data is not None:
                     # 2. Decide & Act
+                    print("DEBUG: Entering DECIDE & ACT stage...")
                     await self.decide_and_act(all_featured_data, regime_info)
                     
                     # 3. Learn (异步触发训练，不阻塞主循环)
+                    print("DEBUG: Entering LEARN stage...")
                     self.learn(performance_kpis, regime_info)
                     
                     # 4. Log Status
+                    print("DEBUG: Entering LOG STATUS stage...")
                     await self.log_portfolio_status()
                 
                 # Sleep for the interval
                 # 简单起见，这里固定休眠，实际应用可能需要更精确的定时
                 self.logger.info("Cycle completed. Sleeping for 60 seconds...")
+                print("DEBUG: Cycle completed. Sleeping...")
                 await asyncio.sleep(60)
 
             except KeyboardInterrupt:

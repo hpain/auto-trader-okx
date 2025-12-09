@@ -312,7 +312,7 @@ class EnhancedMonitor:
         report.append(f"  Consecutive Losses: {consecutive_losses}")
         
         return "\n".join(report)
-    
+
     def get_dashboard_data(self) -> Dict[str, Any]:
         """
         获取仪表板数据
@@ -338,10 +338,15 @@ class EnhancedMonitor:
             }
         }
 
+    def get_daily_pnl(self) -> float:
+        """
+        获取当日盈亏
+        """
+        return self.risk_monitor.trade_tracker.get_daily_pnl()
 
-# 全局实例
+
+
 _enhanced_monitor = None
-
 
 def get_enhanced_monitor(db_path: str = "trader_state.db") -> EnhancedMonitor:
     """

@@ -32,10 +32,12 @@ class LGBStrategy(BaseStrategy):
             
             self.features = metadata['feature_cols']
             self.buy_threshold = metadata.get('best_params', {}).get('confidence_threshold', 0.55)
+            # Add sell threshold (default to 0.45 or slightly lower than buy threshold)
+            self.sell_threshold = metadata.get('best_params', {}).get('sell_threshold', 0.45)
 
             print(f"INFO [{self.strategy_name}]: 模型已从 {self.model_path} 加载。")
             print(f"INFO [{self.strategy_name}]: 使用 {len(self.features)} 个特征。")
-            print(f"INFO [{self.strategy_name}]: 买入置信度门槛: {self.buy_threshold:.2f}")
+            print(f"INFO [{self.strategy_name}]: 买入置信度门槛: {self.buy_threshold:.2f}, 卖出置信度门槛: {self.sell_threshold:.2f}")
 
         except FileNotFoundError as e:
             self.model = None
@@ -74,16 +76,16 @@ class LGBStrategy(BaseStrategy):
             # probabilities将是一个二维数组，第二列是类别为1（上涨）的概率
             probabilities = self.model.predict_proba(X)[:, 1]
 
-            # 使用三态信号: 1=BUY, 0=HOLD, -1=SELL
-            # BUY: 上涨概率 > buy_threshold (默认 0.55)
-            # SELL: 上涨概率 < sell_threshold (默认 0.45, 即下跌概率 > 0.55)
-            # HOLD: 介于两者之间
-            sell_threshold = 1.0 - self.buy_threshold  # 如果 buy=0.55, 则 sell=0.45
-            
-            result_df['signal'] = np.where(
-                probabilities > self.buy_threshold, 1,  # BUY
-                np.where(probabilities < sell_threshold, -1, 0)  # SELL or HOLD
-            )
+            # 使用向量化操作根据阈值生成信号
+            # 1: Buy (Prob > Buy Threshold)
+            # -1: Sell (Prob < Sell Threshold)
+            # 0: Hold (Between thresholds)
+            conditions = [
+                (probabilities > self.buy_threshold),
+                (probabilities < self.sell_threshold)
+            ]
+            choices = [1, -1]
+            result_df['signal'] = np.select(conditions, choices, default=0)
             
         except Exception as e:
             print(f"ERROR [{self.strategy_name}]: 模型批量预测时发生错误: {e}")
