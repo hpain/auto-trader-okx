@@ -576,7 +576,8 @@ class AutonomousTrader:
                  from trader.risk_manager import RiskManager
                  self.risk_manager = RiskManager(
                      balance=quote_balance, 
-                     config=self.config
+                     config=self.config,
+                     state_manager=self.state_manager
                  )
 
             if signal == 1 and position_value < min_position_value:
@@ -674,13 +675,11 @@ class AutonomousTrader:
                             
                 except Exception as e:
                     self.logger.error(f"Failed to execute BUY order for {symbol}: {e}", exc_info=True)
-            elif signal == 0 and position_value > min_position_value:  # 修复: 使用价值判断
+            elif signal == -1 and position_value > min_position_value:
                 self.logger.info(f"SELL signal for {symbol} and position held (value: ${position_value:.2f}). Executing SELL order.")
                 
                 try:
-                    quantity = trade_amount_quote / current_price
-                    
-                    # ========== BUG FIX 2: 改用限价单 ==========
+                    # ========== 使用限价单 ==========
                     # 计算限价 (允许 0.2% 滑点,卖出时价格略低)
                     limit_price = current_price * 0.998
                     expected_sell_price = limit_price
@@ -689,16 +688,16 @@ class AutonomousTrader:
                     
                     order_result = await self.exchange.create_order(
                         symbol=symbol,
-                        order_type='limit',  # 改为限价单
+                        order_type='limit',
                         side='sell',
                         amount=base_balance,
                         price=limit_price
                     )
                     
-                    # ========== BUG FIX 4: 添加订单成功检查 ==========
+                    # 检查订单是否成功
                     if not order_result or (isinstance(order_result, dict) and order_result.get('code') and order_result.get('code') != '0'):
                         self.logger.error(f"❌ SELL order FAILED for {symbol}: {order_result}")
-                        return  # 订单失败,不更新持仓
+                        continue
                     
                     # 适配不同的返回格式
                     order_id = None
@@ -713,92 +712,6 @@ class AutonomousTrader:
                     if order_id:
                         self.logger.info(f"✅ SELL order placed successfully. Order ID: {order_id}")
                         
-                        # 记录订单到状态管理器，并完成交易记录
-                        # 检查滑点
-                        if hasattr(self, 'slippage_monitor') and self.slippage_monitor:
-                            slippage_result = self.slippage_monitor.monitor_trade_execution(
-                                symbol=symbol,
-                                side='sell',
-                                quantity=base_balance,
-                                expected_price=expected_sell_price,
-                                executed_price=executed_sell_price,
-                                exchange_interface=self.exchange
-                            )
-                            if slippage_result['is_excessive_slippage']:
-                                self.logger.warning(f"Excessive slippage in SELL order for {symbol}: {slippage_result['warning']}")
-                        
-                        # 使用StateManager的集成TradeTracker记录交易退出
-                        # 检查滑点
-                        if hasattr(self, 'slippage_monitor') and self.slippage_monitor:
-                            slippage_result = self.slippage_monitor.monitor_trade_execution(
-                                symbol=symbol,
-                                side='buy',
-                                quantity=quantity,
-                                expected_price=expected_buy_price,
-                                executed_price=executed_buy_price,
-                                exchange_interface=self.exchange
-                            )
-                            if slippage_result['is_excessive_slippage']:
-                                self.logger.warning(f"Excessive slippage in BUY order for {symbol}: {slippage_result['warning']}")
-                            elif not slippage_result['liquidity_ok']:
-                                self.logger.warning(f"Liquidity concern in BUY order for {symbol}: {slippage_result['warning']}")
-                        
-                        # 使用StateManager的集成TradeTracker记录交易进入
-                        self.state_manager.trade_tracker.record_trade_entry(
-                            trade_id=order_id,
-                            symbol=symbol,
-                            side='buy',
-                            entry_price=executed_buy_price,
-                            quantity=quantity
-                        )
-                        
-                        # 更新持仓
-                        self.state_manager.update_position(symbol, quantity, executed_buy_price)
-                        
-                        # 更新投资组合管理器中的持仓
-                        if hasattr(self, 'portfolio_manager') and self.portfolio_manager:
-                            self.portfolio_manager.update_position(symbol, quantity, executed_buy_price)
-                            
-                except Exception as e:
-                    self.logger.error(f"Failed to execute BUY order for {symbol}: {e}", exc_info=True)
-            elif signal == 0 and position_value > min_position_value:  # 修复: 使用价值判断
-                self.logger.info(f"SELL signal for {symbol} and position held (value: ${position_value:.2f}). Executing SELL order.")
-                
-                try:
-                    # ========== BUG FIX 2: 改用限价单 ==========
-                    # 计算限价 (允许 0.2% 滑点,卖出时价格略低)
-                    limit_price = current_price * 0.998
-                    expected_sell_price = limit_price
-                    
-                    self.logger.info(f"Placing LIMIT SELL order: {base_balance:.6f} {base_currency} @ ${limit_price:.2f}")
-                    
-                    order_result = await self.exchange.create_order(
-                        symbol=symbol,
-                        order_type='limit',  # 改为限价单
-                        side='sell',
-                        amount=base_balance,
-                        price=limit_price
-                    )
-                    
-                    # ========== BUG FIX 4: 添加订单成功检查 ==========
-                    if not order_result or (isinstance(order_result, dict) and order_result.get('code') and order_result.get('code') != '0'):
-                        self.logger.error(f"❌ SELL order FAILED for {symbol}: {order_result}")
-                        return  # 订单失败,不更新持仓
-                    
-                    # 适配不同的返回格式
-                    order_id = None
-                    executed_sell_price = limit_price
-                    
-                    if isinstance(order_result, dict):
-                        if 'data' in order_result and order_result['data']:
-                            order_id = order_result['data'][0]['ordId']
-                        elif 'id' in order_result:
-                            order_id = order_result['id']
-
-                    if order_id:
-                        self.logger.info(f"✅ SELL order placed successfully. Order ID: {order_id}")
-                        
-                        # 记录订单到状态管理器，并完成交易记录
                         # 检查滑点
                         if hasattr(self, 'slippage_monitor') and self.slippage_monitor:
                             slippage_result = self.slippage_monitor.monitor_trade_execution(
@@ -824,85 +737,6 @@ class AutonomousTrader:
                         # 更新投资组合管理器中的持仓
                         if hasattr(self, 'portfolio_manager') and self.portfolio_manager:
                             self.portfolio_manager.update_position(symbol, 0, 0)
-                    
-                    # ========== BUG FIX 4: 添加订单成功检查 ==========
-                    if not order_result or order_result.get('code') != '0':
-                        self.logger.error(f"❌ SELL order FAILED for {symbol}: {order_result}")
-                        return  # 订单失败,不更新持仓
-                    
-                    if not order_result.get('data'):
-                        self.logger.error(f"❌ SELL order returned no data for {symbol}")
-                        return
-                    
-                    order_id = order_result['data'][0]['ordId']
-                    self.logger.info(f"✅ SELL order placed successfully. Order ID: {order_id}")
-                    
-                    # 等待订单成交 (最多 30 秒)
-                    import time
-                    max_wait_time = 30
-                    wait_interval = 2
-                    elapsed_time = 0
-                    
-                    while elapsed_time < max_wait_time:
-                        time.sleep(wait_interval)
-                        elapsed_time += wait_interval
-                        
-                        try:
-                            order_status = self.exchange.get_order(order_id, symbol)
-                            status = order_status.get('state', 'unknown')
-                            
-                            if status == 'filled':
-                                # 订单已成交
-                                executed_sell_price = float(order_status.get('avgPx', limit_price))
-                                self.logger.info(f"✅ SELL order FILLED @ ${executed_sell_price:.2f}")
-                                break
-                            elif status in ['canceled', 'failed']:
-                                self.logger.warning(f"⚠️ SELL order {status}. Not updating position.")
-                                return
-                        except Exception as e:
-                            self.logger.error(f"Failed to check order status: {e}")
-                    else:
-                        # 超时未成交,取消订单
-                        self.logger.warning(f"⏱️ SELL order timeout after {max_wait_time}s. Canceling...")
-                        try:
-                            self.exchange.cancel_order(order_id, symbol)
-                            self.logger.info(f"❌ SELL order canceled due to timeout")
-                        except Exception as e:
-                            self.logger.error(f"Failed to cancel order: {e}")
-                        return
-                    # ========== END BUG FIX 2 & 4 ==========
-                    
-                    self.logger.info(f"SELL order for {symbol} executed. Result: {order_result}")
-                    
-                    # 记录订单到状态管理器，并完成交易记录
-
-                    # 检查滑点
-                    if hasattr(self, 'slippage_monitor') and self.slippage_monitor:
-                        slippage_result = self.slippage_monitor.monitor_trade_execution(
-                            symbol=symbol,
-                            side='sell',
-                            quantity=base_balance,
-                            expected_price=expected_sell_price,
-                            executed_price=executed_sell_price,
-                            exchange_interface=self.exchange
-                        )
-                        if slippage_result['is_excessive_slippage']:
-                            self.logger.warning(f"Excessive slippage in SELL order for {symbol}: {slippage_result['warning']}")
-                        elif not slippage_result['liquidity_ok']:
-                            self.logger.warning(f"Liquidity concern in SELL order for {symbol}: {slippage_result['warning']}")
-                    
-                    # 使用StateManager的集成TradeTracker记录交易退出
-                    self.state_manager.trade_tracker.record_trade_exit(
-                        trade_id=order_id,
-                        exit_price=executed_sell_price
-                    )
-                    
-                    # 更新持仓（清空持仓）
-                    self.state_manager.update_position(symbol, 0, 0)
-                    
-                    # 更新投资组合管理器中的持仓
-                    if hasattr(self, 'portfolio_manager') and self.portfolio_manager:
-                        self.portfolio_manager.update_position(symbol, 0, 0)
                             
                 except Exception as e:
                     self.logger.error(f"Failed to execute SELL order for {symbol}: {e}", exc_info=True)

@@ -74,12 +74,20 @@ class LGBStrategy(BaseStrategy):
             # probabilities将是一个二维数组，第二列是类别为1（上涨）的概率
             probabilities = self.model.predict_proba(X)[:, 1]
 
-            # 使用向量化操作根据阈值生成信号
-            result_df['signal'] = np.where(probabilities > self.buy_threshold, 1, 0)
+            # 使用三态信号: 1=BUY, 0=HOLD, -1=SELL
+            # BUY: 上涨概率 > buy_threshold (默认 0.55)
+            # SELL: 上涨概率 < sell_threshold (默认 0.45, 即下跌概率 > 0.55)
+            # HOLD: 介于两者之间
+            sell_threshold = 1.0 - self.buy_threshold  # 如果 buy=0.55, 则 sell=0.45
+            
+            result_df['signal'] = np.where(
+                probabilities > self.buy_threshold, 1,  # BUY
+                np.where(probabilities < sell_threshold, -1, 0)  # SELL or HOLD
+            )
             
         except Exception as e:
             print(f"ERROR [{self.strategy_name}]: 模型批量预测时发生错误: {e}")
-            # 出错时返回全零信号
+            # 出错时返回HOLD信号
             result_df['signal'] = 0
 
         return result_df

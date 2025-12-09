@@ -8,7 +8,7 @@ class RiskManager:
     """
     A comprehensive risk management module to check trade orders against predefined rules.
     """
-    def __init__(self, balance, config, db_path="trader_state.db"):
+    def __init__(self, balance, config, db_path="trader_state.db", state_manager=None):
         """
         Initializes the RiskManager.
 
@@ -16,10 +16,12 @@ class RiskManager:
         :param config: A dictionary containing risk management settings.
                        Expected keys: 'position_sizing', 'risk_management'.
         :param db_path: Path to the database for storing trade records
+        :param state_manager: Optional StateManager instance for position tracking
         """
         self.balance = balance
         self.config = config
         self.db_path = db_path
+        self.state_manager = state_manager
         
         # Position sizing configuration
         self.position_sizing_strategy = config.get('position_sizing', {}).get('strategy', 'fixed')
@@ -156,17 +158,48 @@ class RiskManager:
             logging.error(f"Failed to get consecutive losses count: {e}", exc_info=True)
             return 0
 
-    def _get_current_position_value(self, current_price):
+    def _get_current_position_value(self, current_price, symbol: str = None):
         """
         Get the current value of open positions relative to account balance.
         
         :param current_price: Current market price for the asset
+        :param symbol: Optional symbol to get position for. If None, gets total portfolio value.
         :return: Position value as a percentage of account balance
         """
-        # This would need integration with StateManager to get actual position
-        # For now, we'll return a placeholder - in a real implementation, 
-        # this would check the actual position from StateManager
-        return 0.0  # Placeholder implementation
+        if self.state_manager is None:
+            logging.warning("StateManager not available, cannot get position value")
+            return 0.0
+            
+        try:
+            if symbol:
+                # Get position for specific symbol
+                position = self.state_manager.get_position(symbol)
+                if position:
+                    quantity = position.get('quantity', 0.0)
+                    position_value = quantity * current_price
+                    if self.balance > 0:
+                        return position_value / self.balance
+                return 0.0
+            else:
+                # Get total position value across all symbols
+                # Query all positions from the database
+                self.state_manager.cursor.execute("SELECT * FROM positions")
+                rows = self.state_manager.cursor.fetchall()
+                
+                total_value = 0.0
+                for row in rows:
+                    quantity = row['quantity'] if row else 0.0
+                    entry_price = row['entry_price'] if row else 0.0
+                    # Use entry_price as approximation if current_price not available for each symbol
+                    total_value += quantity * (current_price if current_price else entry_price)
+                
+                if self.balance > 0:
+                    return total_value / self.balance
+                return 0.0
+                
+        except Exception as e:
+            logging.error(f"Failed to get position value: {e}", exc_info=True)
+            return 0.0
 
     def calculate_order_size(self, price):
         """
