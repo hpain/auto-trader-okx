@@ -90,63 +90,81 @@ def main():
         from exchange.factory import ExchangeFactory
         import asyncio
 
-        async def initialize_exchange_async():
-            return await ExchangeFactory.create_exchange('aggregated', sandbox=False)
-        
-        exchange_instance = asyncio.run(initialize_exchange_async())
-        
-        # Dictionary to hold all fetched dataframes
-        all_dfs = {}
-
-        for sym in all_symbols_to_fetch:
-            logging.info(f"Fetching historical data for {sym}...")
-            df_current_symbol = exchange_instance.fetch_historical_data(symbol=sym, timeframe=interval, years=args.years)
+        async def fetch_all_data_async():
+            """Async function to fetch all data from exchange."""
+            exchange_instance = await ExchangeFactory.create_exchange('aggregated', sandbox=False)
             
-            if df_current_symbol is None or df_current_symbol.empty:
-                logging.warning(f"WARN: Price data for {sym} is empty after fetching. Skipping this symbol.")
-                continue
-            
-            all_dfs[sym] = df_current_symbol
-        
-        if not all_dfs:
-            logging.error("FAIL: No price data available after fetching all symbols. Aborting.")
-            return
+            try:
+                # Dictionary to hold all fetched dataframes
+                all_dfs = {}
 
-        dfp = all_dfs.get(primary_symbol)
+                for sym in all_symbols_to_fetch:
+                    logging.info(f"Fetching historical data for {sym}...")
+                    df_current_symbol = await exchange_instance.fetch_historical_data(symbol=sym, timeframe=interval, years=args.years)
+                    
+                    if df_current_symbol is None or df_current_symbol.empty:
+                        logging.warning(f"WARN: Price data for {sym} is empty after fetching. Skipping this symbol.")
+                        continue
+                    
+                    all_dfs[sym] = df_current_symbol
+                
+                if not all_dfs:
+                    logging.error("FAIL: No price data available after fetching all symbols. Aborting.")
+                    return None, None, None, None
+
+                dfp = all_dfs.get(primary_symbol)
+                if dfp is None:
+                    logging.error(f"FAIL: Primary symbol {primary_symbol} data not found. Aborting.")
+                    return None, None, None, None
+
+                feature_dfs = {s: df for s, df in all_dfs.items() if s != primary_symbol}
+
+                # --- Fetch Derivatives Data ---
+                derivatives_dfs = {}
+                fetch_funding_rates_flag = config.get("derivatives_data", {}).get("fetch_funding_rates", False)
+                fetch_open_interest_flag = config.get("derivatives_data", {}).get("fetch_open_interest", False)
+
+                from datetime import datetime, timedelta
+                since_dt = datetime.utcnow() - timedelta(days=args.years * 365.25)
+                since_ms = int(since_dt.timestamp() * 1000)
+
+                if fetch_funding_rates_flag:
+                    try:
+                        funding_rates_df = await exchange_instance.fetch_funding_rates(symbol=primary_symbol, timeframe=interval, since=since_ms)
+                        if funding_rates_df is not None and not funding_rates_df.empty:
+                            derivatives_dfs['funding_rates'] = funding_rates_df
+                            logging.info(f"Fetched {len(funding_rates_df)} funding rates for {primary_symbol}.")
+                        else:
+                            logging.warning(f"No funding rates fetched for {primary_symbol}.")
+                    except Exception as e:
+                        logging.warning(f"Failed to fetch funding rates: {e}")
+                else:
+                    logging.info("Skipping funding rates fetching as per configuration.")
+
+                if fetch_open_interest_flag:
+                    try:
+                        open_interest_df = await exchange_instance.fetch_open_interest(symbol=primary_symbol, timeframe=interval, since=since_ms)
+                        if open_interest_df is not None and not open_interest_df.empty:
+                            derivatives_dfs['open_interest'] = open_interest_df
+                            logging.info(f"Fetched {len(open_interest_df)} open interest data for {primary_symbol}.")
+                        else:
+                            logging.warning(f"No open interest fetched for {primary_symbol}.")
+                    except Exception as e:
+                        logging.warning(f"Failed to fetch open interest: {e}")
+                else:
+                    logging.info("Skipping open interest fetching as per configuration.")
+                
+                return dfp, feature_dfs, derivatives_dfs, all_dfs
+            finally:
+                # Properly close exchange connections
+                if hasattr(exchange_instance, 'close'):
+                    await exchange_instance.close()
+        
+        # Run the async function
+        dfp, feature_dfs, derivatives_dfs, all_dfs = asyncio.run(fetch_all_data_async())
+        
         if dfp is None:
-            logging.error(f"FAIL: Primary symbol {primary_symbol} data not found. Aborting.")
             return
-
-        feature_dfs = {s: df for s, df in all_dfs.items() if s != primary_symbol}
-
-        # --- Fetch Derivatives Data ---
-        derivatives_dfs = {}
-        fetch_funding_rates_flag = config.get("derivatives_data", {}).get("fetch_funding_rates", False)
-        fetch_open_interest_flag = config.get("derivatives_data", {}).get("fetch_open_interest", False)
-
-        from datetime import datetime, timedelta
-        since_dt = datetime.utcnow() - timedelta(days=args.years * 365.25)
-        since_ms = int(since_dt.timestamp() * 1000)
-
-        if fetch_funding_rates_flag:
-            funding_rates_df = exchange_instance.fetch_funding_rates(symbol=primary_symbol, timeframe=interval, since=since_ms)
-            if not funding_rates_df.empty:
-                derivatives_dfs['funding_rates'] = funding_rates_df
-                logging.info(f"Fetched {len(funding_rates_df)} funding rates for {primary_symbol}.")
-            else:
-                logging.warning(f"No funding rates fetched for {primary_symbol}.")
-        else:
-            logging.info("Skipping funding rates fetching as per configuration.")
-
-        if fetch_open_interest_flag:
-            open_interest_df = exchange_instance.fetch_open_interest(symbol=primary_symbol, timeframe=interval, since=since_ms)
-            if not open_interest_df.empty:
-                derivatives_dfs['open_interest'] = open_interest_df
-                logging.info(f"Fetched {len(open_interest_df)} open interest data for {primary_symbol}.")
-            else:
-                logging.warning(f"No open interest fetched for {primary_symbol}.")
-        else:
-            logging.info("Skipping open interest fetching as per configuration.")
 
         # --- Fetch On-Chain Data ---
         from data.onchain import get_onchain_client
