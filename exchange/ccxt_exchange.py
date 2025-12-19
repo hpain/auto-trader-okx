@@ -145,7 +145,6 @@ class CcxtExchange(Exchange):
                 return pd.DataFrame()
 
             df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
-            df.rename(columns={'volume': 'vol'}, inplace=True)
             df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
             df.set_index('timestamp', inplace=True)
             return df
@@ -184,8 +183,7 @@ class CcxtExchange(Exchange):
         df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms', utc=True)
         df.set_index('timestamp', inplace=True)
         df.sort_index(inplace=True)
-        df.rename(columns={'volume': 'vol'}, inplace=True)
-        return df[['open', 'high', 'low', 'close', 'vol']]
+        return df[['open', 'high', 'low', 'close', 'volume']]
 
     async def get_balance(self, currency: str) -> float:
         try:

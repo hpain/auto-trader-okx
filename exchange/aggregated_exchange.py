@@ -25,14 +25,18 @@ class AggregatedExchange(Exchange):
             logger.info("Dune Analytics client also initialized.")
 
     @classmethod
-    async def create_async(cls, primary_exchange_id: str, secondary_exchange_ids: List[str], api_key: str = None, api_secret: str = None, passphrase: str = None, sandbox: bool = True, dune_api_key: str = None):
-        logger.info(f"Asynchronously creating AggregatedExchange for primary: {primary_exchange_id} and secondaries: {secondary_exchange_ids}")
+    async def create_async(cls, primary_exchange_id: str, secondary_exchange_ids: List[str], api_key: str = None, api_secret: str = None, passphrase: str = None, sandbox: bool = True, dune_api_key: str = None, mock: bool = False):
+        # Normalize exchange IDs to lowercase to ensure consistency
+        primary_exchange_id = primary_exchange_id.lower()
+        secondary_exchange_ids = [eid.lower() for eid in secondary_exchange_ids]
+
+        logger.info(f"Asynchronously creating AggregatedExchange for primary: {primary_exchange_id} and secondaries: {secondary_exchange_ids} (Mock: {mock})")
         
         all_exchange_ids = list(set([primary_exchange_id] + secondary_exchange_ids))
         
         # Create coroutines for all exchange creations
-        spot_creation_tasks = [ExchangeFactory.create_exchange(ex_id, market_type='spot', api_key=None, api_secret=None, passphrase=None, sandbox=sandbox) for ex_id in all_exchange_ids]
-        swap_creation_tasks = [ExchangeFactory.create_exchange(ex_id, market_type='swap', api_key=None, api_secret=None, passphrase=None, sandbox=sandbox) for ex_id in all_exchange_ids]
+        spot_creation_tasks = [ExchangeFactory.create_exchange(ex_id, market_type='spot', api_key=None, api_secret=None, passphrase=None, sandbox=sandbox, mock=mock) for ex_id in all_exchange_ids]
+        swap_creation_tasks = [ExchangeFactory.create_exchange(ex_id, market_type='swap', api_key=None, api_secret=None, passphrase=None, sandbox=sandbox, mock=mock) for ex_id in all_exchange_ids]
 
         # Await them concurrently
         spot_exchanges = await asyncio.gather(*spot_creation_tasks)
@@ -57,6 +61,9 @@ class AggregatedExchange(Exchange):
         primary_spot_exchange = next((ex for ex in spot_exchanges if ex.exchange_id == primary_exchange_id), None)
 
         if not primary_spot_exchange:
+            # Debug info to help diagnose mismatch
+            available_ids = [ex.exchange_id for ex in spot_exchanges]
+            logger.error(f"Primary exchange '{primary_exchange_id}' not found in available spot exchanges: {available_ids}")
             raise ConnectionError(f"Failed to initialize primary SPOT exchange {primary_exchange_id}")
 
         return cls(primary_spot_exchange, spot_exchanges, swap_exchanges, dune_client)
@@ -125,7 +132,7 @@ class AggregatedExchange(Exchange):
             'high': grouped['high'].max(),
             'low': grouped['low'].min(),
             'close': grouped['close'].mean(),
-            'vol': grouped['vol'].sum()
+            'volume': grouped['volume'].sum()
         })
         logger.debug(f"Aggregated {len(dfs)} dataframes into one.")
         return agg_df
@@ -356,4 +363,3 @@ class AggregatedExchange(Exchange):
         
         logger.critical("HEDGE FAILED: Could not execute hedge order on ANY secondary exchange!")
         return None
-

@@ -11,6 +11,7 @@ from strategies.lgb_strategy import LGBStrategy
 from strategies.moving_average import MovingAverageStrategy
 from strategies.mean_reversion_strategy import MeanReversionStrategy
 from strategies.arbitrage_strategy import ArbitrageStrategy
+from trader.market_regime_detector import MarketRegimeDetector
 
 
 class StrategyManager:
@@ -18,18 +19,35 @@ class StrategyManager:
     策略管理器，用于管理和根据市场条件切换不同的交易策略
     """
     
-    def __init__(self, config: Dict[str, Any]):
+    def __init__(self, config: Dict[str, Any] = None, strategies: List[BaseStrategy] = None):
         """
         初始化策略管理器
-        :param config: 配置字典
+        :param config: 配置字典 (可选)
+        :param strategies: 预初始化的策略列表 (可选，优先使用)
         """
         self.logger = logging.getLogger(__name__)
-        self.config = config
+        self.config = config or {}
         self.strategies: Dict[str, BaseStrategy] = {}
         self.active_strategy: Optional[str] = None
         self.strategy_performance: Dict[str, List[Dict]] = {}
         
-        self._initialize_strategies()
+        # 初始化市场状态检测器
+        self.regime_detector = MarketRegimeDetector()
+        
+        if strategies:
+            for strategy in strategies:
+                self.strategies[strategy.strategy_name] = strategy
+                self.strategy_performance[strategy.strategy_name] = []
+                self.logger.info(f"Registered strategy: {strategy.strategy_name}")
+            
+            # 设置默认激活策略为列表中的第一个
+            if strategies:
+                self.active_strategy = strategies[0].strategy_name
+                self.logger.info(f"Set default active strategy: {self.active_strategy}")
+        elif self.config:
+            self._initialize_strategies()
+        else:
+            self.logger.warning("StrategyManager initialized with no config and no strategies.")
         
     def _initialize_strategies(self):
         """
@@ -142,21 +160,82 @@ class StrategyManager:
         """
         return self.active_strategy
     
-    def switch_strategy(self, strategy_name: str) -> bool:
+    def switch_strategy(self, strategy_name: str, logger: Optional[Any] = None) -> bool:
         """
         切换到指定策略
         :param strategy_name: 要切换到的策略名称
+        :param logger: 可选的日志记录器
         :return: 是否切换成功
         """
         if strategy_name in self.strategies:
             old_strategy = self.active_strategy
             self.active_strategy = strategy_name
-            self.logger.info(f"Switched strategy from {old_strategy} to {strategy_name}")
+            msg = f"Switched strategy from {old_strategy} to {strategy_name}"
+            self.logger.info(msg)
+            if logger and hasattr(logger, 'add_info'):
+                logger.add_info(msg)
             return True
         else:
-            self.logger.error(f"Cannot switch to strategy {strategy_name}, it does not exist")
+            msg = f"Cannot switch to strategy {strategy_name}, it does not exist"
+            self.logger.error(msg)
+            if logger and hasattr(logger, 'add_error'):
+                logger.add_error(msg)
             return False
-    
+
+    def analyze_market_regime(self, data: pd.DataFrame, logger: Optional[Any] = None) -> Dict[str, Any]:
+        """
+        分析市场状态 (Market Regime)
+        Using the integrated MarketRegimeDetector.
+        """
+        regime_info = self.regime_detector.detect_regime(data)
+        
+        if logger and hasattr(logger, 'add_info'):
+            logger.add_info(f"Market Regime Analysis: {regime_info}")
+            
+        return regime_info
+
+    def get_recommended_strategy(self, regime_info: Dict[str, Any], logger: Optional[Any] = None) -> str:
+        """
+        根据市场状态推荐策略
+        """
+        recommended, reason = self.regime_detector.recommend_strategy(regime_info)
+        
+        # Check if recommended strategy exists in our pool
+        # This mapping might need to be more sophisticated if strategy names don't match exactly
+        # Currently, the detector returns simple names like 'ma_fast', 'lgb'
+        # We need to find the best match in self.strategies
+        
+        best_match = None
+        
+        # Direct match check
+        if recommended in self.strategies:
+            best_match = recommended
+        
+        # Partial match check (e.g. 'lgb' matches 'LGB_Main')
+        if not best_match:
+            for strat_name in self.strategies.keys():
+                if recommended.lower() in strat_name.lower():
+                    best_match = strat_name
+                    break
+        
+        # Fallback to current active or first available
+        if not best_match:
+            best_match = self.active_strategy if self.active_strategy else (list(self.strategies.keys())[0] if self.strategies else None)
+            reason += " (Recommended strategy not found, using fallback)"
+
+        if logger and hasattr(logger, 'add_decision_info'):
+            logger.add_decision_info(recommended_strategy=best_match, reason=reason)
+            
+        return best_match
+
+    def get_active_strategies(self) -> List[BaseStrategy]:
+        """
+        获取当前激活的策略实例列表
+        """
+        if self.active_strategy and self.active_strategy in self.strategies:
+            return [self.strategies[self.active_strategy]]
+        return []
+
     def evaluate_strategy_performance(self, strategy_name: str, returns: pd.Series) -> Dict[str, float]:
         """
         评估特定策略的性能

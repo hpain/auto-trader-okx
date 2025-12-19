@@ -5,19 +5,21 @@ from datetime import datetime, timedelta
 import logging
 
 class MockExchange:
-    def __init__(self, api_key=None, api_secret=None, passphrase=None, sandbox=True):
+    def __init__(self, exchange_id='mock', market_type='spot', api_key=None, api_secret=None, passphrase=None, sandbox=True, **kwargs):
         self.logger = logging.getLogger(__name__)
-        self.logger.info("Initializing MockExchange...")
+        self.exchange_id = exchange_id # Assign exchange_id
+        self.market_type = market_type # Assign market_type
+        self.logger.info(f"Initializing MockExchange ({self.exchange_id}, {self.market_type})...")
         self.sandbox = sandbox
-        self.balance = {'USDT': 10000.0, 'BTC': 0.1}
+        self.balance = {'USDT': 10000.0, 'BTC': 0.1, 'ETH': 1.0} # Added ETH for multi-asset testing
         self.current_price = 50000.0
         self.orders = {}
 
     async def load(self):
         self.logger.info("MockExchange loaded.")
 
-    async def fetch_candles(self, symbol, timeframe='1H', limit=100):
-        self.logger.info(f"Mock fetching candles for {symbol} {timeframe} limit={limit}")
+    async def fetch_candles(self, symbol, timeframe='1H', since=None, limit=100, **kwargs):
+        self.logger.info(f"Mock fetching candles for {symbol} {timeframe} since={since} limit={limit}")
         # Generate random OHLCV data
         end_time = datetime.utcnow()
         if timeframe == '1H':
@@ -43,7 +45,7 @@ class MockExchange:
         
         self.current_price = price # Update current price
         
-        df = pd.DataFrame(data, columns=['timestamp', 'open', 'high', 'low', 'close', 'vol'])
+        df = pd.DataFrame(data, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
         df.set_index('timestamp', inplace=True)
         return df
 
@@ -62,7 +64,13 @@ class MockExchange:
         order_id = f"mock_order_{datetime.utcnow().timestamp()}"
         
         # Update mock balance
-        base, quote = symbol.split('-')
+        if '-' in symbol:
+            base, quote = symbol.split('-')
+        elif '/' in symbol:
+            base, quote = symbol.split('/')
+        else:
+            self.logger.warning(f"Mock order warning: Could not parse symbol {symbol}")
+            base, quote = symbol, 'USDT' # Fallback
         if side == 'buy':
             cost = amount * self.current_price
             if self.balance.get(quote, 0) >= cost:

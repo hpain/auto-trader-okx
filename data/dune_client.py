@@ -1,8 +1,18 @@
 import os
 import pandas as pd
-from dune_client.client import DuneClient
-from dune_client.query import QueryBase, QueryParameter
 from dotenv import load_dotenv
+
+# Optional import for DuneClient
+try:
+    from dune_client.client import DuneClient
+    from dune_client.query import QueryBase, QueryParameter
+    DUNE_AVAILABLE = True
+except ImportError:
+    DuneClient = None
+    QueryBase = None
+    QueryParameter = None
+    DUNE_AVAILABLE = False
+    print("Warning: 'dune-client' library not found. Dune Analytics integration will be disabled.")
 
 load_dotenv()
 
@@ -19,29 +29,31 @@ class DuneAnalyticsClient:
             api_key (str, optional): The Dune Analytics API key. 
                                      If not provided, it will be read from the DUNE_API_KEY environment variable.
         """
+        if not DUNE_AVAILABLE:
+            self.client = None
+            print("DuneClient is not available (library missing).")
+            return
+
         self.api_key = api_key or os.getenv("DUNE_API_KEY")
         if not self.api_key:
-            raise ValueError("Dune API key not provided. Please set the DUNE_API_KEY environment variable.")
+            # Instead of raising error, just warn and disable
+             print("Warning: Dune API key not provided. Dune integration disabled.")
+             self.client = None
+             return
+
         self.client = DuneClient(self.api_key)
 
     def get_query_results(self, query_id: int, params: dict = None) -> pd.DataFrame:
         """
         Executes a Dune Analytics query and returns the results as a Pandas DataFrame.
-
-        Args:
-            query_id (int): The ID of the query to execute.
-            params (dict, optional): A dictionary of parameters to pass to the query. 
-                                     The keys should be the parameter names and the values should be the parameter values.
-
-        Returns:
-            pd.DataFrame: A DataFrame containing the query results.
         """
+        if not self.client:
+            print("DuneClient not initialized. Returning empty DataFrame.")
+            return pd.DataFrame()
+        
         query_params = []
         if params:
             for name, value in params.items():
-                # The dune-client library requires specifying the type of the parameter.
-                # This is a simple implementation that assumes text type for all parameters.
-                # You might need to adjust this based on your query's parameter types.
                 query_params.append(QueryParameter.text_type(name=name, value=str(value)))
 
         query = QueryBase(
@@ -56,6 +68,7 @@ class DuneAnalyticsClient:
         except Exception as e:
             print(f"An error occurred while fetching query results: {e}")
             return pd.DataFrame()
+
 
 if __name__ == '__main__':
     # Example usage:

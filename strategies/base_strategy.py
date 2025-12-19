@@ -81,7 +81,7 @@ class BaseStrategy(ABC):
                 processed_data.set_index('timestamp', inplace=True)
         
         # 处理缺失值
-        processed_data.fillna(method='ffill', inplace=True)
+        processed_data.ffill(inplace=True)
         processed_data.fillna(0, inplace=True)
         
         return processed_data

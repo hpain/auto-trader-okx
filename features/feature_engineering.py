@@ -150,7 +150,7 @@ def _generate_programmatic_features(df: pd.DataFrame) -> pd.DataFrame:
     temp_df_base_lag["return"] = calc_df["close"].pct_change()
     for lag in lag_windows:
         temp_df_base_lag[f'return_lag_{lag}'] = temp_df_base_lag['return'].shift(lag)
-        temp_df_base_lag[f'vol_lag_{lag}'] = calc_df['vol'].shift(lag)
+        temp_df_base_lag[f'vol_lag_{lag}'] = calc_df['volume'].shift(lag)
     new_features_dfs.append(temp_df_base_lag)
 
     # --- Moving Averages & Spreads ---
@@ -229,15 +229,15 @@ def _generate_programmatic_features(df: pd.DataFrame) -> pd.DataFrame:
 
     # --- Volume Indicators ---
     temp_df_volume = pd.DataFrame(index=calc_df.index)
-    temp_df_volume["obv"] = ta.volume.OnBalanceVolumeIndicator(close=calc_df["close"], volume=calc_df["vol"]).on_balance_volume()
+    temp_df_volume["obv"] = ta.volume.OnBalanceVolumeIndicator(close=calc_df["close"], volume=calc_df["volume"]).on_balance_volume()
     for window in other_indicator_windows:
         # --- 核心修复：增加数据长度检查 ---
         if len(calc_df) >= window:
             temp_df_volume[f'mfi_{window}'] = ta.volume.MFIIndicator(
-                high=calc_df["high"], low=calc_df["low"], close=calc_df["close"], volume=calc_df["vol"], window=window
+                high=calc_df["high"], low=calc_df["low"], close=calc_df["close"], volume=calc_df["volume"], window=window
             ).money_flow_index()
             temp_df_volume[f'cmf_{window}'] = ta.volume.ChaikinMoneyFlowIndicator(
-                high=calc_df["high"], low=calc_df["low"], close=calc_df["close"], volume=calc_df["vol"], window=window
+                high=calc_df["high"], low=calc_df["low"], close=calc_df["close"], volume=calc_df["volume"], window=window
             ).chaikin_money_flow()
     new_features_dfs.append(temp_df_volume)
 
@@ -339,7 +339,7 @@ def generate_features(df: pd.DataFrame, news_csv_path: str = None, mined_feature
     out = df.copy()
     
     # Check for required columns
-    for col in ["open", "high", "low", "close", "vol"]:
+    for col in ["open", "high", "low", "close", "volume"]:
         if col not in out.columns:
             if col not in df.columns:
                 raise ValueError(f"DataFrame must contain column: {col}")

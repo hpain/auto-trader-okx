@@ -90,6 +90,28 @@ class CycleLogger:
     def set_status(self, status: str):
         self.log_data['status'] = status
 
+    def add_info(self, message: str):
+        """Generic info logging for the cycle."""
+        if 'info' not in self.log_data:
+            self.log_data['info'] = []
+        self.log_data['info'].append(message)
+        # Also log to standard logger for immediate visibility
+        self.logger.info(f"[Cycle {self.cycle_id}] {message}")
+
+    def add_warning(self, message: str):
+        """Generic warning logging for the cycle."""
+        if 'warnings' not in self.log_data:
+            self.log_data['warnings'] = []
+        self.log_data['warnings'].append(message)
+        self.logger.warning(f"[Cycle {self.cycle_id}] {message}")
+
+    def add_error(self, message: str):
+        """Generic error logging for the cycle."""
+        if 'errors' not in self.log_data:
+            self.log_data['errors'] = []
+        self.log_data['errors'].append(message)
+        self.logger.error(f"[Cycle {self.cycle_id}] {message}")
+
     def add_decision_info(self, **kwargs):
         self.log_data['decision'].update(kwargs)
 

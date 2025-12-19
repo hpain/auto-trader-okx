@@ -30,7 +30,8 @@ class ExchangeFactory:
 
         mock = kwargs.pop('mock', False)
         if mock:
-            return MockExchange(**kwargs)
+            # Pass exchange_id and market_type to MockExchange
+            return MockExchange(exchange_id=exchange_id, market_type=market_type, **kwargs)
 
         # Auto-load credentials from env if not provided
         if 'api_key' not in kwargs or not kwargs['api_key']:

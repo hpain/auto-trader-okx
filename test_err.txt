@@ -1,0 +1,65 @@
+2025-12-19 20:41:12,123 - INFO - Asynchronously creating AggregatedExchange for primary: binance and secondaries: ['okx', 'bybit'] (Mock: True)
+2025-12-19 20:41:12,124 - INFO - Creating exchange for id: 'binance' (market_type: spot)
+2025-12-19 20:41:12,125 - INFO - Initializing MockExchange (binance, spot)...
+2025-12-19 20:41:12,125 - INFO - Creating exchange for id: 'bybit' (market_type: spot)
+2025-12-19 20:41:12,125 - INFO - Initializing MockExchange (bybit, spot)...
+2025-12-19 20:41:12,126 - INFO - Creating exchange for id: 'okx' (market_type: spot)
+2025-12-19 20:41:12,126 - INFO - Initializing MockExchange (okx, spot)...
+2025-12-19 20:41:12,127 - INFO - Creating exchange for id: 'binance' (market_type: swap)
+2025-12-19 20:41:12,127 - INFO - Initializing MockExchange (binance, swap)...
+2025-12-19 20:41:12,127 - INFO - Creating exchange for id: 'bybit' (market_type: swap)
+2025-12-19 20:41:12,128 - INFO - Initializing MockExchange (bybit, swap)...
+2025-12-19 20:41:12,128 - INFO - Creating exchange for id: 'okx' (market_type: swap)
+2025-12-19 20:41:12,128 - INFO - Initializing MockExchange (okx, swap)...
+2025-12-19 20:41:12,129 - INFO - Loading markets for 6 exchange instances...
+2025-12-19 20:41:12,129 - INFO - MockExchange loaded.
+2025-12-19 20:41:12,129 - INFO - MockExchange loaded.
+2025-12-19 20:41:12,130 - INFO - MockExchange loaded.
+2025-12-19 20:41:12,130 - INFO - MockExchange loaded.
+2025-12-19 20:41:12,130 - INFO - MockExchange loaded.
+2025-12-19 20:41:12,131 - INFO - MockExchange loaded.
+2025-12-19 20:41:12,132 - INFO - Market loading complete.
+2025-12-19 20:41:12,133 - INFO - AggregatedExchange initialized with 3 spot and 3 swap exchanges.
+2025-12-19 20:41:12,133 - INFO - MovingAverageStrategy initialized with parameters:
+2025-12-19 20:41:12,133 - INFO -   Short window: 10
+2025-12-19 20:41:12,134 - INFO -   Long window: 30
+2025-12-19 20:41:12,134 - INFO - MovingAverageStrategy initialized with parameters:
+2025-12-19 20:41:12,134 - INFO -   Short window: 20
+2025-12-19 20:41:12,135 - INFO -   Long window: 60
+C:\Users\hk\AppData\Local\Packages\PythonSoftwareFoundation.Python.3.13_qbz5n2kfra8p0\LocalCache\local-packages\Python313\site-packages\sklearn\base.py:442: InconsistentVersionWarning: Trying to unpickle estimator LabelEncoder from version 1.1.3 when using version 1.7.2. This might lead to breaking code or invalid results. Use at your own risk. For more info please refer to:
+https://scikit-learn.org/stable/model_persistence.html#security-maintainability-limitations
+  warnings.warn(
+2025-12-19 20:41:15,563 - INFO - Querying 3 SPOT sources for recent candles: ['MockExchange', 'MockExchange', 'MockExchange']
+2025-12-19 20:41:15,564 - INFO - Mock fetching candles for BTC-USDT 1H since=None limit=200
+2025-12-19 20:41:15,594 - INFO - OK: Successfully fetched 200 candles from MockExchange for BTC-USDT
+2025-12-19 20:41:15,595 - INFO - Mock fetching candles for BTC-USDT 1H since=None limit=200
+2025-12-19 20:41:15,599 - INFO - OK: Successfully fetched 200 candles from MockExchange for BTC-USDT
+2025-12-19 20:41:15,600 - INFO - Mock fetching candles for BTC-USDT 1H since=None limit=200
+2025-12-19 20:41:15,606 - INFO - OK: Successfully fetched 200 candles from MockExchange for BTC-USDT
+2025-12-19 20:41:15,606 - INFO - Fusing data from 3 sources: ['MockExchange', 'MockExchange', 'MockExchange']
+2025-12-19 20:41:16,217 - INFO - Querying 3 SPOT sources for recent candles: ['MockExchange', 'MockExchange', 'MockExchange']
+2025-12-19 20:41:16,217 - INFO - Mock fetching candles for ETH-USDT 1H since=None limit=200
+2025-12-19 20:41:16,224 - INFO - OK: Successfully fetched 200 candles from MockExchange for ETH-USDT
+2025-12-19 20:41:16,224 - INFO - Mock fetching candles for ETH-USDT 1H since=None limit=200
+2025-12-19 20:41:16,229 - INFO - OK: Successfully fetched 200 candles from MockExchange for ETH-USDT
+2025-12-19 20:41:16,229 - INFO - Mock fetching candles for ETH-USDT 1H since=None limit=200
+2025-12-19 20:41:16,235 - INFO - OK: Successfully fetched 200 candles from MockExchange for ETH-USDT
+2025-12-19 20:41:16,236 - INFO - Fusing data from 3 sources: ['MockExchange', 'MockExchange', 'MockExchange']
+2025-12-19 20:41:16,810 - INFO - [Cycle 2025-12-19T12:41:15.559123+00:00] Market regime detected: high_volatility - High volatility market (vol=2.372), uncertain direction
+2025-12-19 20:41:16,813 - INFO - Market regime: high_volatility, High volatility market (vol=2.372), uncertain direction
+2025-12-19 20:41:16,814 - INFO - [Cycle 2025-12-19T12:41:15.559123+00:00] Recommended strategy: ma_fast - High volatility - Use fast MA for quick entries/exits
+2025-12-19 20:41:16,814 - INFO - Recommended strategy: ma_fast - High volatility - Use fast MA for quick entries/exits
+2025-12-19 20:41:16,814 - INFO - [Cycle 2025-12-19T12:41:15.559123+00:00] Recommended strategy not available, using: MA_10_30
+2025-12-19 20:41:16,815 - INFO - [Cycle 2025-12-19T12:41:15.559123+00:00] Switched strategy from ['MA_10_30', 'MA_20_60', 'LGB_Main'] to MA_10_30
+2025-12-19 20:41:16,815 - INFO - Strategy switched from ['MA_10_30', 'MA_20_60', 'LGB_Main'] to MA_10_30
+2025-12-19 20:41:16,818 - INFO - [Cycle 2025-12-19T12:41:15.559123+00:00] Market regime detected: high_volatility - High volatility market (vol=21.616), uncertain direction
+2025-12-19 20:41:16,819 - INFO - Market regime: high_volatility, High volatility market (vol=21.616), uncertain direction
+2025-12-19 20:41:16,819 - INFO - [Cycle 2025-12-19T12:41:15.559123+00:00] Recommended strategy: ma_fast - High volatility - Use fast MA for quick entries/exits
+2025-12-19 20:41:16,820 - INFO - Recommended strategy: ma_fast - High volatility - Use fast MA for quick entries/exits
+2025-12-19 20:41:16,820 - INFO - [Cycle 2025-12-19T12:41:15.559123+00:00] Recommended strategy not available, using: MA_10_30
+2025-12-19 20:41:16,820 - INFO - [Cycle 2025-12-19T12:41:15.559123+00:00] Switched strategy from ['MA_10_30'] to MA_10_30
+2025-12-19 20:41:16,821 - INFO - Strategy switched from ['MA_10_30'] to MA_10_30
+2025-12-19 20:41:16,822 - INFO - [Cycle 2025-12-19T12:41:15.559123+00:00] Starting portfolio rebalance process
+2025-12-19 20:41:16,823 - ERROR - Missing required columns: ['volume']
+2025-12-19 20:41:16,825 - ERROR - Missing required columns: ['volume']
+2025-12-19 20:41:16,826 - INFO - [Cycle 2025-12-19T12:41:15.559123+00:00] Generated 0 trade orders: []

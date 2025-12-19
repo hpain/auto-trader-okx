@@ -7,39 +7,52 @@ exchange:
     - 'okx'
     - 'bybit'
 
+exchanges:
+  - 'binance'
+  - 'okx'
+  - 'bybit'
+
+# ==============================================================================
+# Derivatives Data Configuration
+# ==============================================================================
+derivatives_data:
+  fetch_funding_rates: true
+  fetch_open_interest: true
+
 # ==============================================================================
 # OKX API Configuration
 # ==============================================================================
 okx:
-  api_key: "YOUR_API_KEY" # Preserved from current settings.yaml
-  secret_key: "YOUR_SECRET_KEY" # Preserved from current settings.yaml
-  passphrase: "YOUR_PASSPHRASE" # Preserved from current settings.yaml
-  sandbox: True # Preserved from current settings.yaml
-  flag: "0" # New from example, default value
+  api_key: "YOUR_API_KEY"
+  secret_key: "YOUR_SECRET_KEY"
+  passphrase: "YOUR_PASSPHRASE"
+  # flag: "1" for live trading, "0" for demo/paper trading
+  flag: "0"
 
 # ==============================================================================
 # General Trading Parameters
 # ==============================================================================
 trading:
-  symbol: "BTC-USDT" # Preserved from current settings.yaml (trader.symbol)
-  interval: "1H" # Preserved from current settings.yaml (trader.interval)
-  strategy: "ml" # New from example, default value
-  feature_pairs:
-    - "ETH-USDT"
-    - "SOL-USDT"
-
+  symbols: 
+    - "BTC/USDT"
+    - "ETH/USDT"
+  interval: "1H"
+  strategy: "ml" 
 
 # ==============================================================================
 # Position Sizing & Risk Management
 # ==============================================================================
 position_sizing:
-  strategy: "fixed" # From example
-  fixed_quantity: 100 # Mapped from current settings.yaml (trader.trade_amount_quote)
-  risk_per_trade: 0.01 # From example
+  # Strategy: 'fixed' or 'fractional'
+  strategy: "fractional"
+  # Used if strategy is 'fixed'
+  fixed_quantity: 0.001
+  # Used if strategy is 'fractional'
+  risk_per_trade: 0.02 # 2% of total equity ($20 for $1000 account)
 
 risk_management:
-  stop_loss_pct: 0.02 # From example
-  take_profit_pct: 0.05 # From example
+  stop_loss_pct: 0.02  # 2%
+  take_profit_pct: 0.05 # 5%
 
 # ==============================================================================
 # Strategy-Specific Parameters
@@ -92,62 +105,6 @@ backtest:
     - "DOT-USDT"
 
 # ==============================================================================
-# Derivatives Data Configuration
-# ==============================================================================
-derivatives_data:
-  fetch_funding_rates: False
-  fetch_open_interest: False
-
-# ==============================================================================
-# On-Chain Data Configuration
-# ==============================================================================
-onchain_data:
-  provider: "dune" # Can be "dune" or "glassnode"
-  enabled: True
-  api_key: "YOUR_DUNE_API_KEY" # Set your Dune API key here or via DUNE_API_KEY environment variable
-  
-  dune:
-    queries_to_fetch:
-      # - name: 'btc_exchange_netflow'
-      #   # query_id: 2222490 # 已禁用 query_id
-      #   sql: |
-      #     -- 最终修复：使用一个真实、有效的 SQL 查询来获取 BTC 交易所净流量
-      #     -- 这个查询统计了已知交易所地址的比特币流入和流出量
-      #     WITH cex_labels AS (
-      #         SELECT address, name
-      #         FROM labels.labels
-      #         WHERE "type" = 'cex'
-      #     )
-      #     SELECT * FROM dune.bitcoin.get_daily_net_flows(
-      #         ARRAY(SELECT address FROM cex_labels)
-      #     );
-
-      - name: 'eth_large_transactions_sql'
-        # 方法2: 直接在配置文件中编写原始 SQL 查询
-        sql: |
-          SELECT
-            block_time,
-            hash,
-            "from",
-            "to",
-            value / 1e18 AS eth_value
-          FROM ethereum.transactions
-          WHERE block_time >= NOW() - INTERVAL '7' DAY
-            AND value / 1e18 >= 1000
-          ORDER BY value DESC
-          LIMIT 100;
-
-  glassnode:
-    api_key: "YOUR_GLASSNODE_API_KEY" # Recommended to set via environment variable 'GLASSNODE_API_KEY'
-    metrics_to_fetch:
-      - path: 'metrics/exchange/net_position_change'
-        name: 'exchange_net_position_change'
-        resolution: '24h'
-      - path: 'metrics/hodlers/net_position_change'
-        name: 'hodler_net_position_change'
-        resolution: '24h'
-
-# ==============================================================================
 # File System Paths
 # ==============================================================================
 paths:
@@ -159,11 +116,14 @@ paths:
 # Risk Monitoring & Alerting Configuration
 # ==============================================================================
 risk_monitoring:
-  daily_loss_threshold: -500.0
-  max_drawdown_threshold: -15.0 # Mapped from current settings.yaml (trader.kpi_thresholds.max_drawdown_pct)
-  max_consecutive_losses: 5
-  max_single_loss_pct: -0.03
-  min_account_balance: 1000.0
+  # Risk thresholds for monitoring
+  daily_loss_threshold: -20.0    # Maximum daily loss (2% of 1000)
+  max_drawdown_threshold: 0.10    # Maximum drawdown (10%)
+  max_consecutive_losses: 5       # Maximum consecutive losing trades
+  max_single_loss_pct: -0.03      # Maximum single trade loss percentage (-3%)
+  min_account_balance: 900.0      # Stop if balance falls below 900
+
+  # Email alerting configuration
   email:
     smtp_server: "smtp.gmail.com"
     smtp_port: 587
@@ -171,34 +131,56 @@ risk_monitoring:
     password: "your_app_password"
     recipients:
       - "admin@yourcompany.com"
-      - "risk@yourcompany.com"
 
 # ==============================================================================
 # Strategy Management Configuration
 # ==============================================================================
 strategy_management:
   enabled_strategies:
-    - "lgb"
-    - "ma_fast"
-    - "ma_slow"
+    - "lgb"        # Main ML strategy
+    - "ma_fast"    # Fast mean reversion strategy
+    - "ma_slow"    # Slow trend following strategy
+  
   lgb_strategy:
     model_dir: "models"
     model_name: "best_model.pkl"
     metadata_name: "metadata.json"
+  
   ma_fast_strategy:
     short_window: 5
     long_window: 15
+  
   ma_slow_strategy:
     short_window: 20
     long_window: 50
+  
   strategy_switch:
     lookback_days: 7
     performance_threshold: 0.5
 
 # ==============================================================================
-# Legacy Trader Configuration (Preserved from old settings.yaml)
+# News Monitoring Configuration
 # ==============================================================================
-trader_legacy:
-  performance_log_path: "logs/trading_cycles.log" # Preserved
-  kpi_thresholds:
-    min_sharpe_ratio: 0.5 # Preserved
+news_monitoring:
+  enabled: true
+  check_interval: 60
+  recent_news_window: 5
+  currencies:
+    - "BTC"
+    - "ETH"
+  critical_action: "emergency_stop"
+  warning_action: "reduce_position"
+  warning_position_multiplier: 0.5
+
+# ==============================================================================
+# Event Calendar Configuration
+# ==============================================================================
+event_calendar:
+  enabled: true
+  check_days_ahead: 3
+  position_multipliers:
+    CRITICAL: 0.0
+    HIGH: 0.3
+    MEDIUM: 0.5
+    LOW: 1.0
+  custom_events: []

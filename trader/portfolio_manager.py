@@ -14,7 +14,7 @@ class PortfolioManager:
     """
     
     def __init__(self, strategies: List = None, capital: float = 10000.0, risk_config: Dict = None, 
-                 exchange_client: Any = None, config: Dict = None):
+                 exchange_client: Any = None, config: Dict = None, symbols: List[str] = None):
         """
         初始化投资组合管理器
         
@@ -24,6 +24,7 @@ class PortfolioManager:
             risk_config: 风险配置
             exchange_client: 交易所客户端
             config: 配置字典（用于向后兼容）
+            symbols: 交易对列表
         """
         # 支持新旧两种初始化方式
         if config is not None:
@@ -47,7 +48,7 @@ class PortfolioManager:
             self.capital = capital
             self.risk_config = risk_config or {}
             self.exchange_client = exchange_client
-            self.symbols = ['BTC-USDT']  # 默认单资产，后续可扩展
+            self.symbols = symbols or ['BTC-USDT']  # 使用传入的symbols或默认值
             self.allocation_strategy = 'equal'
             self.max_assets = 5
             self.rebalance_frequency_days = 7
@@ -71,6 +72,11 @@ class PortfolioManager:
         
         # 新增：用于跟踪各资产的持仓
         self.positions = {}
+        
+        # ========== 移植 1.3: 每日盈亏跟踪 ==========
+        self.daily_pnl = 0.0
+        self.last_pnl_reset = datetime.utcnow().date()
+        self.daily_loss_limit = -500.0  # 硬编码阈值，建议后续放入 config
     
     def calculate_target_allocations(self, market_data: Dict[str, pd.DataFrame]) -> Dict[str, float]:
         """
@@ -309,6 +315,21 @@ class PortfolioManager:
         Returns:
             (交易订单列表, 附加信息字典)
         """
+        # ========== 移植 1.3: 每日止损检查 ==========
+        current_date = datetime.utcnow().date()
+        if current_date > self.last_pnl_reset:
+            self.daily_pnl = 0.0
+            self.last_pnl_reset = current_date
+            self.logger.info("Daily PnL reset for new day.")
+            
+        if self.daily_pnl < self.daily_loss_limit:
+            msg = f"🚨 DAILY LOSS LIMIT REACHED (${self.daily_pnl:.2f} < ${self.daily_loss_limit:.2f}). No new orders will be generated."
+            self.logger.critical(msg)
+            if cycle_logger:
+                cycle_logger.add_error(msg)
+            return [], {'status': 'STOPPED_DAILY_LOSS'}
+        # ==========================================
+
         if cycle_logger:
             cycle_logger.add_info("Starting portfolio rebalance process")
         
@@ -342,14 +363,18 @@ class PortfolioManager:
                 current_price = df['close'].iloc[-1] if not df.empty else 0
                 quantity = self._calculate_position_size(symbol, current_price, final_signal)
                 
-                if quantity > 0:
+                # ========== 移植 1.3: 最小交易价值检查 (防止尘埃单) ==========
+                min_trade_value = 10.0 # USD
+                estimated_value = quantity * current_price
+                
+                if quantity > 0 and estimated_value >= min_trade_value:
                     side = 'buy' if final_signal > 0 else 'sell'
                     
                     order = {
                         'symbol': symbol,
                         'side': side,
                         'quantity': abs(quantity),
-                        'price': current_price,
+                        'price': current_price, # 确保传递价格给 ExecutionHandler
                         'strategy': getattr(selected_strategies[0], 'strategy_name', 'unknown') if selected_strategies else 'unknown',
                         'signal_strength': final_signal
                     }
@@ -360,6 +385,9 @@ class PortfolioManager:
                     else:
                         if cycle_logger:
                             cycle_logger.add_warning(f"Order for {symbol} rejected by risk management: {order}")
+                elif quantity > 0:
+                     if cycle_logger:
+                        cycle_logger.add_info(f"Ignored dust trade for {symbol}: Value ${estimated_value:.2f} < ${min_trade_value}")
         
         # 执行投资组合级别的风险检查
         if trade_orders:
@@ -587,6 +615,65 @@ class PortfolioManager:
             active_symbols = active_symbols[:self.max_assets]
         
         return active_symbols
+
+    async def sync_with_exchange(self):
+        """
+        Synchronize internal portfolio state with the actual exchange balances.
+        This is CRITICAL to prevent state drift on restarts.
+        """
+        if not self.exchange_client:
+            self.logger.warning("Cannot sync portfolio: No exchange client connected.")
+            return
+
+        self.logger.info("Synchronizing portfolio state with exchange...")
+        
+        # Sync Capital (USDT)
+        try:
+            # Assuming USDT is the quote currency for all pairs for now
+            usdt_balance = await self.exchange_client.get_balance('USDT')
+            self.capital = float(usdt_balance)
+            self.logger.info(f"Synced Capital (USDT): {self.capital:.2f}")
+        except Exception as e:
+            self.logger.error(f"Failed to sync capital: {e}")
+
+        # Sync Positions
+        for symbol in self.symbols:
+            try:
+                # Parse base currency (e.g., BTC/USDT -> BTC)
+                if '/' in symbol:
+                    base_currency = symbol.split('/')[0]
+                elif '-' in symbol:
+                    base_currency = symbol.split('-')[0]
+                else:
+                    self.logger.warning(f"Skipping sync for unparseable symbol: {symbol}")
+                    continue
+                
+                # Fetch balance for base currency
+                balance = await self.exchange_client.get_balance(base_currency)
+                balance = float(balance)
+                
+                # Update internal state
+                self.positions[symbol] = balance
+                
+                # Update asset_data
+                if symbol not in self.asset_data:
+                    self.asset_data[symbol] = {}
+                self.asset_data[symbol]['position'] = balance
+                
+                # Try to update value if we can get a price (best effort)
+                try:
+                    price = await self.exchange_client.get_current_price(symbol)
+                    if price:
+                        value = balance * price
+                        self.asset_data[symbol]['value'] = value
+                        self.logger.info(f"Synced {symbol}: {balance:.6f} (Value: ${value:.2f})")
+                except Exception:
+                    self.logger.info(f"Synced {symbol}: {balance:.6f} (Price unavailable)")
+                    
+            except Exception as e:
+                self.logger.error(f"Failed to sync position for {symbol}: {e}")
+
+        self.logger.info("Portfolio synchronization complete.")
 
 
 # 全局实例

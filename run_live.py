@@ -1,13 +1,16 @@
 import time
 import asyncio
 import pandas as pd
+import os
+import sys
+import argparse
 
 # 导入我们所有的新组件
 from strategies.moving_average import MovingAverageStrategy
 from strategies.lgb_strategy import LGBStrategy
 from trader.portfolio_manager import PortfolioManager
 from trader.execution_handler import ExecutionHandler
-from trader.strategy_manager import StrategyManager
+from strategies.strategy_manager import StrategyManager
 
 # 导入新的工厂和配置加载器
 from exchange.factory import ExchangeFactory
@@ -15,85 +18,151 @@ from utils.config_loader import load_config
 from features.feature_engineering import generate_features
 from utils.logger import setup_trader_logger, CycleLogger
 
-async def main_loop():
+async def main_loop(args):
     """
     全新的自动化交易主循环，集成了市场状态检测和策略管理。
     """
     print("--- System Initializing ---")
+    if args.mock:
+        print("!!! RUNNING IN MOCK MODE !!!")
 
     # 1. 初始化日志记录器
     trader_logger = setup_trader_logger()
     print("Logger initialized.")
 
     # 2. 加载配置
-    config = load_config('config/settings.yaml')
-    print("Configuration loaded.")
+    try:
+        config = load_config('config/settings.yaml')
+        print("Configuration loaded.")
+    except Exception as e:
+        print(f"CRITICAL ERROR: Failed to load config: {e}")
+        return
 
     # 3. 初始化所有组件
     # 3.1 初始化聚合交易所客户端
     # 使用 ExchangeFactory 创建聚合交易所实例
-    api_credentials = config.get('okx', {}) # 以okx的凭证为例，将来可以做得更通用
+    api_credentials = config.get('okx', {})
     
-    # 修复：使用 await 调用异步工厂方法
-    exchange_client = await ExchangeFactory.create_exchange(
-        'aggregated',
-        api_key=api_credentials.get('api_key'),
-        api_secret=api_credentials.get('secret_key'),
-        passphrase=api_credentials.get('passphrase'),
-        sandbox=api_credentials.get('sandbox', True)
-    )
-    print(f"Aggregated exchange client initialized.")
+    # 解析 sandbox 模式：如果 flag 为 "0"，则是 sandbox 模式
+    # 默认为 True (安全起见) 如果没有找到配置
+    flag = str(api_credentials.get('flag', '0'))
+    is_sandbox = (flag == '0')
+    print(f"Exchange Mode: {'SANDBOX' if is_sandbox else 'LIVE'}")
+    
+    try:
+        exchange_client = await ExchangeFactory.create_exchange(
+            'aggregated',
+            api_key=api_credentials.get('api_key'),
+            api_secret=api_credentials.get('secret_key'),
+            passphrase=api_credentials.get('passphrase'),
+            sandbox=is_sandbox,
+            mock=args.mock # Pass mock argument
+        )
+        print(f"Aggregated exchange client initialized.")
+    except Exception as e:
+        print(f"CRITICAL ERROR: Failed to initialize exchange: {e}")
+        return
 
-    # 3.2 初始化策略 (与之前相同)
-    strategy_1_config = {'short_window': 10, 'long_window': 30}
-    strategy_2_config = {'short_window': 20, 'long_window': 60}
-    strategy_3_config = {
+    # 3.2 初始化策略
+    # 从配置中读取策略参数
+    strat_mgmt_config = config.get('strategy_management', {})
+    
+    # MA Fast
+    ma_fast_cfg = strat_mgmt_config.get('ma_fast_strategy', {'short_window': 10, 'long_window': 30})
+    ma_strategy_1 = MovingAverageStrategy(strategy_name="MA_Fast", config=ma_fast_cfg)
+    
+    # MA Slow
+    ma_slow_cfg = strat_mgmt_config.get('ma_slow_strategy', {'short_window': 20, 'long_window': 60})
+    ma_strategy_2 = MovingAverageStrategy(strategy_name="MA_Slow", config=ma_slow_cfg)
+    
+    # LGB Strategy
+    lgb_cfg = strat_mgmt_config.get('lgb_strategy', {
         'model_dir': 'models',
         'model_name': 'best_model.pkl',
         'metadata_name': 'metadata.json'
-    }
-    ma_strategy_1 = MovingAverageStrategy(strategy_name="MA_10_30", config=strategy_1_config)
-    ma_strategy_2 = MovingAverageStrategy(strategy_name="MA_20_60", config=strategy_2_config)
-    lgb_strategy = LGBStrategy(strategy_name="LGB_Main", config=strategy_3_config)
+    })
+    lgb_strategy = LGBStrategy(strategy_name="LGB_Main", config=lgb_cfg)
+    
     strategy_army = [ma_strategy_1, ma_strategy_2, lgb_strategy]
-    print(f"Initialized {len(strategy_army)} strategies.")
+    print(f"Initialized {len(strategy_army)} strategies: {[s.strategy_name for s in strategy_army]}")
 
     # 3.3 初始化StrategyManager
     strategy_manager = StrategyManager(strategies=strategy_army)
-    print(f"Initialized StrategyManager with {len(strategy_army)} strategies.")
+    print(f"Initialized StrategyManager.")
 
     # 3.4 初始化PortfolioManager
-    initial_capital = 10000.0
+    # 尝试从配置读取初始资金，如果没有则默认 10000
+    risk_mgmt_config = config.get('risk_management', {})
+    initial_capital = risk_mgmt_config.get('min_account_balance', 10000.0)
+    
     risk_config = {
-        'risk_per_trade': 0.01,
-        'max_portfolio_risk': 0.05,
+        'risk_per_trade': config.get('position_sizing', {}).get('risk_per_trade', 0.01),
+        'max_portfolio_risk': 0.05, # 可以添加到配置中
         'stop_loss_window': 20
     }
-    portfolio_manager = PortfolioManager(strategies=strategy_army, capital=initial_capital, risk_config=risk_config, exchange_client=exchange_client)
+
+    # ========== Determine Symbols FIRST ==========
+    symbols = config.get('trading', {}).get('symbols')
+    if not symbols:
+            symbols = config.get('backtest', {}).get('symbols_to_test')
+    if not symbols:
+        symbols = ["BTC/USDT", "ETH/USDT"]
+        print("Warning: No symbols found in config, using default: BTC/USDT, ETH/USDT")
+    # Standardize symbols
+    symbols = [s.replace('-', '/') for s in symbols]
+    print(f"Trading Symbols: {symbols}")
+    # ===========================================
+
+    portfolio_manager = PortfolioManager(
+        strategies=strategy_army, 
+        capital=initial_capital, 
+        risk_config=risk_config, 
+        exchange_client=exchange_client,
+        symbols=symbols # Pass symbols here
+    )
 
     # 3.5 初始化ExecutionHandler
     execution_handler = ExecutionHandler(exchange_client=exchange_client)
 
+    # 3. Sync State (Position & Balance)
+    # This prevents the bot from buying what it already has on restart
+    await portfolio_manager.sync_with_exchange()
+
     print("--- Initialization Complete. Starting Live Trading Loop ---")
+
+    cycle_count = 0
 
     # 4. 主循环
     while True:
+        # Check cycle limit
+        if args.cycles is not None and cycle_count >= args.cycles:
+            print(f"Reached cycle limit of {args.cycles}. Exiting.")
+            break
+
+        # ========== Emergency Stop Check ==========
+        if os.path.exists('emergency_stop.flag'):
+            msg = "🚨 CRITICAL: emergency_stop.flag detected! Shutting down immediately."
+            print(msg)
+            trader_logger.critical(msg)
+            break
+        # ==========================================
+
         cycle_timestamp = pd.Timestamp.now(tz='UTC').isoformat()
         cycle_logger = CycleLogger(logger=trader_logger, cycle_id=cycle_timestamp)
         
         try:
-            print(f"\n{'='*20} New Cycle at {pd.Timestamp.now()} {'='*20}")
+            print(f"\n{'='*20} New Cycle {cycle_count+1} at {pd.Timestamp.now()} {'='*20}")
             
             # 4.1 获取多个交易对的最新市场数据
             print("Fetching latest market data...")
-            symbols = ["BTC/USDT", "ETH/USDT"]  # 使用 / 分隔符
-            interval = "1H"
+            
+            # (Symbols are already determined above)
+            interval = config.get('trading', {}).get('interval', '1H')
             
             # 获取所有交易对的数据
             data_for_pm = {}
             for symbol in symbols:
                 # 使用新的聚合交易所客户端获取数据
-                # 修复：使用 await 调用异步方法
                 # 获取最近200条K线用于特征计算
                 raw_data = await exchange_client.fetch_candles(symbol, interval, limit=200)
                 
@@ -101,14 +170,15 @@ async def main_loop():
                     print(f"Warning: Failed to fetch market data for {symbol}, skipping...")
                     continue
 
-                # 特征工程 (fetch_candles返回的数据已标准化，无需normalize)
+                # 特征工程
                 featured_data = generate_features(raw_data, news_csv_path=None)
                 data_for_pm[symbol] = featured_data
 
             if not data_for_pm:
-                # 如果获取失败，不要抛出异常退出，而是等待重试
                 print("Failed to fetch market data for any symbol. Retrying in 60 seconds...")
-                await asyncio.sleep(60)
+                # Skip sleep if in mock mode to speed up debugging, unless explicitly waiting
+                if not args.mock:
+                    await asyncio.sleep(60)
                 continue
 
             # 4.2 (后续逻辑与之前相同...)
@@ -127,7 +197,6 @@ async def main_loop():
             trade_orders, _ = portfolio_manager.rebalance(data_for_pm, cycle_logger)
 
             if trade_orders:
-                # 修复：使用 await 调用异步方法
                 execution_report = await execution_handler.execute_trades(trade_orders, cycle_logger)
                 portfolio_manager.update_positions(execution_report)
             else:
@@ -149,10 +218,17 @@ async def main_loop():
                 total_value=total_value
             )
 
-            wait_seconds = 3600 # 1 hour
-            print(f"Cycle finished. Waiting for {wait_seconds / 60:.1f} minutes...")
-            # 修复：使用 asyncio.sleep
-            await asyncio.sleep(wait_seconds)
+            cycle_count += 1
+            
+            # Calculate sleep time
+            if args.mock:
+                 print("Mock mode: Skipping sleep.")
+            else:
+                now = pd.Timestamp.now(tz='UTC')
+                seconds_remaining = 3600 - (now.minute * 60 + now.second)
+                wait_seconds = seconds_remaining + 5
+                print(f"Cycle finished. Waiting for {wait_seconds / 60:.1f} minutes to align with next hour...")
+                await asyncio.sleep(wait_seconds)
 
         except KeyboardInterrupt:
             print("\nUser interrupted the process. Shutting down.")
@@ -162,12 +238,25 @@ async def main_loop():
         except Exception as e:
             print(f"FATAL ERROR in main loop: {e}")
             cycle_logger.set_error(str(e))
-            await asyncio.sleep(60)
+            if not args.mock:
+                await asyncio.sleep(60)
+            else:
+                break # Break on error in mock mode
         finally:
             cycle_logger.commit()
     
     # 关闭交易所连接
-    await exchange_client.close()
+    if 'exchange_client' in locals():
+        await exchange_client.close()
 
 if __name__ == "__main__":
-    asyncio.run(main_loop())
+    parser = argparse.ArgumentParser(description='Run the Auto Trader.')
+    parser.add_argument('--mock', action='store_true', help='Run in mock mode with simulated exchange data.')
+    parser.add_argument('--cycles', type=int, default=None, help='Number of cycles to run before exiting (default: infinite).')
+    
+    args = parser.parse_args()
+    
+    try:
+        asyncio.run(main_loop(args))
+    except KeyboardInterrupt:
+        pass

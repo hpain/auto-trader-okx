@@ -65,11 +65,22 @@ class LGBStrategy(BaseStrategy):
             print(f"WARN [{self.strategy_name}]: 数据中缺少以下必要特征: {missing_features}，无法生成信号。")
             return result_df
 
-        X = data[self.features]
+        X = data[self.features].copy()
 
-        # 在预测前处理可能存在的NaN值（例如，用0填充）
-        # 一个更稳健的方法是在特征工程阶段就确保数据清洗
-        X = X.fillna(0)
+        # Replace infinite values with NaN to avoid crashes
+        X.replace([np.inf, -np.inf], np.nan, inplace=True)
+
+        # LightGBM handles NaNs natively. 
+        # CRITICAL FIX: Do NOT fill with 0, as 0 can be a valid but extreme feature value (e.g. price=0).
+        # We rely on the model's native missing value handling.
+        
+        # Log if we have significant missing data
+        null_counts = X.isnull().sum()
+        if null_counts.sum() > 0:
+             cols_with_nulls = null_counts[null_counts > 0].index.tolist()
+             # Only log if it's not spammy - maybe check logger level or just print once
+             # print(f"WARN [{self.strategy_name}]: Input data contains NaNs in columns: {cols_with_nulls}. Relying on model's native handling.")
+             pass
         
         try:
             # 对整个DataFrame进行批量预测

@@ -1,0 +1,57 @@
+# ==============================================================================
+# ⛔ DEPRECATED: This file is no longer in use.
+# ⛔ DATE: 2025-12-19
+# ⛔ REASON: Core logic migrated to main.py (v2 architecture).
+# ⛔ ACTION: DO NOT RUN THIS FILE. REFER TO main.py FOR PRODUCTION.
+# ==============================================================================
+
+import sys
+print("DEBUG: Script started", file=sys.stderr)
+import time
+import logging
+import os
+import json
+import asyncio
+from datetime import datetime
+import pandas as pd
+import numpy as np
+import multiprocessing
+from typing import Optional
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
+
+# --- 导入我们需要的模块 ---
+from config import config
+# from exchange.okx_exchange import OKXExchange # 移除旧的同步实现
+from exchange.factory import ExchangeFactory # 使用工厂类
+from strategies.lgb_strategy import LGBStrategy
+from strategies.strategy_manager import StrategyManager
+from analysis.market_regime_detection import detect_regime_change
+from analysis.performance_monitor import PerformanceMonitor
+from tools.model_pipeline import run_training_pipeline
+from features.feature_engineering import generate_features
+from trader.risk_monitor import RiskMonitor
+from trader.risk_manager import RiskManager
+from trader.market_regime_detector import MarketRegimeDetector
+from trader.enhanced_monitor import get_enhanced_monitor
+from trader.slippage_monitor import get_slippage_monitor
+from trader.portfolio_manager import get_portfolio_manager
+from models.model_interpretability import get_model_interpretability
+from utils.system_monitor import get_system_monitor
+
+
+class AutonomousTrader:
+    def __init__(self):
+        self.logger = logging.getLogger(__name__)
+        self.config = config
+        self.trader_config = config.get('trader', {})
+        self.okx_config = config.get('okx', {})
+        self.strategy_config = config.get('strategy', {})
+        self.model_update_flag_path = os.path.join(config.get('paths', {}).get('model_dir', 'models'), 'model_update_complete.flag')
+        self.training_lock_path = os.path.join(config.get('paths', {}).get('model_dir', 'models'), 'training.lock')
+        self.training_state_path = os.path.join(config.get('paths', {}).get('model_dir', 'models'), 'training_state.json')
+
+        print("DEBUG: Starting AutonomousTrader initialization...")
+        # 交易所初始化延迟到 initialize_async 方法中

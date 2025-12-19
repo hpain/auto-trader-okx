@@ -31,6 +31,17 @@ current_state_analysis:
     - "No Continuous Monitoring: The live system does not actively monitor its own performance in real-time to inform decisions."
     - "No Automated Retraining Trigger: The system cannot automatically decide to retrain its model based on performance degradation or market shifts."
     - "No Automated Deployment: Lacks a pipeline to automatically validate and deploy a newly trained model into the live environment."
+  outstanding_issues:
+    - issue_id: "BUG-001"
+      description: "Critical data pipeline error: `Missing required columns: ['volume']`. The data fusion logic in AggregatedExchange drops the volume column, causing strategies to fail."
+      status: "In Progress"
+      priority: "Critical"
+      notes: "The system is currently non-operational due to this bug. Fixing this is the top priority."
+    - issue_id: "WARN-001"
+      description: "Code quality warning: `FutureWarning: DataFrame.fillna with 'method' is deprecated`. This needs to be updated to `ffill()` to ensure future compatibility."
+      status: "Not Started"
+      priority: "Medium"
+      notes: "Located in `strategies/base_strategy.py`. A simple fix, but reflects the need for a code quality sweep."
 
 development_plan:
   - phase: 1
@@ -84,5 +95,13 @@ development_plan:
     status: "Completed"
     notes: >
       Created the final entry point `run_autonomous.py`. This script runs a main loop that periodically
-      calls the `DecisionMaker`. If the decision is to retrain, it triggers the `run_training_pipeline` function.
-      This completes the full feedback loop from live trading to monitoring, decision-making, and automated retraining.
+      calls the `DecisionMaker`. If the decision is to retrain, it triggers the `run_training_pipeline` function. This
+      completes the full feedback loop from live trading to monitoring, decision-making, and automated retraining.
+      [POST-COMPLETION NOTE]: Integration testing revealed a critical bug (BUG-001) in the data pipeline, proving this
+      phase was not fully completed. The system is not yet autonomous or stable. The status should be considered
+      'Integration Testing Failed' rather than 'Completed'.
+
+  - phase: 5
+    name: "Production Hardening & Bug Fixing"
+    objective: "To resolve all critical bugs found during integration testing and harden the system for stable, long-term operation."
+    status: "Not Started"
