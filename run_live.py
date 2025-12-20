@@ -22,6 +22,21 @@ async def main_loop(args):
     """
     全新的自动化交易主循环，集成了市场状态检测和策略管理。
     """
+    # --- SAFETY CHECK: PREVENT ACCIDENTAL LIVE/PAPER TRADING ON DEV MACHINE ---
+    if sys.platform == 'win32' and not args.mock and not os.environ.get('ALLOW_LOCAL_TRADING'):
+        print("\n" + "!" * 80)
+        print("CRITICAL SAFETY STOP: Windows Development Environment Detected")
+        print("!" * 80)
+        print("To protect your capital, Live and Paper trading are DISABLED on this machine.")
+        print("You are attempting to run the bot without '--mock'.")
+        print("\nALLOWED ACTIONS on this machine:")
+        print("1. Run with mock data:   python run_live.py --mock")
+        print("2. Run unit tests:       pytest")
+        print("\nIf you REALLY want to trade from this laptop, set env var: ALLOW_LOCAL_TRADING=1")
+        print("!" * 80 + "\n")
+        return
+    # --------------------------------------------------------------------------
+
     print("--- System Initializing ---")
     if args.mock:
         print("!!! RUNNING IN MOCK MODE !!!")

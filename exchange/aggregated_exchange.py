@@ -276,7 +276,25 @@ class AggregatedExchange(Exchange):
     # ==========================================================================
 
     async def get_balance(self, currency: str) -> float:
-        return await self.primary_spot_exchange.get_balance(currency)
+        try:
+            return await self.primary_spot_exchange.get_balance(currency)
+        except Exception as e:
+            logger.warning(f"Failed to fetch balance from primary exchange ({self.primary_spot_exchange.exchange_id}): {e}")
+            # If primary fails (e.g. it's binance without keys), try secondaries
+            for exchange in self.all_spot_exchanges:
+                if exchange.exchange_id == self.primary_spot_exchange.exchange_id:
+                    continue
+                try:
+                    logger.info(f"Attempting to fetch balance from secondary exchange: {exchange.exchange_id}")
+                    return await exchange.get_balance(currency)
+                except Exception as inner_e:
+                     logger.debug(f"Could not fetch balance from {exchange.exchange_id}: {inner_e}")
+            
+            # If all fail, return 0.0 or re-raise. returning 0.0 is safer for stability but might be misleading.
+            # But since this is likely a misconfiguration (Binance primary but no keys), returning 0 is "safe" 
+            # as it prevents trading but keeps bot alive.
+            logger.error("Could not fetch balance from ANY exchange.")
+            return 0.0
 
     async def create_order(self, symbol: str, order_type: str, side: str, amount: float, price: Optional[float] = None) -> Dict[str, Any]:
         return await self.primary_spot_exchange.create_order(symbol, order_type, side, amount, price)
