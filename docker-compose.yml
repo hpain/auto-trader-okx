@@ -5,21 +5,21 @@ services:
     build: .
     container_name: auto-trader-okx
     restart: unless-stopped
+    env_file:
+      - .env
     environment:
-      # --- OKX API Credentials ---
-      # Replace with your actual API credentials
-      - OKX_API_KEY=YOUR_API_KEY
-      - OKX_SECRET_KEY=YOUR_SECRET_KEY
-      - OKX_PASSPHRASE=YOUR_PASSPHRASE
-      # flag: "1" for live trading, "0" for demo/paper trading
-      - OKX_FLAG=0
-
-      # --- Trade Settings ---
-      - TRADE_SYMBOL=BTC-USDT
-      - TRADE_INTERVAL=1H
-      - TRADE_QUANTITY=0.001
+      # These will be overridden by values in .env if present
+      # We map them here explicitly to ensure they are passed to the container
+      # if the user sets them in the shell or .env
+      - OKX_API_KEY=${OKX_API_KEY}
+      - OKX_SECRET_KEY=${OKX_SECRET_KEY}
+      - OKX_PASSPHRASE=${OKX_PASSPHRASE}
+      - OKX_FLAG=${OKX_FLAG:-0}
+      - TRADE_SYMBOL=${TRADE_SYMBOL:-BTC-USDT}
+      - TRADE_INTERVAL=${TRADE_INTERVAL:-1H}
       
     volumes:
+      - ./config/settings.yaml:/app/config/settings.yaml
       - ./logs:/app/logs
       - ./models:/app/models
       - ./data/history:/app/data/history
