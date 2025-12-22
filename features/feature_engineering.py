@@ -530,6 +530,12 @@ def generate_features(df: pd.DataFrame, news_csv_path: str = None, mined_feature
     # Remove duplicated columns, keeping the first occurrence
     final_df = final_df.loc[:, ~final_df.columns.duplicated(keep='first')]
 
+    # --- Compatibility Fix ---
+    # The legacy model expects 'vol' but the modern system uses 'volume'.
+    # Ensure 'vol' exists if 'volume' is present.
+    if 'volume' in final_df.columns and 'vol' not in final_df.columns:
+        final_df['vol'] = final_df['volume']
+
     return final_df
 
 
