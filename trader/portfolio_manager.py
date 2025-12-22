@@ -475,7 +475,9 @@ class PortfolioManager:
         # 如果是卖出信号，只卖出当前持仓的一部分
         if signal < 0:
             current_position = self.positions.get(symbol, 0.0)
-            quantity = min(quantity, current_position * 0.95)  # 只卖出95%以避免精度问题
+            # Mod: Allow selling 100% of the position. 
+            # In Spot trading, fees are deducted from the quote currency (USDT), so we can sell the full base asset amount.
+            quantity = min(quantity, current_position)
         
         return quantity
 
