@@ -315,11 +315,66 @@ def _add_onchain_features(df: pd.DataFrame, onchain_dfs: dict) -> pd.DataFrame:
     return all_features[new_cols]
 
 def _add_derivatives_features(df: pd.DataFrame, derivatives_dfs: dict) -> pd.DataFrame:
-    """Placeholder for adding derivatives features."""
+    """
+    Merges derivatives data (funding_rates, open_interest) into the main DataFrame.
+    Assumes data likely needs alignment (different timestamps or gaps).
+    """
     if not derivatives_dfs:
         return pd.DataFrame(index=df.index)
-    # TODO: Implement actual feature engineering for derivatives data
-    return pd.DataFrame(index=df.index)
+    
+    all_features = pd.DataFrame(index=df.index)
+
+    for name, d_df in derivatives_dfs.items():
+        if d_df is None or d_df.empty:
+            continue
+        
+        # Ensure index is datetime
+        temp_df = d_df.copy()
+        if not isinstance(temp_df.index, pd.DatetimeIndex):
+            if 'timestamp' in temp_df.columns:
+                temp_df.set_index('timestamp', inplace=True)
+            else:
+                try:
+                    temp_df.index = pd.to_datetime(temp_df.index)
+                except:
+                    logging.warning(f"Could not convert index of derivative {name} to datetime. Skipping.")
+                    continue
+        
+        # Align Timezone
+        if df.index.tz is not None:
+            if temp_df.index.tz is None:
+                temp_df.index = temp_df.index.tz_localize('UTC').tz_convert(df.index.tz)
+            else:
+                temp_df.index = temp_df.index.tz_convert(df.index.tz)
+        
+        # Prefix columns to avoid collisions (e.g., funding_rates -> funding_rate)
+        # Usually these dfs have columns like 'fundingRate' or 'open_interest'.
+        # We want final cols: 'funding_rate', 'open_interest'
+        
+        # Standardize known columns
+        rename_map = {}
+        if 'fundingRate' in temp_df.columns:
+            rename_map['fundingRate'] = 'funding_rate'
+        
+        if rename_map:
+            temp_df.rename(columns=rename_map, inplace=True)
+
+        # Merge
+        # We use reindex to align with main df timestamps, then forward fill
+        # This is better than merge(how='left') if we want to propagate last known value
+        # But simple merge also works if we ffill after.
+        
+        # Taking intersection of available columns to avoid index issues
+        valid_cols = [c for c in temp_df.columns if c in ['funding_rate', 'open_interest', 'fundingRate']]
+        if not valid_cols:
+             continue
+             
+        aligned_df = temp_df[valid_cols].reindex(df.index, method='ffill')
+        
+        # Add to all_features
+        all_features = pd.concat([all_features, aligned_df], axis=1)
+
+    return all_features
 
 def _add_multi_symbol_features(df: pd.DataFrame, feature_dfs: dict) -> pd.DataFrame:
     """Placeholder for adding multi-symbol features."""

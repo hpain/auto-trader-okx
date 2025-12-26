@@ -6,13 +6,13 @@ exchange:
   # backtesting and model training. This should be the exchange with the most
   # extensive and reliable historical data.
   # CHANGED to 'okx' for live trading simulation to avoid auth errors if binance keys are missing
-  primary_exchange: 'okx' 
+  primary_exchange: 'binance' 
 
   # Secondary exchanges are used along with the primary for live/recent data
   # aggregation. This provides redundancy and a more robust price feed.
   # The system will automatically use all available sources.
   secondary_exchanges:
-    - 'binance'
+    - 'okx'
     # - 'bybit' # Commented out unless you have keys or want to query public data
 
 exchanges:

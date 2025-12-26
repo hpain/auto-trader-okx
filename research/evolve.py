@@ -80,32 +80,148 @@ def main():
     os.makedirs(cache_dir, exist_ok=True)
     feature_cache_path = os.path.join(cache_dir, f"features_{config_hash}.parquet")
 
+    # --- FORCED BINANCE DATA LOADING FOR TRAINING (WITH AUTO-UPDATE) ---
+    # We enforce loading from the known Binance 4-year history file for training stability.
+    # We also check if the data is stale and incrementally update it from Binance public API.
+    binance_history_path = os.path.join(config["paths"]["history_data_dir"], "binance_BTCUSDT_1h_4y.csv")
+    
+    # Check if we should use the processed feature cache first
     if os.path.exists(feature_cache_path) and not args.ignore_local:
         logging.info(f"OK CACHE: Found feature cache, loading from {feature_cache_path}")
         dfm = pd.read_parquet(feature_cache_path)
+    # Check if local raw Binance data exists and prioritize it
+    elif os.path.exists(binance_history_path):
+        logging.info(f"TRAINING OVERRIDE: Found local Binance history file at {binance_history_path}.")
+        
+        # Load the CSV
+        dfp = pd.read_csv(binance_history_path)
+        
+        # Standardize column names
+        dfp.columns = [c.lower() for c in dfp.columns]
+        rename_map = {'ts': 'timestamp', 'o': 'open', 'h': 'high', 'l': 'low', 'c': 'close', 'v': 'volume'}
+        dfp.rename(columns=rename_map, inplace=True)
+        
+        # Parse timestamp
+        if 'timestamp' in dfp.columns:
+            dfp['timestamp'] = pd.to_datetime(dfp['timestamp'])
+            dfp.set_index('timestamp', inplace=True)
+            dfp.sort_index(inplace=True)
+        
+        logging.info(f"Loaded {len(dfp)} rows from local Binance history.")
+        
+        # --- AUTO-UPDATE LOGIC ---
+        if not dfp.empty:
+            last_ts = dfp.index[-1]
+            now_ts = pd.Timestamp.utcnow()
+            # If data is older than 4 hours, fetch updates
+            if (now_ts - last_ts) > pd.Timedelta(hours=4):
+                logging.info(f"DATA UPDATE: Local data is stale (Last: {last_ts}). Fetching new data from Binance...")
+                try:
+                    from exchange.factory import ExchangeFactory
+                    import asyncio
+                    
+                    # Create a temporary Binance client (public data, no keys needed usually)
+                    # We use a helper function to run async fetch in sync context
+                    async def fetch_update():
+                        # Force create a binance client specifically
+                        exchange = await ExchangeFactory.create_exchange('binance', sandbox=False)
+                        # Fetch from last_ts + 1ms to avoid duplicate
+                        since_ms = int(last_ts.timestamp() * 1000) + 1
+                        return await exchange.fetch_historical_data(symbol=primary_symbol, timeframe=interval, since=since_ms)
+                    
+                    new_data = asyncio.run(fetch_update())
+                    
+                    if new_data is not None and not new_data.empty:
+                        logging.info(f"DATA UPDATE: Fetched {len(new_data)} new candles.")
+                        # Append and Deduplicate
+                        dfp = pd.concat([dfp, new_data])
+                        dfp = dfp[~dfp.index.duplicated(keep='last')] # Ensure no duplicates
+                        dfp.sort_index(inplace=True)
+                        
+                        # Save back to CSV to persist the update
+                        # We need to inverse the rename to match original format if needed, or just save as is.
+                        # For simplicity and robustness, we save with standardized names which is better.
+                        # But to be safe with other scripts reading it, let's keep it standard.
+                        dfp.to_csv(binance_history_path)
+                        logging.info(f"DATA UPDATE: Updated local file {binance_history_path}. New count: {len(dfp)}")
+                    else:
+                        logging.info("DATA UPDATE: No new data returned from API.")
+                        
+                except Exception as e:
+                    logging.warning(f"DATA UPDATE FAILED: Could not fetch incremental update: {e}. Continuing with local data.")
+            else:
+                logging.info("DATA UPDATE: Local data is fresh enough.")
+        # --- END AUTO-UPDATE LOGIC ---
+        
+        # --- Generate Features ---
+        # For training, we might only have single symbol data if loading from CSV.
+        # We pass empty dicts for other data sources if they aren't available in this offline mode.
+        dfm = generate_features(dfp, news_csv_path=news_csv_path, feature_dfs={}, derivatives_dfs={}, onchain_dfs={})
+        
+        # Save to cache for next time
+        dfm.to_parquet(feature_cache_path)
+        logging.info(f"SAVE CACHE: Features saved to {feature_cache_path}")
+        
     else:
-        logging.info("WAIT CACHE: No feature cache found or --ignore-local is set, running full data pipeline...")
+        logging.info("WAIT CACHE: No feature cache and no local Binance file found. Falling back to API fetch (Risk: may fetch short history if OKX is primary)...")
         from exchange.factory import ExchangeFactory
         import asyncio
 
-        async def initialize_exchange_async():
-            return await ExchangeFactory.create_exchange('aggregated', sandbox=False)
-        
-        exchange_instance = asyncio.run(initialize_exchange_async())
-        
-        # Dictionary to hold all fetched dataframes
-        all_dfs = {}
+        # Define an async function to handle all exchange interactions
+        async def fetch_all_data_async():
+            exchange_instance = await ExchangeFactory.create_exchange('aggregated', sandbox=False)
+            all_dfs_local = {}
+            derivatives_dfs_local = {}
+            
+            try:
+                # 1. Fetch Historical Data (OHLCV)
+                for sym in all_symbols_to_fetch:
+                    logging.info(f"Fetching historical data for {sym}...")
+                    df_current_symbol = await exchange_instance.fetch_historical_data(symbol=sym, timeframe=interval, years=args.years)
+                    
+                    if df_current_symbol is None or df_current_symbol.empty:
+                        logging.warning(f"WARN: Price data for {sym} is empty after fetching. Skipping this symbol.")
+                        continue
+                    
+                    all_dfs_local[sym] = df_current_symbol
+                
+                # 2. Fetch Derivatives Data
+                if primary_symbol in all_dfs_local:
+                    fetch_funding_rates_flag = config.get("derivatives_data", {}).get("fetch_funding_rates", False)
+                    fetch_open_interest_flag = config.get("derivatives_data", {}).get("fetch_open_interest", False)
 
-        for sym in all_symbols_to_fetch:
-            logging.info(f"Fetching historical data for {sym}...")
-            df_current_symbol = exchange_instance.fetch_historical_data(symbol=sym, timeframe=interval, years=args.years)
+                    from datetime import datetime, timedelta
+                    since_dt = datetime.utcnow() - timedelta(days=args.years * 365.25)
+                    since_ms = int(since_dt.timestamp() * 1000)
+
+                    if fetch_funding_rates_flag:
+                        funding_rates_df = await exchange_instance.fetch_funding_rates(symbol=primary_symbol, timeframe=interval, since=since_ms)
+                        if not funding_rates_df.empty:
+                            derivatives_dfs_local['funding_rates'] = funding_rates_df
+                            logging.info(f"Fetched {len(funding_rates_df)} funding rates for {primary_symbol}.")
+                        else:
+                            logging.warning(f"No funding rates fetched for {primary_symbol}.")
+                    else:
+                        logging.info("Skipping funding rates fetching as per configuration.")
+
+                    if fetch_open_interest_flag:
+                        open_interest_df = await exchange_instance.fetch_open_interest(symbol=primary_symbol, timeframe=interval, since=since_ms)
+                        if not open_interest_df.empty:
+                            derivatives_dfs_local['open_interest'] = open_interest_df
+                            logging.info(f"Fetched {len(open_interest_df)} open interest data for {primary_symbol}.")
+                        else:
+                            logging.warning(f"No open interest fetched for {primary_symbol}.")
+                    else:
+                        logging.info("Skipping open interest fetching as per configuration.")
             
-            if df_current_symbol is None or df_current_symbol.empty:
-                logging.warning(f"WARN: Price data for {sym} is empty after fetching. Skipping this symbol.")
-                continue
+            finally:
+                await exchange_instance.close()
             
-            all_dfs[sym] = df_current_symbol
-        
+            return all_dfs_local, derivatives_dfs_local
+
+        # Run the async fetching logic
+        all_dfs, derivatives_dfs = asyncio.run(fetch_all_data_async())
+
         if not all_dfs:
             logging.error("FAIL: No price data available after fetching all symbols. Aborting.")
             return
@@ -119,38 +235,6 @@ def main():
 
         # Remove primary_symbol from feature_dfs to avoid redundant processing
         feature_dfs = {s: df for s, df in all_dfs.items() if s != primary_symbol}
-
-        # --- Fetch Derivatives Data ---
-        derivatives_dfs = {}
-        fetch_funding_rates_flag = config.get("derivatives_data", {}).get("fetch_funding_rates", False)
-        fetch_open_interest_flag = config.get("derivatives_data", {}).get("fetch_open_interest", False)
-
-        # Calculate 'since' timestamp for historical derivatives data
-        from datetime import datetime, timedelta
-        since_dt = datetime.utcnow() - timedelta(days=args.years * 365.25)
-        since_ms = int(since_dt.timestamp() * 1000)
-
-        if fetch_funding_rates_flag:
-            # Fetch funding rates for the primary symbol
-            funding_rates_df = exchange_instance.fetch_funding_rates(symbol=primary_symbol, timeframe=interval, since=since_ms)
-            if not funding_rates_df.empty:
-                derivatives_dfs['funding_rates'] = funding_rates_df
-                logging.info(f"Fetched {len(funding_rates_df)} funding rates for {primary_symbol}.")
-            else:
-                logging.warning(f"No funding rates fetched for {primary_symbol}.")
-        else:
-            logging.info("Skipping funding rates fetching as per configuration.")
-
-        if fetch_open_interest_flag:
-            # Fetch open interest for the primary symbol
-            open_interest_df = exchange_instance.fetch_open_interest(symbol=primary_symbol, timeframe=interval, since=since_ms)
-            if not open_interest_df.empty:
-                derivatives_dfs['open_interest'] = open_interest_df
-                logging.info(f"Fetched {len(open_interest_df)} open interest data for {primary_symbol}.")
-            else:
-                logging.warning(f"No open interest fetched for {primary_symbol}.")
-        else:
-            logging.info("Skipping open interest fetching as per configuration.")
 
         # --- Fetch On-Chain Data ---
         from data.onchain import get_onchain_client
@@ -212,6 +296,29 @@ def main():
     # --- Data Cleaning ---
     # Replace infinite values with NaN, then drop all rows with any NaN in features or target.
     data.replace([np.inf, -np.inf], np.nan, inplace=True)
+
+    # --- Feature Density Filter ---
+    # Smartly remove features that are mostly empty (e.g., partial history OI) 
+    # to prevent 'dropna' from destroying the entire dataset (long history).
+    # Default threshold: Drop feature if > 20% of rows are NaN.
+    nan_threshold = 0.2
+    dense_feature_cols = []
+    dropped_sparse_cols = []
+
+    for col in feature_cols:
+        if col not in data.columns:
+            continue
+        nan_ratio = data[col].isna().mean()
+        if nan_ratio > nan_threshold:
+            dropped_sparse_cols.append(f"{col} ({nan_ratio:.1%})")
+            data.drop(columns=[col], inplace=True)
+        else:
+            dense_feature_cols.append(col)
+    
+    if dropped_sparse_cols:
+        logging.warning(f"WARN: Dropped {len(dropped_sparse_cols)} sparse features to preserve dataset length: {dropped_sparse_cols}")
+        feature_cols = dense_feature_cols
+
     data.dropna(subset=feature_cols + ["y"], inplace=True)
     
     if len(data) < 500:

@@ -115,12 +115,12 @@ class AggregatedExchange(Exchange):
         logger.info(f"Fusing data from {len(successful_sources)} sources: {successful_sources}")
         return self.aggregate_candle_data(all_dfs)
 
-    def fetch_historical_data(self, symbol: str, timeframe: str, years: float) -> pd.DataFrame:
+    async def fetch_historical_data(self, symbol: str, timeframe: str, years: float) -> pd.DataFrame:
         """
         Fetch long-term historical data for backtesting/training from the primary SPOT exchange.
         """
         logger.info(f"Fetching historical data for {symbol} exclusively from primary SPOT source: {self.primary_spot_exchange.__class__.__name__}")
-        return self.primary_spot_exchange.fetch_historical_data(symbol, timeframe, years)
+        return await self.primary_spot_exchange.fetch_historical_data(symbol, timeframe, years)
 
     def aggregate_candle_data(self, dfs: List[pd.DataFrame]) -> pd.DataFrame:
         if not dfs:
@@ -140,7 +140,7 @@ class AggregatedExchange(Exchange):
     async def fetch_funding_rates_async(self, exchange: Exchange, symbol: str, timeframe: str, since: Optional[int] = None, limit: Optional[int] = None) -> Optional[tuple[str, pd.DataFrame]]:
         exchange_name = f"{exchange.exchange_id}-{exchange.market_type}"
         try:
-            df = await asyncio.to_thread(exchange.fetch_funding_rates, symbol, timeframe, since, limit)
+            df = await exchange.fetch_funding_rates(symbol, timeframe, since=since, limit=limit)
             logger.info(f"OK: Successfully fetched {len(df)} funding rates from {exchange_name} for {symbol}")
             return exchange_name, df
         except AttributeError:
@@ -150,25 +150,15 @@ class AggregatedExchange(Exchange):
             logger.warning(f"FAIL: Failed to fetch funding rates from {exchange_name}: {e}")
             return exchange_name, None
 
-    def fetch_funding_rates(self, symbol: str, timeframe: str, since: Optional[int] = None, limit: Optional[int] = 100) -> pd.DataFrame:
+    async def fetch_funding_rates(self, symbol: str, timeframe: str, years: Optional[float] = None, since: Optional[int] = None, limit: Optional[int] = 100) -> pd.DataFrame:
         """
         Fetch recent funding rates by aggregating results from all available SWAP exchanges.
         """
         exchange_names = [f"{exc.exchange_id}-{exc.market_type}" for exc in self.all_swap_exchanges]
         logger.info(f"Querying {len(self.all_swap_exchanges)} SWAP sources for recent funding rates: {exchange_names}")
         
-        async def _fetch_all():
-            tasks = [self.fetch_funding_rates_async(exc, symbol, timeframe, since, limit) for exc in self.all_swap_exchanges]
-            results = await asyncio.gather(*tasks)
-            return results
-
-        try:
-            loop = asyncio.get_running_loop()
-        except RuntimeError:
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-
-        results = loop.run_until_complete(_fetch_all())
+        tasks = [self.fetch_funding_rates_async(exc, symbol, timeframe, since=since, limit=limit) for exc in self.all_swap_exchanges]
+        results = await asyncio.gather(*tasks)
         
         all_dfs = []
         successful_sources = []
@@ -196,7 +186,7 @@ class AggregatedExchange(Exchange):
     async def fetch_open_interest_async(self, exchange: Exchange, symbol: str, timeframe: str, since: Optional[int] = None, limit: Optional[int] = None) -> Optional[tuple[str, pd.DataFrame]]:
         exchange_name = f"{exchange.exchange_id}-{exchange.market_type}"
         try:
-            df = await asyncio.to_thread(exchange.fetch_open_interest, symbol, timeframe, since, limit)
+            df = await exchange.fetch_open_interest(symbol, timeframe, since=since, limit=limit)
             logger.info(f"OK: Successfully fetched {len(df)} open interest data points from {exchange_name} for {symbol}")
             return exchange_name, df
         except AttributeError:
@@ -206,25 +196,16 @@ class AggregatedExchange(Exchange):
             logger.warning(f"FAIL: Failed to fetch open interest from {exchange_name}: {e}")
             return exchange_name, None
 
-    def fetch_open_interest(self, symbol: str, timeframe: str, since: Optional[int] = None, limit: Optional[int] = 100) -> pd.DataFrame:
+    async def fetch_open_interest(self, symbol: str, timeframe: str, years: Optional[float] = None, since: Optional[int] = None, limit: Optional[int] = None) -> pd.DataFrame:
         """
         Fetch recent open interest by aggregating results from all available SWAP exchanges.
+        If limit is None, all available data will be fetched.
         """
         exchange_names = [f"{exc.exchange_id}-{exc.market_type}" for exc in self.all_swap_exchanges]
         logger.info(f"Querying {len(self.all_swap_exchanges)} SWAP sources for recent open interest: {exchange_names}")
         
-        async def _fetch_all():
-            tasks = [self.fetch_open_interest_async(exc, symbol, timeframe, since, limit) for exc in self.all_swap_exchanges]
-            results = await asyncio.gather(*tasks)
-            return results
-
-        try:
-            loop = asyncio.get_running_loop()
-        except RuntimeError:
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-
-        results = loop.run_until_complete(_fetch_all())
+        tasks = [self.fetch_open_interest_async(exc, symbol, timeframe, since=since, limit=limit) for exc in self.all_swap_exchanges]
+        results = await asyncio.gather(*tasks)
         
         all_dfs = []
         successful_sources = []

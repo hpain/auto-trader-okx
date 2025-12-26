@@ -5,6 +5,7 @@ import numpy as np
 import pandas as pd
 from gplearn.genetic import SymbolicRegressor, SymbolicClassifier
 from gplearn.functions import make_function
+from gplearn.fitness import make_fitness
 from sklearn.model_selection import train_test_split, TimeSeriesSplit
 from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
 from sklearn.metrics import accuracy_score, r2_score, roc_auc_score
@@ -13,6 +14,31 @@ import os
 import json
 import warnings
 warnings.filterwarnings('ignore')
+
+# --- Monkey Patch for gplearn compatibility with sklearn >= 1.6 ---
+import gplearn.genetic
+def _validate_data_shim(self, X, y=None, **kwargs):
+    # Determine the correct validation method
+    if hasattr(self, 'validate_data'):
+        return self.validate_data(X, y, **kwargs)
+    else:
+        from sklearn.utils.validation import check_X_y, check_array
+        if y is not None:
+            X_out, y_out = check_X_y(X, y, **kwargs)
+            if hasattr(X_out, 'shape'):
+                self.n_features_in_ = X_out.shape[1]
+            return X_out, y_out
+        else:
+            X_out = check_array(X, **kwargs)
+            if hasattr(X_out, 'shape'):
+                self.n_features_in_ = X_out.shape[1]
+            return X_out
+
+if not hasattr(gplearn.genetic.SymbolicClassifier, '_validate_data'):
+    gplearn.genetic.SymbolicClassifier._validate_data = _validate_data_shim
+if not hasattr(gplearn.genetic.SymbolicRegressor, '_validate_data'):
+    gplearn.genetic.SymbolicRegressor._validate_data = _validate_data_shim
+# ------------------------------------------------------------------
 
 # 自定义金融函数
 def protected_div(x1, x2):
@@ -45,6 +71,39 @@ protected_sqrt_func = make_function(function=protected_sqrt, name='psqrt', arity
 momentum_func = make_function(function=momentum, name='momentum', arity=2)
 volatility_func = make_function(function=volatility, name='volatility', arity=2)
 
+# --- 自定义适应度函数: 多头查准率 (Bull Precision) ---
+def _bull_precision(y, y_pred, w):
+    """
+    自定义适应度函数，专注于最大化'做多'信号的准确率。
+    我们假设 y_pred > 0 为预测做多 (Class 1)。
+    """
+    # 将包含NaN的预测视为不做交易 (False)
+    # y_pred 是原始公式输出
+    preds = np.where(np.isnan(y_pred), 0, y_pred) > 0
+    
+    # 真实值 (y) 应该是 0 或 1
+    # 只需要计算 预测为1 且 真实为1 的比例
+    tp = np.sum((y == 1) & preds)
+    fp = np.sum((y == 0) & preds)
+    
+    denom = tp + fp
+    
+    # 如果没有开单，给一个极低分
+    if denom == 0:
+        return 0.0
+    
+    precision = tp / denom
+    
+    # 惩罚项：如果开单数太少 (例如少于总样本的 0.5%)，则进行惩罚
+    # 这是为了防止模型只通过 1 次运气好的交易就拿到 100% 准确率
+    coverage = denom / len(y)
+    if coverage < 0.005: 
+        return 0.0 # 给予极刑，直接归零
+        
+    return precision
+
+bull_precision_fitness = make_fitness(function=_bull_precision, greater_is_better=True)
+
 
 class EnhancedFeatureMiner:
     """
@@ -59,10 +118,10 @@ class EnhancedFeatureMiner:
         self.generations = self.config.get('generations', 100)  # 增加代数
         self.population_size = self.config.get('population_size', 5000)  # 增加种群规模
         self.function_set = self.config.get('function_set', [
-            'add', 'sub', 'mul', 'pdiv',  # 使用保护除法
-            'psqrt', 'plog',  # 使用保护函数
+            'add', 'sub', 'mul', protected_div_func,  # 使用保护除法对象
+            protected_sqrt_func, protected_log_func,  # 使用保护函数对象
             'abs', 'neg', 'max', 'min',
-            'momentum'  # 自定义动量函数
+            momentum_func  # 自定义动量函数对象
         ])
         self.parsimony_coefficient = self.config.get('parsimony_coefficient', 0.0005)
         self.max_samples = self.config.get('max_samples', 0.9)
@@ -74,6 +133,9 @@ class EnhancedFeatureMiner:
         # 评估方法
         self.use_time_series_cv = self.config.get('use_time_series_cv', True)
         self.cv_splits = self.config.get('cv_splits', 5)
+        
+        # 优化目标 (Metric)
+        self.metric = self.config.get('metric', 'accuracy') # 'accuracy' or 'bull_precision'
     
     def load_and_prepare_data(self, data_path: str = None, data: pd.DataFrame = None):
         """
@@ -85,15 +147,42 @@ class EnhancedFeatureMiner:
             # 加载数据
             try:
                 if data_path is None:
+                    # Default path
                     data_path = 'data/history/binance_BTCUSDT_1h_4y.csv'
-                self.data = pd.read_csv(data_path)
-                self.data.columns = ['timestamp', 'open', 'high', 'low', 'close', 'volume']
-                self.data['timestamp'] = pd.to_datetime(self.data['timestamp'])
-                self.data = self.data.sort_values('timestamp').set_index('timestamp')
-                print("数据加载成功。")
+                
+                print(f"Loading data from: {data_path}")
+                
+                if data_path.endswith('.parquet'):
+                    self.data = pd.read_parquet(data_path, engine='fastparquet')
+                    print(f"Successfully loaded Parquet file with shape: {self.data.shape}")
+                    
+                    # Parquet files from our cache usually have 'y' target column
+                    if 'y' in self.data.columns:
+                        print("Found existing target column 'y', mapping to 'target'.")
+                        self.data['target'] = self.data['y']
+                        # Remove future lookahead cols to prevent leakage during mining
+                        cols_to_drop = ['future_close', 'future_open', 'future_high', 'future_low', 'future_ret', 'y']
+                        self.data.drop(columns=[c for c in cols_to_drop if c in self.data.columns], inplace=True)
+                    
+                    # Ensure index is datetime
+                    if not isinstance(self.data.index, pd.DatetimeIndex):
+                         if 'timestamp' in self.data.columns:
+                            self.data['timestamp'] = pd.to_datetime(self.data['timestamp'])
+                            self.data.set_index('timestamp', inplace=True)
+                         elif 'date' in self.data.columns:
+                            self.data['date'] = pd.to_datetime(self.data['date'])
+                            self.data.set_index('date', inplace=True)
+
+                else:
+                    self.data = pd.read_csv(data_path)
+                    self.data.columns = ['timestamp', 'open', 'high', 'low', 'close', 'volume']
+                    self.data['timestamp'] = pd.to_datetime(self.data['timestamp'])
+                    self.data = self.data.sort_values('timestamp').set_index('timestamp')
+                    print("CSV Data loaded successfully.")
+                    
             except FileNotFoundError:
-                print(f"错误: 数据文件未找到 at {data_path}")
-                # 创建模拟数据
+                print(f"Error: Data file not found at {data_path}")
+                # Create mock data
                 dates = pd.date_range(start='2020-01-01', periods=2000, freq='H')
                 self.data = pd.DataFrame({
                     'timestamp': dates,
@@ -105,14 +194,21 @@ class EnhancedFeatureMiner:
                 })
                 self.data = self.data.sort_values('timestamp').set_index('timestamp')
         
-        # 计算更多技术指标作为基础特征
-        print("计算额外技术指标作为基础特征...")
-        self._calculate_technical_indicators()
+        # Calculate additional technical indicators only if basic columns present and no extended features
+        # If loading from Parquet cache, it likely already has many features.
+        # We check a representative column like 'RSI_14' or lower case 'rsi_14'
+        if 'rsi_14' not in self.data.columns and 'RSI_14' not in self.data.columns:
+             print("Calculating base technical indicators...")
+             self._calculate_technical_indicators()
+        else:
+             print("Skipping base indicator calculation (features already present).")
         
-        # 准备预测目标
-        self._prepare_target()
+        # Prepare target if not already present
+        if 'target' not in self.data.columns:
+            self._prepare_target()
         
-        # 清理数据
+        # Clean data
+        self.data = self.data.replace([np.inf, -np.inf], np.nan)
         self.data = self.data.dropna()
         
         return self.data
@@ -223,6 +319,8 @@ class EnhancedFeatureMiner:
                         max_samples=self.max_samples,
                         verbose=1,
                         random_state=42,
+                        metric=bull_precision_fitness if self.metric == 'bull_precision' else 'log loss',
+                        stopping_criteria=1.1, # 强制跑完所有代数
                         n_jobs=1  # 在交叉验证中避免多进程冲突
                     )
                 else:
@@ -234,6 +332,7 @@ class EnhancedFeatureMiner:
                         max_samples=self.max_samples,
                         verbose=1,
                         random_state=42,
+                        stopping_criteria=1.1, # 强制跑完所有代数
                         n_jobs=1  # 在交叉验证中避免多进程冲突
                     )
                 
@@ -287,7 +386,9 @@ class EnhancedFeatureMiner:
                     parsimony_coefficient=self.parsimony_coefficient,
                     max_samples=self.max_samples,
                     verbose=1,
-                    random_state=42
+                    random_state=42,
+                    metric=bull_precision_fitness if self.metric == 'bull_precision' else 'log loss',
+                    stopping_criteria=1.1 # 强制跑完所有代数
                 )
             else:
                 gp = SymbolicRegressor(
@@ -297,7 +398,8 @@ class EnhancedFeatureMiner:
                     parsimony_coefficient=self.parsimony_coefficient,
                     max_samples=self.max_samples,
                     verbose=1,
-                    random_state=42
+                    random_state=42,
+                    stopping_criteria=1.1 # 强制跑完所有代数
                 )
             
             gp.fit(X_train, y_train)
@@ -334,7 +436,9 @@ class EnhancedFeatureMiner:
                 parsimony_coefficient=self.parsimony_coefficient,
                 max_samples=self.max_samples,
                 verbose=1,
-                random_state=42
+                random_state=42,
+                metric=bull_precision_fitness if self.metric == 'bull_precision' else 'log loss',
+                stopping_criteria=1.1 # 强制跑完所有代数
             )
         else:
             final_gp = SymbolicRegressor(
@@ -344,7 +448,8 @@ class EnhancedFeatureMiner:
                 parsimony_coefficient=self.parsimony_coefficient,
                 max_samples=self.max_samples,
                 verbose=1,
-                random_state=42
+                random_state=42,
+                stopping_criteria=1.1 # 强制跑完所有代数
             )
         
         final_gp.fit(X, y)
@@ -427,12 +532,22 @@ class EnhancedFeatureMiner:
         feature_cols = [col for col in self.data.columns 
                        if col not in ['timestamp', 'target'] and not col.startswith('target')]
         
+        # Convert function set to serializable list of strings
+        serializable_function_set = []
+        for f in self.function_set:
+            if hasattr(f, 'name'):
+                serializable_function_set.append(f.name)
+            elif isinstance(f, str):
+                serializable_function_set.append(f)
+            else:
+                serializable_function_set.append(str(f))
+
         mined_feature_data = {
             "name": f"enhanced_gp_feature_{pd.Timestamp.utcnow().strftime('%Y%m%d%H%M')}",
             "formula": self.best_program_str,
             "base_features": feature_cols,
             "target_type": self.target_type,
-            "function_set": self.function_set,
+            "function_set": serializable_function_set,
             "params": {
                 "generations": self.generations,
                 "population_size": self.population_size,
@@ -447,14 +562,17 @@ class EnhancedFeatureMiner:
         return output_path
 
 
+import argparse
+import sys
+
 def run_enhanced_feature_mining(data_path: str = None, config: dict = None):
     """
     运行增强版因子挖掘
     """
     if config is None:
         config = {
-            'generations': 100,
-            'population_size': 2000,
+            'generations': 20,
+            'population_size': 1000,
             'target_type': 'classification',  # 使用分类而非回归
             'use_time_series_cv': True,
             'cv_splits': 5
@@ -502,4 +620,29 @@ def run_enhanced_feature_mining(data_path: str = None, config: dict = None):
 
 # 如果直接运行此脚本
 if __name__ == "__main__":
-    miner, model, result = run_enhanced_feature_mining()
+    parser = argparse.ArgumentParser(description='Run Enhanced Feature Mining')
+    parser.add_argument('--data_path', type=str, default=None, help='Path to input data (CSV or Parquet)')
+    parser.add_argument('--generations', type=int, default=20, help='Number of generations for GP')
+    parser.add_argument('--population', type=int, default=1000, help='Population size for GP')
+    parser.add_argument('--cv_splits', type=int, default=5, help='Number of CV splits')
+    parser.add_argument('--target_type', type=str, default='classification', choices=['classification', 'regression'], help='Target type')
+    parser.add_argument('--metric', type=str, default='accuracy', choices=['accuracy', 'bull_precision'], help='Optimization metric')
+    
+    args = parser.parse_args()
+    
+    config = {
+        'generations': args.generations,
+        'population_size': args.population,
+        'target_type': args.target_type,
+        'metric': args.metric,
+        'use_time_series_cv': True,
+        'cv_splits': args.cv_splits
+    }
+    
+    try:
+        miner, model, result = run_enhanced_feature_mining(args.data_path, config)
+    except Exception as e:
+        print(f"Execution failed: {e}")
+        import traceback
+        traceback.print_exc()
+        sys.exit(1)

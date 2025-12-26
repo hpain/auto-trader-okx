@@ -271,6 +271,13 @@ if __name__ == "__main__":
     
     args = parser.parse_args()
     
+    # FIX: Confirmed necessary for Windows stability (prevents WinError 121 / SSL timeouts)
+    if sys.platform == 'win32':
+        try:
+            asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+        except Exception as e:
+            print(f"Warning: Failed to set WindowsSelectorEventLoopPolicy: {e}")
+
     try:
         asyncio.run(main_loop(args))
     except KeyboardInterrupt:

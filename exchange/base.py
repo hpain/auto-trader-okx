@@ -19,21 +19,21 @@ class Exchange(ABC):
         pass
 
     @abstractmethod
-    def fetch_historical_data(self, symbol: str, timeframe: str, years: float) -> pd.DataFrame:
+    async def fetch_historical_data(self, symbol: str, timeframe: str, years: float = None, since: Optional[int] = None) -> pd.DataFrame:
         """
         Fetch a large amount of historical data for backtesting or training.
         """
         pass
 
     @abstractmethod
-    def fetch_funding_rates(self, symbol: str, timeframe: str, years: Optional[float] = None, since: Optional[int] = None, limit: Optional[int] = None) -> pd.DataFrame:
+    async def fetch_funding_rates(self, symbol: str, timeframe: str, years: Optional[float] = None, since: Optional[int] = None, limit: Optional[int] = None) -> pd.DataFrame:
         """
         Fetch funding rates. Can fetch historical data using 'years' or recent data using 'since' and 'limit'.
         """
         pass
 
     @abstractmethod
-    def fetch_open_interest(self, symbol: str, timeframe: str, years: Optional[float] = None, since: Optional[int] = None, limit: Optional[int] = None) -> pd.DataFrame:
+    async def fetch_open_interest(self, symbol: str, timeframe: str, years: Optional[float] = None, since: Optional[int] = None, limit: Optional[int] = None) -> pd.DataFrame:
         """
         Fetch open interest data. Can fetch historical data using 'years' or recent data using 'since' and 'limit'.
         """

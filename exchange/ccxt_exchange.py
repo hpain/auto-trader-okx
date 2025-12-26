@@ -26,6 +26,7 @@ class CcxtExchange(Exchange):
             'apiKey': api_key,
             'secret': api_secret,
             'timeout': 30000,
+            'aiohttp_trust_env': True, # Important: Tell aiohttp to respect env vars
             'options': {
                 'defaultType': market_type,
             },
@@ -33,12 +34,16 @@ class CcxtExchange(Exchange):
         if passphrase:
             config['password'] = passphrase
 
+        # Explicitly read proxy from env and inject into config
+        # This ensures CCXT uses it even if aiohttp auto-discovery fails
         https_proxy = os.environ.get('HTTPS_PROXY') or os.environ.get('https_proxy')
         if https_proxy:
             config['httpsProxy'] = https_proxy
+            # config['httpProxy'] = https_proxy # Set both for good measure
             logger.info(f"Applying system HTTPS_PROXY: {https_proxy}")
 
         self.exchange = exchange_class(config)
+
         
         if sandbox:
             if 'test' in self.exchange.urls:
@@ -111,14 +116,23 @@ class CcxtExchange(Exchange):
             params['category'] = 'linear'
             logger.info("Bybit swap market detected. Explicitly loading linear markets for v5 API.")
 
-        try:
-            await self.exchange.load_markets(params=params)
-            self.is_loaded = True
-            logger.info(f"Successfully loaded markets for {self.exchange.id} ({self.market_type}).")
-        except Exception as e:
-            logger.error(f"Failed to load markets for {self.exchange.id}: {e}", exc_info=True)
-            # Depending on the strategy, you might want to raise the exception
-            # raise e
+        retry_count = 3
+        for attempt in range(1, retry_count + 1):
+            try:
+                await self.exchange.load_markets(params=params)
+                self.is_loaded = True
+                logger.info(f"Successfully loaded markets for {self.exchange.id} ({self.market_type}).")
+                return
+            except (RequestTimeout, NetworkError) as e:
+                if attempt < retry_count:
+                    wait_time = 2 * attempt
+                    logger.warning(f"Timeout/Network error loading markets for {self.exchange.id} (Attempt {attempt}/{retry_count}): {e}. Retrying in {wait_time}s...")
+                    await asyncio.sleep(wait_time)
+                else:
+                    logger.warning(f"Final failure loading markets for {self.exchange.id} after {retry_count} attempts: {e}. Proceeding without full market data.")
+            except Exception as e:
+                logger.error(f"Failed to load markets for {self.exchange.id}: {e}", exc_info=True)
+                return
 
     async def close(self):
         """Gracefully close the exchange connection."""
@@ -152,22 +166,41 @@ class CcxtExchange(Exchange):
             logger.error(f"Error fetching candles for {symbol}: {e}", exc_info=True)
             return pd.DataFrame()
 
-    async def fetch_historical_data(self, symbol: str, timeframe: str, years: float) -> pd.DataFrame:
+    async def fetch_historical_data(self, symbol: str, timeframe: str, years: float = None, since: int = None) -> pd.DataFrame:
         # from datetime import datetime, timedelta # Moved to top level
 
         timeframe_ms = self.exchange.parse_timeframe(timeframe.lower()) * 1000
-        since_dt = datetime.utcnow() - timedelta(days=years * 365.25)
-        since_ms = int(since_dt.timestamp() * 1000)
+        
+        since_ms = since
+        since_dt = None
+        
+        if since_ms is None:
+            if years is None:
+                # Default to a reasonable lookback if neither is provided, e.g., 1 year
+                years = 1.0
+            since_dt = datetime.utcnow() - timedelta(days=years * 365.25)
+            since_ms = int(since_dt.timestamp() * 1000)
+        else:
+             since_dt = datetime.fromtimestamp(since_ms / 1000)
+
         ccxt_symbol = self._format_symbol(symbol) if self.market_type == 'spot' else self._get_swap_symbol(symbol)
 
         all_candles = []
-        logger.info(f"Fetching historical data for {symbol} on {timeframe} since {since_dt.strftime('%Y-%m-%d')}...")
+        logger.info(f"Fetching historical data for {symbol} on {timeframe} since {since_dt.strftime('%Y-%m-%d %H:%M:%S')}...")
 
         while True:
             try:
                 candles = await self.exchange.fetch_ohlcv(ccxt_symbol, timeframe.lower(), since=since_ms, limit=1000)
                 if not candles:
                     break
+                
+                # --- Added Logging for Batch Details ---
+                batch_start_time = datetime.fromtimestamp(candles[0][0] / 1000).strftime('%Y-%m-%d %H:%M:%S')
+                batch_end_time = datetime.fromtimestamp(candles[-1][0] / 1000).strftime('%Y-%m-%d %H:%M:%S')
+                # Note: Requested limit is 1000, but exchanges like OKX may cap at 100 or 300.
+                logger.info(f"Fetched batch from [{self.exchange_id}] for {symbol}: {len(candles)} candles | Start: {batch_start_time} -> End: {batch_end_time}")
+                # ---------------------------------------
+
                 all_candles.extend(candles)
                 since_ms = candles[-1][0] + timeframe_ms
                 await asyncio.sleep(self.exchange.rateLimit / 1000)
@@ -183,6 +216,7 @@ class CcxtExchange(Exchange):
         df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms', utc=True)
         df.set_index('timestamp', inplace=True)
         df.sort_index(inplace=True)
+        logger.info(f"Successfully fetched {len(df)} historical candles for {symbol} on {timeframe}.")
         return df[['open', 'high', 'low', 'close', 'volume']]
 
     async def get_balance(self, currency: str) -> float:
@@ -316,14 +350,172 @@ class CcxtExchange(Exchange):
         if not self.exchange.has['fetchFundingRateHistory']:
             logger.warning(f"Exchange {self.exchange.id} does not support fetching funding rate history.")
             return pd.DataFrame()
-        # Implementation would be similar to fetch_historical_data, with await calls
-        # For brevity, this is left as an exercise.
-        return pd.DataFrame()
+
+        ccxt_symbol = self._format_symbol(symbol) if self.market_type == 'spot' else self._get_swap_symbol(symbol)
+        
+        # Strategy: Tiered Fallback (User Request -> Safe Window -> Latest)
+        funding_rates = None
+        
+        # 1. Attempt with User Request
+        try:
+            funding_rates = await self.exchange.fetch_funding_rate_history(ccxt_symbol, since=since, limit=limit)
+        except (ExchangeError, BaseError) as e:
+            logger.warning(f"Failed to fetch funding rates for {symbol} with since={since}: {e}. Retrying with shorter lookback (90 days).")
+            funding_rates = None
+
+        # 2. Attempt with Safe Window (90 days - common limit for OKX/Binance funding history)
+        if funding_rates is None:
+            fallback_since = int((datetime.utcnow() - timedelta(days=90)).timestamp() * 1000)
+            try:
+                funding_rates = await self.exchange.fetch_funding_rate_history(ccxt_symbol, since=fallback_since, limit=limit)
+            except (ExchangeError, BaseError) as e:
+                logger.warning(f"Failed to fetch funding rates with 90-day lookback: {e}. Retrying with latest data only.")
+                funding_rates = None
+        
+        # 3. Attempt Latest (No 'since' parameter)
+        if funding_rates is None:
+            try:
+                # passing since=None or omitting it usually fetches the most recent records
+                funding_rates = await self.exchange.fetch_funding_rate_history(ccxt_symbol, limit=limit)
+                logger.info(f"Successfully fetched latest funding rates for {symbol} (fallback mode).")
+            except Exception as e:
+                logger.error(f"All attempts to fetch funding rates for {symbol} failed. Last error: {e}")
+                return pd.DataFrame()
+
+        if not funding_rates:
+            return pd.DataFrame()
+        
+        df = pd.DataFrame(funding_rates)
+        df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms', utc=True)
+        df.set_index('timestamp', inplace=True)
+        df.rename(columns={'fundingRate': 'funding_rate'}, inplace=True)
+        return df[['funding_rate']]
 
     async def fetch_open_interest(self, symbol: str, timeframe: str, years: Optional[float] = None, since: Optional[int] = None, limit: Optional[int] = None) -> pd.DataFrame:
         if not self.exchange.has['fetchOpenInterestHistory']:
             logger.warning(f"Exchange {self.exchange.id} does not support fetching open interest history.")
             return pd.DataFrame()
-        # Implementation would be similar to fetch_historical_data, with await calls
-        # For brevity, this is left as an exercise.
-        return pd.DataFrame()
+
+        ccxt_symbol = self._format_symbol(symbol) if self.market_type == 'spot' else self._get_swap_symbol(symbol)
+        
+        # Determine initial 'since'
+        if since is None:
+            if years is None:
+                years = 1.0 / 12.0 # Default to 30 days
+            since_dt = datetime.utcnow() - timedelta(days=years * 365.25)
+            since = int(since_dt.timestamp() * 1000)
+            
+        attempts = [
+            ("Original", since),
+            ("30 Days", int((datetime.utcnow() - timedelta(days=30)).timestamp() * 1000)),
+            ("7 Days", int((datetime.utcnow() - timedelta(days=7)).timestamp() * 1000))
+        ]
+        
+        # If original since is already within 30 days, don't retry 30 days again, etc.
+        # Filter attempts to avoid redundant retries or retrying with OLDER dates (illogical)
+        unique_attempts = []
+        seen_timestamps = set()
+        for label, ts in attempts:
+            if ts not in seen_timestamps and ts >= since: # Only try shorter or equal lookbacks (larger timestamp)
+                 seen_timestamps.add(ts)
+                 unique_attempts.append((label, ts))
+        
+        # Ensure at least one attempt (the original) is made if logic filtered everything
+        if not unique_attempts:
+             unique_attempts = [("Original", since)]
+
+        all_oi_data = []
+        
+        for label, start_ts in unique_attempts:
+            logger.info(f"Attempting to fetch open interest for {symbol} on {timeframe} since {datetime.fromtimestamp(start_ts/1000).isoformat()} ({label})...")
+            
+            temp_data = []
+            current_since = start_ts
+            failed = False
+            
+            batch_limit = 500
+            if limit and limit < batch_limit:
+                batch_limit = limit
+
+            while True:
+                try:
+                    batch = await self.exchange.fetch_open_interest_history(ccxt_symbol, timeframe.lower(), since=current_since, limit=batch_limit)
+                    
+                    if not batch:
+                        break
+                    
+                    temp_data.extend(batch)
+                    
+                    if limit and len(temp_data) >= limit:
+                        temp_data = temp_data[:limit]
+                        break
+
+                    last_ts = batch[-1]['timestamp']
+                    if last_ts == current_since:
+                         break
+                    current_since = last_ts + 1
+                    
+                    if current_since > int(datetime.utcnow().timestamp() * 1000):
+                        break
+                        
+                    await asyncio.sleep(self.exchange.rateLimit / 1000.0)
+                    
+                except (ExchangeError, BaseError) as e:
+                    # Specific error handling can be added here
+                    # e.g., if code is -1130 (Binance invalid param), we know to fail and retry shorter
+                    logger.warning(f"Error fetching batch with start_ts={start_ts}: {e}.")
+                    failed = True
+                    break
+                except Exception as e:
+                    logger.error(f"Unexpected error: {e}", exc_info=True)
+                    failed = True
+                    break
+            
+            if not failed and temp_data:
+                all_oi_data = temp_data
+                break # Success!
+            
+            if failed:
+                logger.info(f"Fetch with {label} lookback failed. Retrying with shorter history...")
+                continue
+            else:
+                 # If loop finished without error but no data, likely just no data available for that range.
+                 # Stop trying shorter ranges if we got nothing but no error? 
+                 # Or maybe the data starts later.
+                 break
+
+        if not all_oi_data:
+             # Final Fallback: Fetch latest without 'since'
+            logger.info("Pagination strategies failed. Attempting to fetch latest open interest (Final Fallback).")
+            try:
+                latest = await self.exchange.fetch_open_interest_history(ccxt_symbol, timeframe.lower(), limit=batch_limit)
+                if latest:
+                    all_oi_data = latest
+            except Exception as e:
+                logger.warning(f"Final fallback fetch failed: {e}")
+
+        if not all_oi_data:
+            return pd.DataFrame()
+            
+        df = pd.DataFrame(all_oi_data)
+        
+        if 'timestamp' in df.columns:
+            df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms', utc=True)
+            df.set_index('timestamp', inplace=True)
+            df.sort_index(inplace=True)
+        
+        if 'openInterestAmount' in df.columns:
+             df.rename(columns={'openInterestAmount': 'open_interest'}, inplace=True)
+        elif 'openInterest' in df.columns:
+             df.rename(columns={'openInterest': 'open_interest'}, inplace=True)
+        elif 'openInterestValue' in df.columns:
+             df.rename(columns={'openInterestValue': 'open_interest'}, inplace=True)
+        
+        df = df[~df.index.duplicated(keep='first')]
+        
+        if 'open_interest' in df.columns:
+            logger.info(f"Successfully fetched {len(df)} open interest records for {symbol}.")
+            return df[['open_interest']]
+        else:
+            logger.warning(f"Open interest data from {self.exchange.id} missing expected columns. Available: {df.columns}")
+            return pd.DataFrame()

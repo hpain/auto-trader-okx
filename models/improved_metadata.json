@@ -1,12 +1,7 @@
 {
   "model_type": "lgb_classifier_improved",
   "feature_cols": [
-    "vol",
-    "vol_lag_2",
-    "vol_lag_3",
-    "vol_lag_5",
-    "vol_lag_10",
-    "vol_lag_20",
+    "volume",
     "volatility_10",
     "volatility_20",
     "volatility_30",
@@ -20,28 +15,28 @@
     "bb_width_30",
     "adx_14",
     "adx_20",
-    "adx_30",
-    "adx_14_x_rsi_21",
-    "adx_14_x_rsi_30",
-    "adx_20_x_rsi_30",
-    "day_of_week",
-    "prob_ranging"
+    "sent_mean",
+    "sent_median",
+    "count",
+    "prob_bull",
+    "prob_ranging",
+    "vol"
   ],
   "best_params": {
     "model": "lgb",
-    "lgb_n_estimators": 300,
-    "learning_rate": 0.09476737746616797,
-    "num_leaves": 54,
-    "max_depth": 7,
-    "min_child_samples": 24,
-    "subsample": 0.7741889022797774,
-    "colsample_bytree": 0.8273502083243853,
-    "confidence_threshold": 0.6964471979316048
+    "lgb_n_estimators": 251,
+    "learning_rate": 0.033177819069622375,
+    "num_leaves": 79,
+    "max_depth": 5,
+    "min_child_samples": 33,
+    "subsample": 0.7461073580581832,
+    "colsample_bytree": 0.8390703687412286,
+    "confidence_threshold": 0.5798370897986675
   },
-  "n_samples": 18465,
-  "best_score": 0.5693030312467311,
-  "val_return": -0.021199700754417794,
+  "n_samples": 39261,
+  "best_score": -0.005386620579509805,
+  "val_return": 0.0,
   "val_sharpe": 0.0,
-  "training_timestamp": "2025-12-09T07:04:58.401344+00:00",
-  "source_run_timestamp": "2025-12-09 15:04:56"
+  "training_timestamp": "2025-12-25T15:26:12.158462+00:00",
+  "source_run_timestamp": "2025-12-25 23:26:10"
 }

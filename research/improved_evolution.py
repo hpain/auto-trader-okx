@@ -84,7 +84,17 @@ def main():
 
     if os.path.exists(feature_cache_path) and not args.ignore_local:
         logging.info(f"OK CACHE: Found feature cache, loading from {feature_cache_path}")
-        dfm = pd.read_parquet(feature_cache_path)
+        try:
+            dfm = pd.read_parquet(feature_cache_path, engine='fastparquet')
+
+        except Exception as e:
+            logging.warning(f"Failed to load parquet with fastparquet: {e}. Trying default engine...")
+            try:
+                dfm = pd.read_parquet(feature_cache_path)
+
+            except Exception as e2:
+                 logging.error(f"CRITICAL: Failed to load parquet file: {e2}")
+                 return
     else:
         logging.info("WAIT CACHE: No feature cache found or --ignore-local is set, running full data pipeline...")
         from exchange.factory import ExchangeFactory
@@ -161,7 +171,12 @@ def main():
                     await exchange_instance.close()
         
         # Run the async function
-        dfp, feature_dfs, derivatives_dfs, all_dfs = asyncio.run(fetch_all_data_async())
+        fetched_data = asyncio.run(fetch_all_data_async())
+        
+        if fetched_data is None:
+             return
+             
+        dfp, feature_dfs, derivatives_dfs, all_dfs = fetched_data
         
         if dfp is None:
             return
@@ -208,14 +223,117 @@ def main():
             except Exception as e:
                 logging.error(f"Failed to fetch on-chain data: {e}", exc_info=True)
         else:
-            logging.info("Skipping on-chain data fetching as per configuration.")
-
+            logging.info("Skipping on-chain data fetching as per configuration.") 
 
         # Generate features using all available data
         dfm = generate_features(dfp, news_csv_path=news_csv_path, feature_dfs=feature_dfs, derivatives_dfs=derivatives_dfs, onchain_dfs=onchain_dfs)
         
-        dfm.to_parquet(feature_cache_path)
-        logging.info(f"SAVE CACHE: Features saved to {feature_cache_path}")
+
+    # --- Mined Feature Integration ---
+    # Look for the latest mined feature JSON file
+    try:
+        mined_files = [f for f in os.listdir("models") if f.startswith("enhanced_mined_features_") and f.endswith(".json")]
+        if mined_files:
+            # Sort by timestamp (in filename)
+            mined_files.sort(reverse=True)
+            latest_mined_file = os.path.join("models", mined_files[0])
+            logging.info(f"Found mined feature file: {latest_mined_file}. Attempting to integrate...")
+            
+            with open(latest_mined_file, 'r', encoding='utf-8') as f:
+                feature_def = json.load(f)
+            
+            # Define evaluation context
+            def protected_div(x1, x2):
+                with np.errstate(divide='ignore', invalid='ignore'):
+                    return np.where(np.abs(x2) > 0.001, x1 / x2, 1.0)
+            
+            def protected_log(x1):
+                return np.log(np.abs(x1) + 1e-10)
+            
+            def protected_sqrt(x1):
+                return np.sqrt(np.abs(x1))
+            
+            def momentum(x1, x2):
+                # x2 is window, must be int. In GP string it might be float, cast it.
+                # Ideally x2 comes from finding the argument.
+                # Since GP output might evaluate x2 as a series, we handle it carefully.
+                # For momentum(col, lag), lag is usually a terminal constant.
+                # We'll implement a flexible version.
+                return (x1 - x1.shift(int(np.mean(x2) if isinstance(x2, (pd.Series, np.ndarray)) else x2))).fillna(0)
+
+            def volatility(close, volume): # Not strictly using volume here match definition
+                return close.pct_change().abs().fillna(0) # Simplified proxy if func def matches
+            
+            # If the miner used 'volatility(close, volume)', we should check actual def.
+            # In miner: returns = np.diff(close); vol = np.abs(returns).
+            def volatility_miner(x1, x2):
+                    # Miner def: np.diff(close, prepend=close[0]); abs(returns)
+                    # x1 is close, x2 is volume (unused in simple def but present in arity)
+                    return x1.diff().abs().fillna(0)
+
+            eval_context = {
+                'add': np.add, 'sub': np.subtract, 'mul': np.multiply, 
+                'div': protected_div, 'pdiv': protected_div,
+                'sqrt': protected_sqrt, 'psqrt': protected_sqrt,
+                'log': protected_log, 'plog': protected_log,
+                'abs': np.abs, 'neg': np.negative, 
+                'max': np.maximum, 'min': np.minimum,
+                'momentum': momentum, 'volatility': volatility_miner
+            }
+            
+            formula = feature_def.get('formula')
+            base_features = feature_def.get('base_features', [])
+            
+            if formula and base_features:
+                # Replace X0, X1 etc with dfm['col_name'] representation for eval
+                # We construct a string that can be evaluated using the context map
+                # 'add(X0, X1)' -> 'add(dfm[base_features[0]], dfm[base_features[1]])'
+                
+                import re
+                # Regex to find X followed by digits
+                # We iterate backwards to avoid replacing X10 as X1 + 0
+                
+                parse_error = False
+                # Convert formula to python expression
+                # Function names like 'add' are keys in eval_context.
+                # We need to ensure we don't treat them as strings if they are function calls.
+                # But eval() with a dict locals works for function names.
+                
+                # The tricky part: X0, X1.
+                # Let's replace them with variable names referencing data columns.
+                # We'll put actual Series objects into a dict for X0, X1...
+                
+                local_vars = eval_context.copy()
+                for i, col in enumerate(base_features):
+                    if col in dfm.columns:
+                        local_vars[f'X{i}'] = dfm[col]
+                    else:
+                            logging.warning(f"Mined feature requires missing column {col}. Skipping.")
+                            parse_error = True
+                            break
+                
+                if not parse_error:
+                    try:
+                        # Evaluate the formula
+                        logging.info(f"Evaluating formula: {formula}")
+                        # The formula string from gplearn is like 'add(X0, X1)'
+                        # capable of being eval'd if functions and variables are in scope.
+                        new_feature_series = eval(formula, {"__builtins__": None}, local_vars)
+                        
+                        feature_name = feature_def.get('name', 'mined_feature')
+                        dfm[feature_name] = new_feature_series
+                        logging.info(f"Successfully added mined feature: {feature_name}")
+                    except Exception as e:
+                        logging.error(f"Failed to evaluate mined feature formula: {e}")
+            
+    except Exception as e:
+        logging.warning(f"Error during mined feature integration: {e}")
+    
+
+
+    # Save cache
+    dfm.to_parquet(feature_cache_path)
+    logging.info(f"SAVE CACHE: Features saved to {feature_cache_path}")
 
     # 确保返回的 DataFrame 有一个 DatetimeIndex
     if not isinstance(dfm.index, pd.DatetimeIndex):
@@ -230,10 +348,36 @@ def main():
     # --- Data Cleaning ---
     # Replace infinite values with NaN, then drop all rows with any NaN in features or target.
     data.replace([np.inf, -np.inf], np.nan, inplace=True)
+
+    # --- Feature Density Filter ---
+    # Smartly remove features that are mostly empty (e.g., partial history OI) 
+    # to prevent 'dropna' from destroying the entire dataset (long history).
+    # Default threshold: Drop feature if > 20% of rows are NaN.
+    nan_threshold = 0.2
+    dense_feature_cols = []
+    dropped_sparse_cols = []
+
+    for col in feature_cols:
+        if col not in data.columns:
+            continue
+        nan_ratio = data[col].isna().mean()
+        if nan_ratio > nan_threshold:
+            dropped_sparse_cols.append(f"{col} ({nan_ratio:.1%})")
+            data.drop(columns=[col], inplace=True)
+        else:
+            dense_feature_cols.append(col)
+    
+    if dropped_sparse_cols:
+        logging.warning(f"WARN: Dropped {len(dropped_sparse_cols)} sparse features to preserve dataset length: {dropped_sparse_cols}")
+        feature_cols = dense_feature_cols
+
+
+    
     data.dropna(subset=feature_cols + ["y"], inplace=True)
+
     
     if len(data) < 500:
-        logging.warning(f"WARN 样本太少（{len(data)}）无法有效训练。")
+        logging.warning(f"WARN 样本太少（{len(data)}）无法有效训练。可能是某些特征（{feature_cols[:5]}...）导致数据全部被过滤。")
         return
 
     # --- Feature Pre-selection ---
@@ -651,6 +795,14 @@ def train_evolve(
     return best_score, best_params
 
 if __name__ == "__main__":
+    # FIX: Confirmed necessary for Windows stability (prevents WinError 121 / SSL timeouts)
+    if sys.platform == 'win32':
+        import asyncio
+        try:
+            asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+        except Exception as e:
+            logging.warning(f"Failed to set WindowsSelectorEventLoopPolicy: {e}")
+
     try:
         main()
     except Exception as e:

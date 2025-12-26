@@ -51,13 +51,13 @@ class BaseStrategy(ABC):
             数据是否有效
         """
         if data is None or data.empty:
-            self.logger.error("Input data is empty or None")
+            self.logger.error("输入数据为空或为 None")
             return False
         
         required_columns = ['open', 'high', 'low', 'close', 'volume']
         missing_columns = [col for col in required_columns if col not in data.columns]
         if missing_columns:
-            self.logger.error(f"Missing required columns: {missing_columns}")
+            self.logger.error(f"缺少必要列: {missing_columns}")
             return False
         
         return True

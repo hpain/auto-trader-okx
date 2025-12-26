@@ -26,9 +26,18 @@ def run_model_backtest():
     else:
         logger.info("缓存未找到，通过API获取历史数据...")
         try:
-            # Use the factory to get the aggregated exchange instance
-            exchange = ExchangeFactory.create_exchange('aggregated')
-            data = exchange.fetch_historical_data(SYMBOL, TIMEFRAME, YEARS_OF_DATA)
+            import asyncio
+            
+            async def fetch_data_async():
+                # Use the factory to get the aggregated exchange instance
+                exchange = await ExchangeFactory.create_exchange('aggregated')
+                try:
+                    return await exchange.fetch_historical_data(SYMBOL, TIMEFRAME, YEARS_OF_DATA)
+                finally:
+                    if hasattr(exchange, 'close'):
+                        await exchange.close()
+
+            data = asyncio.run(fetch_data_async())
             
             # Save data to cache for future runs
             os.makedirs(os.path.dirname(CACHE_PATH), exist_ok=True)

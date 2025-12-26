@@ -1,26 +1,26 @@
 {
   "model_type": "lgb_classifier",
   "feature_cols": [
-    "vol",
-    "roc_30",
-    "vol_lag_5",
-    "vol_lag_2",
-    "obv",
-    "volatility_30",
+    "volume",
     "volatility_10",
     "bb_width_14",
-    "adx_neg_30",
     "volatility_20",
-    "bb_width_30",
-    "volatility_60",
     "bb_width_20",
+    "adx_20",
+    "bb_width_30",
     "volatility_120",
-    "ema_spread_20_50",
-    "atr_30",
-    "ema_spread_10_50",
+    "prob_bull",
+    "prob_ranging",
+    "adx_14",
+    "volatility_30",
+    "volatility_60",
     "atr_14",
+    "atr_30",
+    "day_of_week",
     "atr_20",
-    "sma_spread_10_50"
+    "sent_median",
+    "count",
+    "vol"
   ],
   "best_params": {
     "model": "lgb",
@@ -33,8 +33,8 @@
     "colsample_bytree": 0.6909562548939261,
     "confidence_threshold": 0.6308110370432255
   },
-  "n_samples": 4191,
+  "n_samples": 34837,
   "best_score": 1.258076427612203,
-  "training_timestamp": "2025-11-10T09:33:38.388540+00:00",
+  "training_timestamp": "2025-12-24T06:59:31.789613+00:00",
   "source_run_timestamp": "2025-09-30 11:30:21"
 }
