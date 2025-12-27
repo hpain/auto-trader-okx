@@ -4,6 +4,8 @@ import joblib
 import json
 from strategies.base_strategy import BaseStrategy
 
+import logging
+
 class LGBStrategy(BaseStrategy):
     """
     一个完全向量化的LightGBM模型预测策略，符合BaseStrategy标准。
@@ -24,6 +26,8 @@ class LGBStrategy(BaseStrategy):
 
         self.model_path = f"{model_dir}/{model_name}"
         self.metadata_path = f"{model_dir}/{metadata_name}"
+        
+        self.logger = logging.getLogger(f"strategy.{strategy_name}")
 
         try:
             self.model = joblib.load(self.model_path)
@@ -35,16 +39,16 @@ class LGBStrategy(BaseStrategy):
             # Add sell threshold (default to 0.45 or slightly lower than buy threshold)
             self.sell_threshold = metadata.get('best_params', {}).get('sell_threshold', 0.45)
 
-            print(f"INFO [{self.strategy_name}]: 模型已从 {self.model_path} 加载。")
-            print(f"INFO [{self.strategy_name}]: 使用 {len(self.features)} 个特征。")
-            print(f"INFO [{self.strategy_name}]: 买入置信度门槛: {self.buy_threshold:.2f}, 卖出置信度门槛: {self.sell_threshold:.2f}")
+            self.logger.info(f"MODEL LOADED: {self.model_path}")
+            self.logger.info(f"Features Used: {len(self.features)}")
+            self.logger.info(f"Thresholds -> Buy: {self.buy_threshold:.2f}, Sell: {self.sell_threshold:.2f}")
 
         except FileNotFoundError as e:
             self.model = None
-            print(f"ERROR [{self.strategy_name}]: 加载模型或元数据失败: {e}。策略将失效。")
+            self.logger.error(f"FAILED to load model/metadata: {e}. Strategy DISABLED.")
         except Exception as e:
             self.model = None
-            print(f"ERROR [{self.strategy_name}]: 初始化时发生未知错误: {e}。策略将失效。")
+            self.logger.error(f"UNKNOWN ERROR during init: {e}. Strategy DISABLED.")
 
     def generate_signals(self, data: pd.DataFrame) -> pd.DataFrame:
         """
