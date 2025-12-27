@@ -473,11 +473,11 @@ class PortfolioManager:
         quantity = risk_amount / price
         
         # 如果是卖出信号，只卖出当前持仓的一部分
+        # 如果是卖出信号，全仓卖出
         if signal < 0:
             current_position = self.positions.get(symbol, 0.0)
-            # Mod: Allow selling 100% of the position. 
-            # In Spot trading, fees are deducted from the quote currency (USDT), so we can sell the full base asset amount.
-            quantity = min(quantity, current_position)
+            # FORCE CLOSE: Overwrite calculated risk-based quantity with full position size
+            quantity = current_position
         
         return quantity
 
