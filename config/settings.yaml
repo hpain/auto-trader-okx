@@ -12,7 +12,7 @@ exchange:
   # aggregation. This provides redundancy and a more robust price feed.
   # The system will automatically use all available sources.
   secondary_exchanges:
-    - 'okx'
+    - 'binance'
     # - 'bybit' # Commented out unless you have keys or want to query public data
 
 exchanges:
