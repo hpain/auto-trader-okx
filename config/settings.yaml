@@ -44,7 +44,6 @@ trading:
   symbols: 
     - "BTC/USDT"
     - "ETH/USDT"
-    - "BTC-USDT-SWAP"
   interval: "1H"
   strategy: "ml" 
 
