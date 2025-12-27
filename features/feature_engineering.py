@@ -507,61 +507,115 @@ def generate_features(df: pd.DataFrame, news_csv_path: str = None, mined_feature
     derivatives_features_df = _add_derivatives_features(df, derivatives_dfs)
     multi_symbol_features_df = _add_multi_symbol_features(df, feature_dfs)
 
+    # --- Compatibility Fix ---
+    # Many indicators and mined features expect 'vol' instead of 'volume'.
+    if 'volume' in df.columns and 'vol' not in df.columns:
+        df['vol'] = df['volume']
+
     # --- Mined Features (from Genetic Programming) ---
     mined_features_df = pd.DataFrame(index=df.index)
+    
+    # NEW logic: Find all mined features in models directory and try to load them
+    # This handles dependency chains by doing multiple passes
+    mined_file_paths = []
     if mined_features_path and os.path.exists(mined_features_path):
-        try:
-            with open(mined_features_path, 'r') as f:
-                mined_data = json.load(f)
+        mined_file_paths.append(mined_features_path)
+    
+    # Also look for other features in the models directory to satisfy dependencies
+    models_dir = 'models'
+    if os.path.exists(models_dir):
+        for f in os.listdir(models_dir):
+            full_path = os.path.join(models_dir, f)
+            if f.startswith('enhanced_mined_features') and f.endswith('.json') and full_path not in mined_file_paths:
+                mined_file_paths.append(full_path)
+    
+    # Merge all already generated features into a context for mined features to use
+    all_prev_features = [
+        df,
+        programmatic_features_df,
+        time_features_df,
+        sentiment_features_df,
+        bayesian_features_df,
+        onchain_features_df,
+        derivatives_features_df,
+        multi_symbol_features_df
+    ]
+    context_df = pd.concat([f for f in all_prev_features if f is not None and not f.empty], axis=1)
+    context_df = context_df.loc[:, ~context_df.columns.duplicated(keep='first')]
+
+    if mined_file_paths:
+        print(f"Found {len(mined_file_paths)} mined feature files. Attempting to load with dependency resolution...")
+        import re
+        
+        # Safe evaluation environment
+        safe_dict = {
+            'add': np.add, 'sub': np.subtract, 'mul': np.multiply,
+            'div': lambda a, b: np.divide(a, np.where(b == 0, 1e-9, b)),
+            'sqrt': lambda a: np.sqrt(np.abs(a)),
+            'log': lambda a: np.log(np.abs(a) + 1e-9),
+            'neg': np.negative,
+            'inv': lambda a: 1 / np.where(a == 0, 1e-9, a),
+            'sin': np.sin, 'cos': np.cos, 'tan': np.tan,
+            'max': np.maximum, 'min': np.minimum, 'abs': np.abs
+        }
+        
+        # Multi-pass loading to handle dependencies (up to 3 passes should be plenty)
+        for pass_idx in range(3):
+            loaded_this_pass = 0
+            remaining_paths = []
             
-            formula_str = mined_data.get("formula")
-            base_features = mined_data.get("base_features", [])
-            new_feature_name = mined_data.get("name")
-
-            if not all([formula_str, base_features, new_feature_name]):
-                print(f"Warning: Mined features file is incomplete: {mined_features_path}")
-            else:
-                print(f"Processing mined feature: {new_feature_name}")
-                # 确保基础特征存在
-                if all(feature in df.columns for feature in base_features):
-                    # Create a safe evaluation environment for the formula
-                    safe_dict = {
-                        'add': np.add,
-                        'sub': np.subtract,
-                        'mul': np.multiply,
-                        'div': lambda a, b: np.divide(a, np.where(b == 0, 1e-9, b)),
-                        'sqrt': lambda a: np.sqrt(np.abs(a)),
-                        'log': lambda a: np.log(np.abs(a) + 1e-9),
-                        'neg': np.negative,
-                        'inv': lambda a: 1 / np.where(a == 0, 1e-9, a),
-                        'sin': np.sin,
-                        'cos': np.cos,
-                        'tan': np.tan,
-                        'max': np.maximum,
-                        'min': np.minimum,
-                        'abs': np.abs
-                    }
+            for path in mined_file_paths:
+                try:
+                    with open(path, 'r') as f:
+                        mined_data = json.load(f)
                     
-                    # Map X0, X1, etc. to the actual DataFrame columns
-                    for i, feature_name in enumerate(base_features):
-                        safe_dict[f'X{i}'] = df[feature_name].values.astype(float)
-
-                    # 使用numpy函数进行安全的特征计算
-                    try:
-                        result = eval(formula_str, {"__builtins__": None}, safe_dict)
-                        # Align to index and preserve integer dtype when appropriate
-                        series_result = pd.Series(result, index=df.index)
-                        if base_features and all(np.issubdtype(df[f].dtype, np.integer) for f in base_features):
-                            series_result = series_result.astype(df[base_features[0]].dtype)
-                        mined_features_df[new_feature_name] = series_result  # 添加挖掘特征到DataFrame
-                        print(f"Successfully added mined feature: {new_feature_name}")
-                    except Exception as e:
-                        print(f"Error evaluating formula {formula_str}: {e}")
-                else:
-                    missing_features = [f for f in base_features if f not in df.columns]
-                    print(f"Warning: Missing required base features: {missing_features}")
-        except Exception as e:
-            print(f"Error processing mined features file: {e}")
+                    formula_str = mined_data.get("formula")
+                    base_features = mined_data.get("base_features", [])
+                    new_feature_name = mined_data.get("name")
+                    
+                    if new_feature_name in context_df.columns or new_feature_name in mined_features_df.columns:
+                        continue # Already loaded
+                        
+                    # Check which features are ACTUALLY used in the formula (e.g., X2, X101)
+                    # We use \b to ensure X1 doesn't match X11
+                    used_indices = []
+                    for i in range(len(base_features)):
+                        if re.search(rf'\bX{i}\b', formula_str):
+                            used_indices.append(i)
+                    
+                    # Check if all REQUIRED base features are available
+                    available_cols = set(context_df.columns).union(set(mined_features_df.columns))
+                    if all(base_features[i] in available_cols for i in used_indices):
+                        # Prepare mapping
+                        eval_dict = safe_dict.copy()
+                        for i in used_indices:
+                            feat_name = base_features[i]
+                            if feat_name in context_df.columns:
+                                eval_dict[f'X{i}'] = context_df[feat_name].values.astype(float)
+                            else:
+                                eval_dict[f'X{i}'] = mined_features_df[feat_name].values.astype(float)
+                        
+                        try:
+                            # Evaluate with only necessary features
+                            result = eval(formula_str, {"__builtins__": None}, eval_dict)
+                            mined_features_df[new_feature_name] = pd.Series(result, index=df.index)
+                            loaded_this_pass += 1
+                            print(f"Pass {pass_idx+1}: Added mined feature: {new_feature_name}")
+                        except Exception as e:
+                            print(f"Error evaluating {new_feature_name}: {e}")
+                    else:
+                        missing = [base_features[i] for i in used_indices if base_features[i] not in available_cols]
+                        if pass_idx == 2: # Only log failures at the very end
+                             print(f"Final Pass: Skipping {new_feature_name}, missing used features: {missing}")
+                        remaining_paths.append(path)
+                except Exception as e:
+                    print(f"Error reading {path}: {e}")
+            
+            mined_file_paths = remaining_paths
+            # Only break if we didn't load anything AND there are no more dependencies that could be satisfied
+            if loaded_this_pass == 0:
+                if not remaining_paths:
+                    break
             
     # --- Combine All Features ---
     all_feature_dfs = [
@@ -584,12 +638,6 @@ def generate_features(df: pd.DataFrame, news_csv_path: str = None, mined_feature
 
     # Remove duplicated columns, keeping the first occurrence
     final_df = final_df.loc[:, ~final_df.columns.duplicated(keep='first')]
-
-    # --- Compatibility Fix ---
-    # The legacy model expects 'vol' but the modern system uses 'volume'.
-    # Ensure 'vol' exists if 'volume' is present.
-    if 'volume' in final_df.columns and 'vol' not in final_df.columns:
-        final_df['vol'] = final_df['volume']
 
     return final_df
 
@@ -683,3 +731,82 @@ def merge_price_and_sentiment(price_df: pd.DataFrame, daily_sent_df: pd.DataFram
     m.drop(columns=['date'], inplace=True)
 
     return m
+def apply_triple_barrier(df: pd.DataFrame, tp: float = 0.015, sl: float = 0.01, timeout: int = 12) -> pd.DataFrame:
+    """
+    Apply Triple Barrier Method to create labels.
+    Label 1: Price hits TP first.
+    Label 0: Price hits SL first OR Timeout reached.
+    """
+    out_df = df.copy()
+    close_prices = df['close'].values
+    high_prices = df['high'].values
+    low_prices = df['low'].values
+    n = len(df)
+    
+    labels = np.zeros(n)
+    
+    # We need to iterate to find the first barrier touch. 
+    # Vectorizing this fully is hard because of the path dependency, but we can fast-loop it.
+    # For performance on large datasets, numba is preferred, but standard python loop is okay for 30k rows.
+    
+    for i in range(n - timeout):
+        # Current reference price
+        ref_price = close_prices[i]
+        
+        # Barrier Levels
+        tp_price = ref_price * (1 + tp)
+        sl_price = ref_price * (1 - sl)
+        
+        # Look ahead 'timeout' bars
+        # Note: We check High for TP and Low for SL
+        future_highs = high_prices[i+1 : i+1+timeout]
+        future_lows = low_prices[i+1 : i+1+timeout]
+        
+        # Check first touch
+        # Ideally we check each bar sequentially.
+        hit_tp = False
+        hit_sl = False
+        
+        for j in range(len(future_highs)):
+            h = future_highs[j]
+            l = future_lows[j]
+            
+            # Check strictly: if specific bar High > TP
+            if h >= tp_price:
+                # But wait, did it hit SL in the same bar first? 
+                # Without tick data we don't know intra-bar path.
+                # Conservative approach: Assume SL hit first if both hit in same bar?
+                # Or standard approach: If Low also < SL, then it's ambiguous.
+                # Let's assume Worst Case (SL hit) if both happen, to be safe.
+                if l <= sl_price:
+                   hit_sl = True
+                   break
+                else:
+                   hit_tp = True
+                   break
+            
+            if l <= sl_price:
+                hit_sl = True
+                break
+        
+        if hit_tp:
+            labels[i] = 1
+        # else label remains 0 (SL or Timeout)
+        
+    out_df['y'] = labels
+    
+    # Calculate next bar return for backtesting purposes (not used for labeling anymore)
+    out_df['future_ret'] = out_df['close'].shift(-1) / out_df['close'] - 1
+    
+    # --- Add missing future columns for run_backtest compatibility ---
+    # Ideally, run_backtest should simulate bar-by-bar using current price and future bars.
+    # Current implementation of run_backtest uses shifted columns to peek at 'next' bar.
+    # So we compute them here. Horizon=1 is assumed for the backtester's step check.
+    out_df['future_high'] = out_df['high'].shift(-1)
+    out_df['future_low'] = out_df['low'].shift(-1)
+    out_df['future_close'] = out_df['close'].shift(-1)
+
+    # Drop the last 'timeout' rows where we couldn't calculate labels
+    out_df = out_df.iloc[:-timeout]
+    
+    return out_df

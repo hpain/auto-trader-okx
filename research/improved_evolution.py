@@ -27,10 +27,10 @@ def main():
     parser.add_argument("--models", type=str, default="lgb", help="使用的模型类型，逗号分隔")
     parser.add_argument("--trials", type=int, default=100, help="Optuna 搜索的 trial 数")
     parser.add_argument("--ignore-local", action="store_true", help="忽略本地CSV历史文件和特征缓存，直接重新生成")
-    parser.add_argument("--top-k-features", type=int, default=20, help="在训练前预筛选出最重要的K个特征 (0表示禁用)")
+    parser.add_argument("--top-k-features", type=int, default=0, help="在训练前预筛选出最重要的K个特征 (0表示禁用)")
     parser.add_argument("--validation-frac", type=float, default=0.1, help="用于最终验证的数据比例")
-    parser.add_argument("--min-confidence", type=float, default=0.55, help="最小置信度阈值")
-    parser.add_argument("--max-confidence", type=float, default=0.70, help="最大置信度阈值")
+    parser.add_argument("--min-confidence", type=float, default=0.25, help="最小置信度阈值")
+    parser.add_argument("--max-confidence", type=float, default=0.60, help="最大置信度阈值")
 
     # --- Core Parameters ---
     parser.add_argument("--profit-threshold", type=float, default=0.005, help="每日最低收益目标")
@@ -39,6 +39,9 @@ def main():
     parser.add_argument("--take-profit-pct", type=float, default=0.05, help="止盈百分比 (例如 0.05 代表 5%)")
     parser.add_argument("--max-drawdown", type=float, default=0.1, help="最大回撤限制 (例如 0.1 代表 10%)")
     parser.add_argument("--success-rate-threshold", type=float, default=0.75, help="可接受的最低达标交易成功率")
+    parser.add_argument("--tp", type=float, default=0.015, help="Take Profit threshold (e.g., 0.015)")
+    parser.add_argument("--sl", type=float, default=0.01, help="Stop Loss threshold (e.g., 0.01)")
+    parser.add_argument("--timeout", type=int, default=12, help="Triple Barrier timeout in bars")
 
     # Step 2: Parse arguments
     args = parser.parse_args()
@@ -48,7 +51,7 @@ def main():
     setup_script_logger() # This will configure the root logger
 
     from config import config
-    from features.feature_engineering import generate_features, make_supervised
+    from features.feature_engineering import generate_features, make_supervised, apply_triple_barrier
 
     # --- Main logic begins ---
     model_list = [m.strip() for m in args.models.split(",") if m.strip()]
@@ -66,9 +69,9 @@ def main():
     logging.info(f"  拉取年数: {args.years}")
     logging.info(f"  主交易对: {primary_symbol}")
     logging.info(f"  特征交易对: {feature_symbols}")
-    logging.info(f"  收益目标: >= {args.profit_threshold:.2%}")
-    logging.info(f"  止损线: {args.stop_loss_pct:.2%}")
-    logging.info(f"  最大回撤限制: <= {args.max_drawdown:.2%}")
+    logging.info(f"  收益目标 (TP): {args.tp:.2%}")
+    logging.info(f"  止损线 (SL): {args.sl:.2%}")
+    logging.info(f"  时间窗口 (Timeout): {args.timeout} bars")
     logging.info(f"  预筛选特征数: {args.top_k_features if args.top_k_features > 0 else 'Disabled'}")
     logging.info(f"  验证数据比例: {args.validation_frac:.1%}")
     logging.info(f"  置信度优化范围: [{args.min_confidence:.2%}, {args.max_confidence:.2%}]")
@@ -231,100 +234,74 @@ def main():
 
     # --- Mined Feature Integration ---
     # Look for the latest mined feature JSON file
+    # --- Mined Feature Integration ---
     try:
+        # 1. Define Helper Functions (Context)
+        def protected_div(x1, x2):
+            with np.errstate(divide='ignore', invalid='ignore'):
+                return np.where(np.abs(x2) > 0.001, x1 / x2, 1.0)
+        
+        def protected_log(x1):
+            return np.log(np.abs(x1) + 1e-10)
+        
+        def protected_sqrt(x1):
+            return np.sqrt(np.abs(x1))
+        
+        def momentum(x1, x2):
+            return (x1 - x1.shift(int(np.mean(x2) if isinstance(x2, (pd.Series, np.ndarray)) else x2))).fillna(0)
+
+        def volatility_miner(x1, x2):
+            return x1.diff().abs().fillna(0)
+
+        eval_context = {
+            'add': np.add, 'sub': np.subtract, 'mul': np.multiply, 
+            'div': protected_div, 'pdiv': protected_div,
+            'sqrt': protected_sqrt, 'psqrt': protected_sqrt,
+            'log': protected_log, 'plog': protected_log,
+            'abs': np.abs, 'neg': np.negative, 
+            'max': np.maximum, 'min': np.minimum,
+            'momentum': momentum, 'volatility': volatility_miner
+        }
+
+        # 2. Iterate and Integrate
         mined_files = [f for f in os.listdir("models") if f.startswith("enhanced_mined_features_") and f.endswith(".json")]
         if mined_files:
-            # Sort by timestamp (in filename)
-            mined_files.sort(reverse=True)
-            latest_mined_file = os.path.join("models", mined_files[0])
-            logging.info(f"Found mined feature file: {latest_mined_file}. Attempting to integrate...")
+            # Sort by timestamp (ascending) to ensure dependencies are met
+            mined_files.sort()
+            logging.info(f"Found {len(mined_files)} mined feature files. Integrating sequentially...")
             
-            with open(latest_mined_file, 'r', encoding='utf-8') as f:
-                feature_def = json.load(f)
-            
-            # Define evaluation context
-            def protected_div(x1, x2):
-                with np.errstate(divide='ignore', invalid='ignore'):
-                    return np.where(np.abs(x2) > 0.001, x1 / x2, 1.0)
-            
-            def protected_log(x1):
-                return np.log(np.abs(x1) + 1e-10)
-            
-            def protected_sqrt(x1):
-                return np.sqrt(np.abs(x1))
-            
-            def momentum(x1, x2):
-                # x2 is window, must be int. In GP string it might be float, cast it.
-                # Ideally x2 comes from finding the argument.
-                # Since GP output might evaluate x2 as a series, we handle it carefully.
-                # For momentum(col, lag), lag is usually a terminal constant.
-                # We'll implement a flexible version.
-                return (x1 - x1.shift(int(np.mean(x2) if isinstance(x2, (pd.Series, np.ndarray)) else x2))).fillna(0)
-
-            def volatility(close, volume): # Not strictly using volume here match definition
-                return close.pct_change().abs().fillna(0) # Simplified proxy if func def matches
-            
-            # If the miner used 'volatility(close, volume)', we should check actual def.
-            # In miner: returns = np.diff(close); vol = np.abs(returns).
-            def volatility_miner(x1, x2):
-                    # Miner def: np.diff(close, prepend=close[0]); abs(returns)
-                    # x1 is close, x2 is volume (unused in simple def but present in arity)
-                    return x1.diff().abs().fillna(0)
-
-            eval_context = {
-                'add': np.add, 'sub': np.subtract, 'mul': np.multiply, 
-                'div': protected_div, 'pdiv': protected_div,
-                'sqrt': protected_sqrt, 'psqrt': protected_sqrt,
-                'log': protected_log, 'plog': protected_log,
-                'abs': np.abs, 'neg': np.negative, 
-                'max': np.maximum, 'min': np.minimum,
-                'momentum': momentum, 'volatility': volatility_miner
-            }
-            
-            formula = feature_def.get('formula')
-            base_features = feature_def.get('base_features', [])
-            
-            if formula and base_features:
-                # Replace X0, X1 etc with dfm['col_name'] representation for eval
-                # We construct a string that can be evaluated using the context map
-                # 'add(X0, X1)' -> 'add(dfm[base_features[0]], dfm[base_features[1]])'
-                
-                import re
-                # Regex to find X followed by digits
-                # We iterate backwards to avoid replacing X10 as X1 + 0
-                
-                parse_error = False
-                # Convert formula to python expression
-                # Function names like 'add' are keys in eval_context.
-                # We need to ensure we don't treat them as strings if they are function calls.
-                # But eval() with a dict locals works for function names.
-                
-                # The tricky part: X0, X1.
-                # Let's replace them with variable names referencing data columns.
-                # We'll put actual Series objects into a dict for X0, X1...
-                
-                local_vars = eval_context.copy()
-                for i, col in enumerate(base_features):
-                    if col in dfm.columns:
-                        local_vars[f'X{i}'] = dfm[col]
-                    else:
-                            logging.warning(f"Mined feature requires missing column {col}. Skipping.")
-                            parse_error = True
-                            break
-                
-                if not parse_error:
-                    try:
-                        # Evaluate the formula
-                        logging.info(f"Evaluating formula: {formula}")
-                        # The formula string from gplearn is like 'add(X0, X1)'
-                        # capable of being eval'd if functions and variables are in scope.
-                        new_feature_series = eval(formula, {"__builtins__": None}, local_vars)
+            for mined_file in mined_files:
+                full_path = os.path.join("models", mined_file)
+                try:
+                    with open(full_path, 'r', encoding='utf-8') as f:
+                        feature_def = json.load(f)
+                    
+                    formula = feature_def.get('formula')
+                    base_features = feature_def.get('base_features', [])
+                    feature_name = feature_def.get('name', 'mined_feature')
+                    
+                    if formula and base_features:
+                        local_vars = eval_context.copy()
+                        parse_error = False
+                        for i, col in enumerate(base_features):
+                            if col in dfm.columns:
+                                local_vars[f'X{i}'] = dfm[col]
+                            else:
+                                logging.warning(f"Mined feature '{feature_name}' requires missing column '{col}'. Skipping.")
+                                parse_error = True
+                                break
                         
-                        feature_name = feature_def.get('name', 'mined_feature')
-                        dfm[feature_name] = new_feature_series
-                        logging.info(f"Successfully added mined feature: {feature_name}")
-                    except Exception as e:
-                        logging.error(f"Failed to evaluate mined feature formula: {e}")
+                        if not parse_error:
+                            logging.info(f"Evaluating formula for {feature_name}...")
+                            new_feature_series = eval(formula, {"__builtins__": None}, local_vars)
+                            dfm[feature_name] = new_feature_series
+                            logging.info(f"Successfully added mined feature: {feature_name}")
+                
+                except Exception as inner_e:
+                    logging.error(f"Failed to process mined feature file {mined_file}: {inner_e}")
+
+    except Exception as e:
+        logging.warning(f"Error during mined feature integration: {e}")
             
     except Exception as e:
         logging.warning(f"Error during mined feature integration: {e}")
@@ -339,8 +316,9 @@ def main():
     if not isinstance(dfm.index, pd.DatetimeIndex):
         dfm = dfm.set_index('timestamp')
 
-    # Build supervised learning data
-    data = make_supervised(dfm, horizon=1, threshold=args.profit_threshold)
+    # Build supervised learning data using Triple Barrier Method
+    logging.info(f"Applying Triple Barrier Method: TP={args.tp}, SL={args.sl}, Timeout={args.timeout}")
+    data = apply_triple_barrier(dfm, tp=args.tp, sl=args.sl, timeout=args.timeout)
     
     non_feature_cols = ["ts", "dt", "y", "future_high", "future_low", "future_close", "future_ret", "date", "timestamp", "vol_ccy", "vol_ccy_quote", "confirm"]
     feature_cols = [c for c in data.columns if c not in non_feature_cols]
@@ -438,13 +416,15 @@ def main():
         model_list=model_list,
         profit_threshold=args.profit_threshold,
         confidence_threshold=args.confidence_threshold,
-        stop_loss_pct=args.stop_loss_pct,
+        stop_loss_pct=args.sl,
+        take_profit_pct=args.tp,
         max_drawdown_limit=args.max_drawdown,
         success_rate_threshold=args.success_rate_threshold,
-        take_profit_pct=args.take_profit_pct,
         interval=interval,
         min_confidence=args.min_confidence,
-        max_confidence=args.max_confidence
+        max_confidence=args.max_confidence,
+        timeout=args.timeout,
+        years=args.years
     )
     logging.debug("--- DEBUG: Returned from train_evolve ---")
     
@@ -468,12 +448,17 @@ def train_evolve(
     max_drawdown_limit: float, # Ignored, for signature consistency
     success_rate_threshold: float, # Ignored, for signature consistency
     interval: str,
-    min_confidence: float = 0.55, # New: minimum confidence threshold
-    max_confidence: float = 0.70   # New: maximum confidence threshold
+    min_confidence: float = 0.55,
+    max_confidence: float = 0.70,
+    timeout: int = 12,
+    years: float = 0.5
 ):
     logging.debug("--- DEBUG: Entered train_evolve (IMPROVED CLASSIFICATION MODE) ---")
     X_train = train_data[feature_cols]
     y_train = train_data["y"] # y is a classification label (0 or 1)
+    
+    trading_periods_per_year = {"1H": 252 * 24}.get(interval, 252)
+    annualization_factor = np.sqrt(trading_periods_per_year)
 
     # Final validation data
     X_val = val_data[feature_cols]
@@ -552,9 +537,9 @@ def train_evolve(
         confidence_thresh = trial.suggest_float("confidence_threshold", min_confidence, max_confidence)
 
         # Use TimeSeriesSplit with fewer splits to reduce variance in CV scores
-        tscv = TimeSeriesSplit(n_splits=3)  # Reduced from 5 to reduce variance
-        trading_periods_per_year = {"1H": 252 * 24}.get(interval, 252)
-        annualization_factor = np.sqrt(trading_periods_per_year)
+        # Use TimeSeriesSplit with fewer splits to reduce variance in CV scores
+        # Use TimeSeriesSplit with fewer splits to reduce variance in CV scores
+        tscv = TimeSeriesSplit(n_splits=2)  # Reduced to 2 to focus on larger, more representative chunks
 
         all_returns_series = []
         all_success_rates = []
@@ -578,6 +563,7 @@ def train_evolve(
                 confidence_threshold=confidence_thresh,
                 stop_loss_pct=stop_loss_pct,
                 take_profit_pct=take_profit_pct,
+                timeout=timeout
             )
             
             if returns_series.std() != 0 and len(returns_series.loc[returns_series != 0]) > 5:
@@ -597,7 +583,9 @@ def train_evolve(
             mean_sharpe = np.mean(all_fold_sharpes)
             std_sharpe = np.std(all_fold_sharpes)
             # Use a more balanced approach: still reward stability but don't overly penalize it
-            stability_score = mean_sharpe - (0.5 * std_sharpe)  # Reduced penalty on std
+            # User feedback: 0.1 is too loose (risk of overfitting), 0.5 is too strict (kills valid strategies).
+            # Compromise: 0.25
+            stability_score = mean_sharpe - (0.25 * std_sharpe) 
         else:
             stability_score = -1.0
 
@@ -681,6 +669,7 @@ def train_evolve(
         confidence_threshold=study.best_params.get("confidence_threshold", 0.65),
         stop_loss_pct=stop_loss_pct,
         take_profit_pct=take_profit_pct,
+        timeout=timeout
     )
     
     # Calculate validation Sharpe
@@ -753,43 +742,67 @@ def train_evolve(
     except Exception as e:
         logging.critical(f"CRITICAL: Failed to save best trial details. This is a bug. Error: {e}", exc_info=True)
 
-    logging.info("\n--- Retraining all-time best model on full data and saving ---")
+    # --- SAFE SAVE LOGIC (IMPROVED VERSION) ---
+    # We now save separate models for different data configurations.
+    # e.g., improved_best_model_1H_0.5y.pkl
     
-    # Save the final model on full dataset
-    from joblib import dump
-    import matplotlib.pyplot as plt
+    # e.g., improved_best_model_1H_0.5y.pkl
     
-    os.makedirs(out_dir, exist_ok=True)
+    config_tag = f"{interval}_{years}y"
+    specific_model_filename = f"improved_best_model_{config_tag}.pkl"
+    specific_meta_filename = f"improved_metadata_{config_tag}.json"
     
-    model_path = os.path.join(out_dir, "improved_best_model.pkl")
-    dump(final_model, model_path)
-    logging.info(f"Improved all-time best model saved to: {model_path}")
+    specific_model_path = os.path.join(out_dir, specific_model_filename)
+    specific_meta_path = os.path.join(out_dir, specific_meta_filename)
+    
+    should_save_specific = True
+    current_score = float(current_best_record.get("stability_score", -999))
+    
+    # 1. Logic for Specific Model (e.g. 0.5y version)
+    if os.path.exists(specific_meta_path) and os.path.exists(specific_model_path):
+        try:
+            with open(specific_meta_path, 'r') as f:
+                existing_meta = json.load(f)
+                existing_score = float(existing_meta.get("best_score", -999))
+                
+            if current_score < existing_score:
+                logging.warning(
+                    f"SKIP SAVING SPECIFIC: Current model score ({current_score:.4f}) is worse than "
+                    f"existing {config_tag} model ({existing_score:.4f})."
+                )
+                should_save_specific = False
+        except Exception as e:
+            logging.warning(f"Could not read existing specific metadata: {e}. Overwriting.")
 
-    if hasattr(final_model, 'feature_importances_'):
-        plot_path = os.path.join(out_dir, "improved_feature_importance.png")
-        feature_imp = pd.Series(final_model.feature_importances_, index=feature_cols).sort_values(ascending=False)
-        plt.figure(figsize=(10, 8))
-        plt.title("Feature Importance (Improved Model)")
-        feature_imp.plot(kind='barh')
-        plt.tight_layout()
-        plt.savefig(plot_path)
-        logging.info(f"Feature importance plot saved to: {plot_path}")
+    if should_save_specific:
+        from joblib import dump
+        import matplotlib.pyplot as plt
+        os.makedirs(out_dir, exist_ok=True)
+        
+        dump(final_model, specific_model_path)
+        logging.info(f"Saved specific model configuration to: {specific_model_path}")
+        
+        # Save Metadata for this specific config
+        meta = {
+            "model_type": f"{best_model_type}_classifier_improved",
+            "feature_cols": feature_cols,
+            "best_params": _make_native_obj(current_best_record.get("params", {})),
+            "n_samples": int(len(train_data)),
+            "best_score": float(current_best_record.get("stability_score", 0)),
+            "val_return": float(current_best_record.get("val_return", 0)),
+            "val_sharpe": float(current_best_record.get("val_sharpe", 0)),
+            "training_timestamp": pd.Timestamp.utcnow().isoformat(),
+            "source_run_timestamp": current_best_record.get("timestamp", "N/A"),
+            "training_timestamp": pd.Timestamp.utcnow().isoformat(),
+            "source_run_timestamp": current_best_record.get("timestamp", "N/A"),
+            "data_config": {"interval": interval, "years": years}
+        }
+        with open(specific_meta_path, "w", encoding="utf-8") as f:
+            json.dump(meta, f, ensure_ascii=False, indent=2)
+            
+    else:
+        logging.warning("Skipped saving specific model artifacts.")
 
-    meta = {
-        "model_type": f"{best_model_type}_classifier_improved",
-        "feature_cols": feature_cols,
-        "best_params": _make_native_obj(current_best_record.get("params", {})),
-        "n_samples": int(len(train_data)),
-        "best_score": float(current_best_record.get("stability_score", 0)),
-        "val_return": float(current_best_record.get("val_return", 0)),
-        "val_sharpe": float(current_best_record.get("val_sharpe", 0)),
-        "training_timestamp": pd.Timestamp.utcnow().isoformat(),
-        "source_run_timestamp": current_best_record.get("timestamp", "N/A")
-    }
-    metadata_path = os.path.join(out_dir, "improved_metadata.json")
-    with open(metadata_path, "w", encoding="utf-8") as f:
-        json.dump(meta, f, ensure_ascii=False, indent=2)
-    logging.info(f"Metadata for improved model saved to: {metadata_path}")
     
     logging.debug("--- DEBUG: Exiting train_evolve ---")
     return best_score, best_params

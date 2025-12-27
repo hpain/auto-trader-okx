@@ -9,7 +9,7 @@ from typing import List, Dict, Any, Optional
 from exchange.base import Exchange
 import logging
 import asyncio
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 logger = logging.getLogger(__name__)
 
@@ -353,33 +353,58 @@ class CcxtExchange(Exchange):
 
         ccxt_symbol = self._format_symbol(symbol) if self.market_type == 'spot' else self._get_swap_symbol(symbol)
         
-        # Strategy: Tiered Fallback (User Request -> Safe Window -> Latest)
-        funding_rates = None
+        # Strategy: Paginated Fetching
+        funding_rates = []
+        current_since = since
         
-        # 1. Attempt with User Request
-        try:
-            funding_rates = await self.exchange.fetch_funding_rate_history(ccxt_symbol, since=since, limit=limit)
-        except (ExchangeError, BaseError) as e:
-            logger.warning(f"Failed to fetch funding rates for {symbol} with since={since}: {e}. Retrying with shorter lookback (90 days).")
-            funding_rates = None
+        # If since is not provided, use default (1 year)
+        if current_since is None:
+            if years is None:
+                years = 1.0
+            since_dt = datetime.now(timezone.utc) - timedelta(days=years * 365.25)
+            current_since = int(since_dt.timestamp() * 1000)
 
-        # 2. Attempt with Safe Window (90 days - common limit for OKX/Binance funding history)
-        if funding_rates is None:
-            fallback_since = int((datetime.utcnow() - timedelta(days=90)).timestamp() * 1000)
+        logger.info(f"Fetching funding rates for {symbol} since {datetime.fromtimestamp(current_since/1000).isoformat()}...")
+
+        while True:
             try:
-                funding_rates = await self.exchange.fetch_funding_rate_history(ccxt_symbol, since=fallback_since, limit=limit)
+                batch = await self.exchange.fetch_funding_rate_history(ccxt_symbol, since=current_since, limit=1000)
+                if not batch:
+                    break
+                
+                funding_rates.extend(batch)
+                
+                # Update current_since to the last record's timestamp + 1ms to avoid duplication
+                last_ts = batch[-1]['timestamp']
+                if last_ts <= current_since:
+                    # Prevent infinite loop
+                    break
+                current_since = last_ts + 1
+                
+                # Check if we've reached current time
+                if current_since > int(datetime.now(timezone.utc).timestamp() * 1000):
+                    break
+                
+                await asyncio.sleep(self.exchange.rateLimit / 1000.0)
+                
+                if limit and len(funding_rates) >= limit:
+                    funding_rates = funding_rates[:limit]
+                    break
+                    
             except (ExchangeError, BaseError) as e:
-                logger.warning(f"Failed to fetch funding rates with 90-day lookback: {e}. Retrying with latest data only.")
-                funding_rates = None
-        
-        # 3. Attempt Latest (No 'since' parameter)
-        if funding_rates is None:
-            try:
-                # passing since=None or omitting it usually fetches the most recent records
-                funding_rates = await self.exchange.fetch_funding_rate_history(ccxt_symbol, limit=limit)
-                logger.info(f"Successfully fetched latest funding rates for {symbol} (fallback mode).")
+                logger.warning(f"Error fetching funding rate batch: {e}. Stopping pagination.")
+                break
             except Exception as e:
-                logger.error(f"All attempts to fetch funding rates for {symbol} failed. Last error: {e}")
+                logger.error(f"Unexpected error fetching funding rates: {e}", exc_info=True)
+                break
+
+        # Fallback if paginated fetch failed or returned nothing
+        if not funding_rates:
+            logger.info("Pagination returned no data. Trying latest fallback...")
+            try:
+                funding_rates = await self.exchange.fetch_funding_rate_history(ccxt_symbol, limit=limit or 100)
+            except Exception as e:
+                logger.warning(f"Final fallback failed: {e}")
                 return pd.DataFrame()
 
         if not funding_rates:
@@ -402,13 +427,13 @@ class CcxtExchange(Exchange):
         if since is None:
             if years is None:
                 years = 1.0 / 12.0 # Default to 30 days
-            since_dt = datetime.utcnow() - timedelta(days=years * 365.25)
+            since_dt = datetime.now(timezone.utc) - timedelta(days=years * 365.25)
             since = int(since_dt.timestamp() * 1000)
             
         attempts = [
             ("Original", since),
-            ("30 Days", int((datetime.utcnow() - timedelta(days=30)).timestamp() * 1000)),
-            ("7 Days", int((datetime.utcnow() - timedelta(days=7)).timestamp() * 1000))
+            ("29 Days", int((datetime.now(timezone.utc) - timedelta(days=29)).timestamp() * 1000)),
+            ("7 Days", int((datetime.now(timezone.utc) - timedelta(days=7)).timestamp() * 1000))
         ]
         
         # If original since is already within 30 days, don't retry 30 days again, etc.
@@ -455,15 +480,26 @@ class CcxtExchange(Exchange):
                          break
                     current_since = last_ts + 1
                     
-                    if current_since > int(datetime.utcnow().timestamp() * 1000):
+                    if current_since > int(datetime.now(timezone.utc).timestamp() * 1000):
                         break
                         
                     await asyncio.sleep(self.exchange.rateLimit / 1000.0)
                     
                 except (ExchangeError, BaseError) as e:
-                    # Specific error handling can be added here
-                    # e.g., if code is -1130 (Binance invalid param), we know to fail and retry shorter
-                    logger.warning(f"Error fetching batch with start_ts={start_ts}: {e}.")
+                    # Downgrade expected "too old" errors to INFO during "Original" attempt
+                    msg = str(e)
+                    is_expected = False
+                    if label == "Original":
+                        if "-1130" in msg: # Binance: invalid startTime
+                            is_expected = True
+                        elif "50030" in msg: # OKX: Illegal time range
+                            is_expected = True
+                    
+                    if is_expected:
+                        logger.info(f"Exchange limit reached for {label} lookback (Expected): {e}. switching to shorter history.")
+                    else:
+                        logger.warning(f"Error fetching batch with start_ts={start_ts}: {e}.")
+                    
                     failed = True
                     break
                 except Exception as e:

@@ -1,0 +1,46 @@
+{
+  "model_type": "lgb_classifier_improved",
+  "feature_cols": [
+    "open",
+    "low",
+    "close",
+    "sma_10",
+    "ema_10",
+    "sma_20",
+    "ema_20",
+    "sma_30",
+    "ema_30",
+    "ema_50",
+    "sma_100",
+    "ema_100",
+    "sma_200",
+    "bb_mavg_14",
+    "bb_lband_14",
+    "bb_mavg_20",
+    "bb_lband_20",
+    "bb_mavg_30",
+    "bb_lband_30",
+    "obv"
+  ],
+  "best_params": {
+    "model": "lgb",
+    "lgb_n_estimators": 61,
+    "learning_rate": 0.01696478510333446,
+    "num_leaves": 46,
+    "max_depth": 5,
+    "min_child_samples": 22,
+    "subsample": 0.8432091527150183,
+    "colsample_bytree": 0.7291414372926354,
+    "confidence_threshold": 0.3463297583739227
+  },
+  "n_samples": 3762,
+  "best_score": 5.947430474494343,
+  "val_return": 0.26520435444519785,
+  "val_sharpe": 9.889912571777936,
+  "training_timestamp": "2025-12-27T08:46:47.833650+00:00",
+  "source_run_timestamp": "2025-12-27 16:46:47",
+  "data_config": {
+    "interval": "1H",
+    "years": 0.5
+  }
+}

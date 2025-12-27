@@ -150,7 +150,7 @@ class AggregatedExchange(Exchange):
             logger.warning(f"FAIL: Failed to fetch funding rates from {exchange_name}: {e}")
             return exchange_name, None
 
-    async def fetch_funding_rates(self, symbol: str, timeframe: str, years: Optional[float] = None, since: Optional[int] = None, limit: Optional[int] = 100) -> pd.DataFrame:
+    async def fetch_funding_rates(self, symbol: str, timeframe: str, years: Optional[float] = None, since: Optional[int] = None, limit: Optional[int] = None) -> pd.DataFrame:
         """
         Fetch recent funding rates by aggregating results from all available SWAP exchanges.
         """

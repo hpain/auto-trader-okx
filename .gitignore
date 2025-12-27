@@ -53,4 +53,5 @@ data/*.json
 # 临时文件
 *.tmp
 *.bak
+*.parquet
 
