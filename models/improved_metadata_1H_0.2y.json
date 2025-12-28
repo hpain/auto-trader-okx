@@ -1,0 +1,31 @@
+{
+  "model_type": "lgb_classifier_improved",
+  "feature_cols": [
+    "sma_spread_10_200",
+    "ema_spread_10_200",
+    "ema_spread_20_200",
+    "ema_spread_50_200",
+    "prob_bear"
+  ],
+  "best_params": {
+    "model": "lgb",
+    "lgb_n_estimators": 194,
+    "learning_rate": 0.043297432500673264,
+    "num_leaves": 24,
+    "max_depth": 7,
+    "min_child_samples": 39,
+    "subsample": 0.7973127052480208,
+    "colsample_bytree": 0.6361738004372441,
+    "confidence_threshold": 0.3556259740440644
+  },
+  "n_samples": 1395,
+  "best_score": -0.4770525068524111,
+  "val_return": -0.041660853724684976,
+  "val_sharpe": 0.0,
+  "training_timestamp": "2025-12-27T14:47:19.126376+00:00",
+  "source_run_timestamp": "2025-12-27 22:47:16",
+  "data_config": {
+    "interval": "1H",
+    "years": 0.2
+  }
+}

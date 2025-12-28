@@ -42,6 +42,7 @@ def main():
     parser.add_argument("--tp", type=float, default=0.015, help="Take Profit threshold (e.g., 0.015)")
     parser.add_argument("--sl", type=float, default=0.01, help="Stop Loss threshold (e.g., 0.01)")
     parser.add_argument("--timeout", type=int, default=12, help="Triple Barrier timeout in bars")
+    parser.add_argument("--mining-generations", type=int, default=0, help="Number of generations for genetic factor mining (0 to disable)")
 
     # Step 2: Parse arguments
     args = parser.parse_args()
@@ -229,82 +230,48 @@ def main():
             logging.info("Skipping on-chain data fetching as per configuration.") 
 
         # Generate features using all available data
-        dfm = generate_features(dfp, news_csv_path=news_csv_path, feature_dfs=feature_dfs, derivatives_dfs=derivatives_dfs, onchain_dfs=onchain_dfs)
+        dfm = generate_features(dfp, news_csv_path=news_csv_path, feature_dfs=feature_dfs, derivatives_dfs=derivatives_dfs, onchain_dfs=onchain_dfs, mined_features_path="config/mined_factors.json")
         
 
-    # --- Mined Feature Integration ---
-    # Look for the latest mined feature JSON file
-    # --- Mined Feature Integration ---
-    try:
-        # 1. Define Helper Functions (Context)
-        def protected_div(x1, x2):
-            with np.errstate(divide='ignore', invalid='ignore'):
-                return np.where(np.abs(x2) > 0.001, x1 / x2, 1.0)
-        
-        def protected_log(x1):
-            return np.log(np.abs(x1) + 1e-10)
-        
-        def protected_sqrt(x1):
-            return np.sqrt(np.abs(x1))
-        
-        def momentum(x1, x2):
-            return (x1 - x1.shift(int(np.mean(x2) if isinstance(x2, (pd.Series, np.ndarray)) else x2))).fillna(0)
-
-        def volatility_miner(x1, x2):
-            return x1.diff().abs().fillna(0)
-
-        eval_context = {
-            'add': np.add, 'sub': np.subtract, 'mul': np.multiply, 
-            'div': protected_div, 'pdiv': protected_div,
-            'sqrt': protected_sqrt, 'psqrt': protected_sqrt,
-            'log': protected_log, 'plog': protected_log,
-            'abs': np.abs, 'neg': np.negative, 
-            'max': np.maximum, 'min': np.minimum,
-            'momentum': momentum, 'volatility': volatility_miner
-        }
-
-        # 2. Iterate and Integrate
-        mined_files = [f for f in os.listdir("models") if f.startswith("enhanced_mined_features_") and f.endswith(".json")]
-        if mined_files:
-            # Sort by timestamp (ascending) to ensure dependencies are met
-            mined_files.sort()
-            logging.info(f"Found {len(mined_files)} mined feature files. Integrating sequentially...")
+    # --- Evolutionary Factor Mining (Optional) ---
+    if args.mining_generations > 0:
+        logging.info(f"--- Starting Evolutionary Factor Mining (Generations: {args.mining_generations}) ---")
+        try:
+            from research.factor_mining import FactorMiner
             
-            for mined_file in mined_files:
-                full_path = os.path.join("models", mined_file)
-                try:
-                    with open(full_path, 'r', encoding='utf-8') as f:
-                        feature_def = json.load(f)
-                    
-                    formula = feature_def.get('formula')
-                    base_features = feature_def.get('base_features', [])
-                    feature_name = feature_def.get('name', 'mined_feature')
-                    
-                    if formula and base_features:
-                        local_vars = eval_context.copy()
-                        parse_error = False
-                        for i, col in enumerate(base_features):
-                            if col in dfm.columns:
-                                local_vars[f'X{i}'] = dfm[col]
-                            else:
-                                logging.warning(f"Mined feature '{feature_name}' requires missing column '{col}'. Skipping.")
-                                parse_error = True
-                                break
-                        
-                        if not parse_error:
-                            logging.info(f"Evaluating formula for {feature_name}...")
-                            new_feature_series = eval(formula, {"__builtins__": None}, local_vars)
-                            dfm[feature_name] = new_feature_series
-                            logging.info(f"Successfully added mined feature: {feature_name}")
-                
-                except Exception as inner_e:
-                    logging.error(f"Failed to process mined feature file {mined_file}: {inner_e}")
-
-    except Exception as e:
-        logging.warning(f"Error during mined feature integration: {e}")
+            # Prepare Target for Mining (Forward Return)
+            logging.info("Preparing data for factor mining...")
+            mining_df = dfm.copy()
+            # Predict next bar return
+            mining_df['target'] = mining_df['close'].shift(-1) / mining_df['close'] - 1
+            mining_df = mining_df.dropna()
             
-    except Exception as e:
-        logging.warning(f"Error during mined feature integration: {e}")
+            # Select features to evolve from (exclude non-feature columns)
+            exclude_cols = ['target', 'y', 'future_ret', 'future_high', 'future_low', 'future_close', 'date', 'open', 'high', 'low', 'close', 'volume', 'time', 'day']
+            feature_cols = [c for c in mining_df.columns if c not in exclude_cols and not c.startswith('onchain_')]
+            
+            # Initial Run
+            logging.info(f"Mining on {len(mining_df)} rows with {len(feature_cols)} base features.")
+            
+            miner = FactorMiner(
+                generations=args.mining_generations, 
+                population_size=max(500, args.trials * 5), 
+                n_components=10,
+                random_state=42
+            )
+            
+            miner.fit(mining_df[feature_cols], mining_df['target'], feature_names=feature_cols)
+            miner.extract_best_factors(feature_names=feature_cols)
+            
+            logging.info("Reloading features to include newly mined factors...")
+            # Re-run generate_features to pick up the new JSON automatically
+            dfm = generate_features(dfp, news_csv_path=news_csv_path, feature_dfs=feature_dfs, derivatives_dfs=derivatives_dfs, onchain_dfs=onchain_dfs, mined_features_path="config/mined_factors.json")
+            
+        except ImportError:
+            logging.error("Failed to import FactorMiner. Is 'gplearn' installed? Run 'pip install gplearn'.")
+        except Exception as e:
+            logging.error(f"Factor Mining failed: {e}", exc_info=True)
+
     
 
 

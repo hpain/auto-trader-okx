@@ -67,6 +67,55 @@ class PortfolioManager:
             'weight': 0.0
         } for symbol in self.symbols}
         
+    # 新增初始化 RiskEngine
+        self.risk_engine_enabled = self.risk_config.get('use_risk_engine', False)
+        if self.risk_engine_enabled:
+            from trader.risk_engine import RiskEngine
+            target_vol = self.risk_config.get('target_volatility', 0.20)
+            self.risk_engine = RiskEngine(target_volatility=target_vol)
+            self.logger.info("RiskEngine integrated into PortfolioManager.")
+        else:
+            self.risk_engine = None
+
+        # 新增：用于跟踪各资产的策略分配
+        self.asset_strategies = {symbol: self.strategies for symbol in self.symbols}
+        
+        # 新增：用于跟踪各资产的持仓
+        self.positions = {}
+
+    def _calculate_position_size(self, symbol: str, price: float, signal: int, volatility_scalar: float = 1.0) -> float:
+        """
+        计算头寸大小
+        Args:
+            symbol: 交易对符号
+            price: 当前价格
+            signal: 信号 (1=buy, 0=hold, -1=sell)
+            volatility_scalar: 波动率调整系数 (默认 1.0)
+        Returns:
+            计算出的头寸大小
+        """
+        if price <= 0:
+            return 0.0
+        
+        # 基于风险配置计算头寸大小
+        risk_per_trade = self.risk_config.get('risk_per_trade', 0.01)
+        
+        # 使用总资本的一定比例计算订单大小
+        # Apply volatility scalar: High Vol -> scalar < 1 -> smaller size
+        risk_amount = self.capital * risk_per_trade * volatility_scalar
+        quantity = risk_amount / price
+        
+        # Log if scalar is effectively active
+        if abs(volatility_scalar - 1.0) > 0.05 and signal > 0:
+            self.logger.info(f"RiskEngine applied: {symbol} size adjusted by {volatility_scalar:.2f}x (Vol Target)")
+        
+        # 如果是卖出信号，全仓卖出
+        if signal < 0:
+            current_position = self.positions.get(symbol, 0.0)
+            quantity = current_position
+        
+        return quantity
+        
         # 新增：用于跟踪各资产的策略分配
         self.asset_strategies = {symbol: self.strategies for symbol in self.symbols}
         
@@ -361,7 +410,21 @@ class PortfolioManager:
             if should_trade:
                 # 计算订单大小
                 current_price = df['close'].iloc[-1] if not df.empty else 0
-                quantity = self._calculate_position_size(symbol, current_price, final_signal)
+                
+                # --- Volatility Scalar Calculation ---
+                vol_scalar = 1.0
+                if self.risk_engine and final_signal > 0:
+                    try:
+                        # Use RiskEngine to calculate scalar based on recent volatility
+                        vol_scalar = self.risk_engine.calculate_volatility_scalar(
+                            df['close'], 
+                            window=self.risk_config.get('volatility_window', 30)
+                        )
+                    except Exception as e:
+                        self.logger.warning(f"Failed to calculate vol scalar for {symbol}: {e}")
+                # -------------------------------------
+
+                quantity = self._calculate_position_size(symbol, current_price, final_signal, volatility_scalar=vol_scalar)
                 
                 # ========== 移植 1.3: 最小交易价值检查 (防止尘埃单) ==========
                 min_trade_value = 10.0 # USD

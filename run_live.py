@@ -185,8 +185,28 @@ async def main_loop(args):
                     print(f"Warning: Failed to fetch market data for {symbol}, skipping...")
                     continue
 
-                # 特征工程
-                featured_data = generate_features(raw_data, news_csv_path=None)
+                # --- 4.1.2 获取衍生品数据 (Live Data Upgrade) ---
+                # 为了配合 Transformer 模型，我们需要实时的资金费率和持仓量
+                print(f"Fetching derivatives data for {symbol}...")
+                derivatives_data = {}
+                
+                try:
+                    # 1. Funding Rate
+                    funding_df = await exchange_client.fetch_funding_rates(symbol, interval, limit=200)
+                    if not funding_df.empty:
+                        derivatives_data['funding'] = funding_df
+                    
+                    # 2. Open Interest
+                    oi_df = await exchange_client.fetch_open_interest(symbol, interval, limit=200)
+                    if not oi_df.empty:
+                        derivatives_data['oi'] = oi_df
+                        
+                except Exception as e:
+                    print(f"Warning: Failed to fetch derivatives data for {symbol}: {e}. Continuing with Price only.")
+                    # 不因衍生品数据缺失而中断交易，但模型可能会受到影响
+
+                # 特征工程 (注入衍生品数据)
+                featured_data = generate_features(raw_data, news_csv_path=None, derivatives_dfs=derivatives_data)
                 data_for_pm[symbol] = featured_data
 
             if not data_for_pm:

@@ -1,70 +1,37 @@
-# ==============================================================================
-# Exchange Configuration
-# ==============================================================================
 exchange:
-  # The primary exchange is used for fetching long-term historical data for
-  # backtesting and model training. This should be the exchange with the most
-  # extensive and reliable historical data.
-  # CHANGED to 'okx' for live trading simulation to avoid auth errors if binance keys are missing
-  primary_exchange: 'okx' 
-
-  # Secondary exchanges are used along with the primary for live/recent data
-  # aggregation. This provides redundancy and a more robust price feed.
-  # The system will automatically use all available sources.
+  primary_exchange: okx
   secondary_exchanges:
-    - 'binance'
-    # - 'bybit' # Commented out unless you have keys or want to query public data
-
+  - binance
 exchanges:
-  - 'binance'
-  - 'okx'
-  - 'bybit'
-
-# ==============================================================================
-# Derivatives Data Configuration
-# ==============================================================================
+- binance
+- okx
+- bybit
 derivatives_data:
   fetch_funding_rates: true
   fetch_open_interest: true
-
-# ==============================================================================
-# OKX API Configuration
-# ==============================================================================
 okx:
-  api_key: "YOUR_API_KEY"
-  secret_key: "YOUR_SECRET_KEY"
-  passphrase: "YOUR_PASSPHRASE"
-  # flag: "1" for live trading, "0" for demo/paper trading
-  flag: "0"
-
-# ==============================================================================
-# General Trading Parameters
-# ==============================================================================
+  api_key: YOUR_API_KEY
+  secret_key: YOUR_SECRET_KEY
+  passphrase: YOUR_PASSPHRASE
+  flag: '0'
 trading:
-  symbols: 
-    - "BTC/USDT"
-    - "ETH/USDT"
-  interval: "1H"
-  strategy: "ml" 
-
-# ==============================================================================
-# Position Sizing & Risk Management
-# ==============================================================================
+  symbols:
+  - BTC/USDT
+  - ETH/USDT
+  interval: 1H
+  strategy: ml
 position_sizing:
-  # Strategy: 'fixed' or 'fractional'
-  strategy: "fractional"
-  # Used if strategy is 'fixed'
+  strategy: fractional
   fixed_quantity: 0.001
-  # Used if strategy is 'fractional'
-  risk_per_trade: 0.02 # 2% of total equity ($20 for $1000 account)
-
+  risk_per_trade: 0.02
 risk_management:
-  stop_loss_pct: 0.02  # 2%
-  take_profit_pct: 0.05 # 5%
-
-# ==============================================================================
-# Strategy-Specific Parameters
-# ==============================================================================
+  stop_loss_pct: 0.02
+  take_profit_pct: 0.05
+  use_risk_engine: true
+  target_volatility: 0.2
+  volatility_window: 30
+  risk_per_trade: 0.02
+  max_portfolio_risk: 0.1
 strategy_params:
   ma_crossover:
     live_fallback:
@@ -73,116 +40,105 @@ strategy_params:
     backtest:
       short_window: 7
       long_window: 25
-
-# ==============================================================================
-# Machine Learning Model & Optuna Configuration
-# ==============================================================================
 model:
-  target_column: 'y'
+  target_column: y
   optuna:
-    direction: 'maximize'
-    metric_to_optimize: 'sharpe_ratio'
+    direction: maximize
+    metric_to_optimize: sharpe_ratio
     n_trials: 100
   hyperparameters:
     logreg:
-      C_range: [0.001, 100]
-      buy_th_range: [0.51, 0.7]
-      sell_th_range: [0.3, 0.49]
-      fee_range: [0.0002, 0.001]
+      C_range:
+      - 0.001
+      - 100
+      buy_th_range:
+      - 0.51
+      - 0.7
+      sell_th_range:
+      - 0.3
+      - 0.49
+      fee_range:
+      - 0.0002
+      - 0.001
     rf:
-      n_estimators_range: [100, 1000]
-      max_depth_range: [3, 20]
-      min_samples_leaf_range: [1, 10]
+      n_estimators_range:
+      - 100
+      - 1000
+      max_depth_range:
+      - 3
+      - 20
+      min_samples_leaf_range:
+      - 1
+      - 10
     lgb:
-      n_estimators_range: [100, 1000]
-      num_leaves_range: [20, 150]
-      learning_rate_range: [0.01, 0.3]
-      max_depth_range: [3, 15]
-      min_child_samples_range: [20, 100]
-
-# ==============================================================================
-# Backtesting Configuration
-# ==============================================================================
+      n_estimators_range:
+      - 100
+      - 1000
+      num_leaves_range:
+      - 20
+      - 150
+      learning_rate_range:
+      - 0.01
+      - 0.3
+      max_depth_range:
+      - 3
+      - 15
+      min_child_samples_range:
+      - 20
+      - 100
 backtest:
   symbols_to_test:
-    - "BTC-USDT"
-    - "ETH-USDT"
-    - "SOL-USDT"
-    - "KDA-USDT"
-    - "CFX-USDT"
-    - "DOT-USDT"
-
-# ==============================================================================
-# File System Paths
-# ==============================================================================
+  - BTC-USDT
+  - ETH-USDT
+  - SOL-USDT
+  - KDA-USDT
+  - CFX-USDT
+  - DOT-USDT
 paths:
-  model_dir: "models"
-  feature_cache_dir: "data/cache"
-  history_data_dir: "data/history"
-
-# ==============================================================================
-# Risk Monitoring & Alerting Configuration
-# ==============================================================================
+  model_dir: models
+  feature_cache_dir: data/cache
+  history_data_dir: data/history
 risk_monitoring:
-  # Risk thresholds for monitoring
-  daily_loss_threshold: -20.0    # Maximum daily loss (2% of 1000)
-  max_drawdown_threshold: 0.10    # Maximum drawdown (10%)
-  max_consecutive_losses: 5       # Maximum consecutive losing trades
-  max_single_loss_pct: -0.03      # Maximum single trade loss percentage (-3%)
-  min_account_balance: 900.0      # Stop if balance falls below 900
-
-  # Email alerting configuration
+  daily_loss_threshold: -20.0
+  max_drawdown_threshold: 0.1
+  max_consecutive_losses: 5
+  max_single_loss_pct: -0.03
+  min_account_balance: 900.0
   email:
-    smtp_server: "smtp.gmail.com"
+    smtp_server: smtp.gmail.com
     smtp_port: 587
-    user: "your_email@gmail.com"
-    password: "your_app_password"
+    user: your_email@gmail.com
+    password: your_app_password
     recipients:
-      - "admin@yourcompany.com"
-
-# ==============================================================================
-# Strategy Management Configuration
-# ==============================================================================
+    - admin@yourcompany.com
 strategy_management:
   enabled_strategies:
-    - "lgb"        # Main ML strategy
-    - "ma_fast"    # Fast mean reversion strategy
-    - "ma_slow"    # Slow trend following strategy
-  
+  - lgb
+  - ma_fast
+  - ma_slow
   lgb_strategy:
-    model_dir: "models"
-    model_name: "improved_best_model_1H_0.5y.pkl"
-    metadata_name: "improved_metadata_1H_0.5y.json"
-  
+    model_dir: models
+    model_name: improved_best_model_1H_0.5y.pkl
+    metadata_name: improved_metadata_1H_0.5y.json
   ma_fast_strategy:
     short_window: 5
     long_window: 15
-  
   ma_slow_strategy:
     short_window: 20
     long_window: 50
-  
   strategy_switch:
     lookback_days: 7
     performance_threshold: 0.5
-
-# ==============================================================================
-# News Monitoring Configuration
-# ==============================================================================
 news_monitoring:
   enabled: true
   check_interval: 60
   recent_news_window: 5
   currencies:
-    - "BTC"
-    - "ETH"
-  critical_action: "emergency_stop"
-  warning_action: "reduce_position"
+  - BTC
+  - ETH
+  critical_action: emergency_stop
+  warning_action: reduce_position
   warning_position_multiplier: 0.5
-
-# ==============================================================================
-# Event Calendar Configuration
-# ==============================================================================
 event_calendar:
   enabled: true
   check_days_ahead: 3

@@ -15,6 +15,40 @@ from analysis.bayesian_regime_detector import BayesianRegimeDetector
 from config.model_config import FEATURE_PARAMS
 from features.sentiment_utils import merge_price_and_sentiment
 
+# --- 1. Custom Financial Operators (for execution of mined features) ---
+def _ts_rank(data, window=10):
+    """Time-series Rank: Rank of the current value in the past window."""
+    s = pd.Series(data)
+    return s.rolling(window=window).rank(pct=True).fillna(0.5).values
+
+def _ts_corr(data1, data2, window=10):
+    """Time-series Correlation."""
+    s1 = pd.Series(data1)
+    s2 = pd.Series(data2)
+    return s1.rolling(window=window).corr(s2).fillna(0).values
+
+def _ts_decay_linear(data, window=10):
+    """Linear Decay Weighted Average."""
+    s = pd.Series(data)
+    weights = np.arange(1, window + 1)
+    w_sum = weights.sum()
+    return s.rolling(window=window).apply(lambda x: np.dot(x, weights) / w_sum, raw=True).fillna(method='bfill').values
+
+def _ts_std_dev(data, window=10):
+    """Rolling Standard Deviation."""
+    s = pd.Series(data)
+    return s.rolling(window=window).std().fillna(0).values
+
+def _ts_min(data, window=10):
+    """Rolling Min."""
+    s = pd.Series(data)
+    return s.rolling(window=window).min().fillna(method='bfill').values
+
+def _ts_max(data, window=10):
+    """Rolling Max."""
+    s = pd.Series(data)
+    return s.rolling(window=window).max().fillna(method='bfill').values
+
 def check_data_length(df: pd.DataFrame, min_length: int = 200) -> bool:
     """
     检查输入数据是否满足最小长度要求
@@ -511,6 +545,10 @@ def generate_features(df: pd.DataFrame, news_csv_path: str = None, mined_feature
     # Many indicators and mined features expect 'vol' instead of 'volume'.
     if 'volume' in df.columns and 'vol' not in df.columns:
         df['vol'] = df['volume']
+    
+    # Standardize Open Interest (Training CSV uses 'sum_open_interest', Live uses 'open_interest')
+    if 'sum_open_interest' in df.columns and 'open_interest' not in df.columns:
+        df['open_interest'] = df['sum_open_interest']
 
     # --- Mined Features (from Genetic Programming) ---
     mined_features_df = pd.DataFrame(index=df.index)
@@ -548,6 +586,7 @@ def generate_features(df: pd.DataFrame, news_csv_path: str = None, mined_feature
         import re
         
         # Safe evaluation environment
+        # Safe evaluation environment
         safe_dict = {
             'add': np.add, 'sub': np.subtract, 'mul': np.multiply,
             'div': lambda a, b: np.divide(a, np.where(b == 0, 1e-9, b)),
@@ -556,7 +595,14 @@ def generate_features(df: pd.DataFrame, news_csv_path: str = None, mined_feature
             'neg': np.negative,
             'inv': lambda a: 1 / np.where(a == 0, 1e-9, a),
             'sin': np.sin, 'cos': np.cos, 'tan': np.tan,
-            'max': np.maximum, 'min': np.minimum, 'abs': np.abs
+            'max': np.maximum, 'min': np.minimum, 'abs': np.abs,
+            # Custom Operators
+            'ts_rank_10': lambda x: _ts_rank(x, 10),
+            'ts_corr_10': lambda x, y: _ts_corr(x, y, 10),
+            'ts_decay_10': lambda x: _ts_decay_linear(x, 10),
+            'ts_std_10': lambda x: _ts_std_dev(x, 10),
+            'ts_min_10': lambda x: _ts_min(x, 10),
+            'ts_max_10': lambda x: _ts_max(x, 10)
         }
         
         # Multi-pass loading to handle dependencies (up to 3 passes should be plenty)

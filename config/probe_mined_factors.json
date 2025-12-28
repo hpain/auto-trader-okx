@@ -1,0 +1,38 @@
+[
+    {
+        "name": "mined_factor_0_152",
+        "formula": "ts_rank_10(ts_rank_10(abs(ts_decay_10(div(ts_min_10(X4), ts_min_10(X3))))))",
+        "fitness": 0.152119380883582,
+        "base_features": [
+            "open",
+            "high",
+            "low",
+            "close",
+            "volume"
+        ]
+    },
+    {
+        "name": "mined_factor_1_146",
+        "formula": "ts_max_10(ts_std_10(ts_std_10(X2)))",
+        "fitness": 0.14675793867815015,
+        "base_features": [
+            "open",
+            "high",
+            "low",
+            "close",
+            "volume"
+        ]
+    },
+    {
+        "name": "mined_factor_2_-4",
+        "formula": "div(X1, ts_std_10(ts_decay_10(abs(ts_rank_10(abs(ts_decay_10(div(ts_min_10(X4), ts_min_10(X3)))))))))",
+        "fitness": -0.004526202969420965,
+        "base_features": [
+            "open",
+            "high",
+            "low",
+            "close",
+            "volume"
+        ]
+    }
+]

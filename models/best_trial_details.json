@@ -28,6 +28,60 @@
     },
     "recent_trials": [
         {
+            "timestamp": "2025-12-27 22:47:16",
+            "total_trials_in_run": 1,
+            "trial_number": 0,
+            "stability_score": -0.4770525068524111,
+            "overall_sharpe": -0.4375191391360208,
+            "avg_success_rate": 0.4595055413469736,
+            "fold_sharpes": [
+                -2.2972,
+                2.5565
+            ],
+            "val_return": -0.041660853724684976,
+            "val_sharpe": 0.0,
+            "val_success_rate": 0.0,
+            "val_trade_count": 7,
+            "params": {
+                "model": "lgb",
+                "lgb_n_estimators": 194,
+                "learning_rate": 0.043297432500673264,
+                "num_leaves": 24,
+                "max_depth": 7,
+                "min_child_samples": 39,
+                "subsample": 0.7973127052480208,
+                "colsample_bytree": 0.6361738004372441,
+                "confidence_threshold": 0.3556259740440644
+            }
+        },
+        {
+            "timestamp": "2025-12-27 20:33:46",
+            "total_trials_in_run": 1,
+            "trial_number": 0,
+            "stability_score": -4.366376179100571,
+            "overall_sharpe": -2.398720707163966,
+            "avg_success_rate": 0.38598475827577994,
+            "fold_sharpes": [
+                0.6527,
+                -7.3778
+            ],
+            "val_return": -0.006315776164982245,
+            "val_sharpe": 0.0,
+            "val_success_rate": 0.0,
+            "val_trade_count": 4,
+            "params": {
+                "model": "lgb",
+                "lgb_n_estimators": 275,
+                "learning_rate": 0.07314027622807498,
+                "num_leaves": 53,
+                "max_depth": 3,
+                "min_child_samples": 26,
+                "subsample": 0.7917560272200423,
+                "colsample_bytree": 0.8582459455321606,
+                "confidence_threshold": 0.3094104686091321
+            }
+        },
+        {
             "timestamp": "2025-12-27 17:06:32",
             "total_trials_in_run": 150,
             "trial_number": 113,
@@ -79,60 +133,6 @@
                 "subsample": 0.761741368187852,
                 "colsample_bytree": 0.6121035752455947,
                 "confidence_threshold": 0.5659620415665368
-            }
-        },
-        {
-            "timestamp": "2025-12-27 16:46:47",
-            "total_trials_in_run": 100,
-            "trial_number": 28,
-            "stability_score": 5.947430474494343,
-            "overall_sharpe": 6.190306423036906,
-            "avg_success_rate": 0.9230769230769231,
-            "fold_sharpes": [
-                7.0344,
-                5.2952
-            ],
-            "val_return": 0.26520435444519785,
-            "val_sharpe": 9.889912571777936,
-            "val_success_rate": 0.6119402985074627,
-            "val_trade_count": 67,
-            "params": {
-                "model": "lgb",
-                "lgb_n_estimators": 61,
-                "learning_rate": 0.01696478510333446,
-                "num_leaves": 46,
-                "max_depth": 5,
-                "min_child_samples": 22,
-                "subsample": 0.8432091527150183,
-                "colsample_bytree": 0.7291414372926354,
-                "confidence_threshold": 0.3463297583739227
-            }
-        },
-        {
-            "timestamp": "2025-12-27 16:39:17",
-            "total_trials_in_run": 150,
-            "trial_number": 84,
-            "stability_score": 7.745499367384429,
-            "overall_sharpe": 14.364186350552039,
-            "avg_success_rate": 0.7346938775510204,
-            "fold_sharpes": [
-                0.0,
-                20.6547
-            ],
-            "val_return": -0.08648344175258293,
-            "val_sharpe": -16.800730200579274,
-            "val_success_rate": 0.24,
-            "val_trade_count": 25,
-            "params": {
-                "model": "lgb",
-                "lgb_n_estimators": 64,
-                "learning_rate": 0.011693942089054922,
-                "num_leaves": 37,
-                "max_depth": 8,
-                "min_child_samples": 19,
-                "subsample": 0.755981233159518,
-                "colsample_bytree": 0.6150717176535645,
-                "confidence_threshold": 0.26922962814949714
             }
         }
     ]
