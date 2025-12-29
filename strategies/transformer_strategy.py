@@ -82,7 +82,7 @@ class TransformerStrategy:
         # Use AdamW for better regularization
         self.optimizer = optim.AdamW(self.model.parameters(), lr=0.0005, weight_decay=1e-4)
         # Scheduler to reduce LR when loss plateaus
-        self.scheduler = optim.lr_scheduler.ReduceLROnPlateau(self.optimizer, mode='min', factor=0.5, patience=3, verbose=True)
+        self.scheduler = optim.lr_scheduler.ReduceLROnPlateau(self.optimizer, mode='min', factor=0.5, patience=3)
         self.criterion = nn.BCEWithLogitsLoss() # More stable than BCELoss
         self.logger.info(f"Model built with Input Dim: {input_dim}")
 
@@ -120,9 +120,6 @@ class TransformerStrategy:
                 loss.backward()
                 self.optimizer.step()
                 
-                total_loss += loss.item()
-                batch_count += 1
-            
                 total_loss += loss.item()
                 batch_count += 1
             
