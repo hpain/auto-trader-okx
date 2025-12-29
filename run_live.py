@@ -216,7 +216,7 @@ async def main_loop(args):
 
                 # --- 4.1.2 获取衍生品数据 (Live Data Upgrade) ---
                 # 为了配合 Transformer 模型，我们需要实时的资金费率和持仓量
-                print(f"Fetching derivatives data for {symbol}...")
+                trader_logger.info(f"Fetching derivatives data for {symbol}...")
                 derivatives_data = {}
                 
                 try:

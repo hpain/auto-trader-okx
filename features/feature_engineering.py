@@ -396,6 +396,7 @@ def _add_derivatives_features(df: pd.DataFrame, derivatives_dfs: dict) -> pd.Dat
         # We want final cols: 'funding_rate', 'open_interest'
         
         # Standardize known columns
+        rename_map = {}
         if 'longShortRatio' in temp_df.columns:
             rename_map['longShortRatio'] = 'long_short_ratio'
         if 'globalLongShortRatio' in temp_df.columns:
