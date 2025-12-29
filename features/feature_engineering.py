@@ -408,6 +408,21 @@ def _add_derivatives_features(df: pd.DataFrame, derivatives_dfs: dict) -> pd.Dat
         # Add to all_features
         all_features = pd.concat([all_features, aligned_df], axis=1)
 
+    # --- ROBUSTNESS: Handle missing historical data (e.g., 2017-2019) ---
+    # Funding Rate: Missing implies neutral (0.0)
+    if 'funding_rate' in all_features.columns:
+        all_features['funding_rate'] = all_features['funding_rate'].fillna(0.0)
+    
+    # Open Interest: Missing likely means data unavailable. 
+    # Propagate last known or 0. Since OI is absolute, 0 is technically "no interest", but better to be careful?
+    # Actually, for ML, constant 0 is better than dropping rows.
+    if 'open_interest' in all_features.columns:
+        all_features['open_interest'] = all_features['open_interest'].fillna(0.0)
+
+    # Also handle legacy names just in case
+    if 'sum_open_interest' in all_features.columns:
+        all_features['sum_open_interest'] = all_features['sum_open_interest'].fillna(0.0)
+
     return all_features
 
 def _add_multi_symbol_features(df: pd.DataFrame, feature_dfs: dict) -> pd.DataFrame:
