@@ -153,7 +153,12 @@ class EnhancedFeatureMiner:
                 print(f"Loading data from: {data_path}")
                 
                 if data_path.endswith('.parquet'):
-                    self.data = pd.read_parquet(data_path, engine='fastparquet')
+                    try:
+                        self.data = pd.read_parquet(data_path) # Auto-detect (prefers pyarrow usually)
+                    except Exception as e:
+                         print(f"Failed to read parquet with default engine, trying fastparquet explicitly: {e}")
+                         self.data = pd.read_parquet(data_path, engine='fastparquet')
+                    
                     print(f"Successfully loaded Parquet file with shape: {self.data.shape}")
                     
                     # Parquet files from our cache usually have 'y' target column
