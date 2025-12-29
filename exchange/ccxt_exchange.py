@@ -497,6 +497,10 @@ class CcxtExchange(Exchange):
                     
                     if is_expected:
                         logger.info(f"Exchange limit reached for {label} lookback (Expected): {e}. switching to shorter history.")
+                    elif "testnet/sandbox URL" in msg: # Binance Sandbox missing endpoint
+                         logger.info(f"Binance Sandbox does not support this endpoint (Expected): {e}. Skipping.")
+                         failed = True 
+                         break 
                     else:
                         logger.warning(f"Error fetching batch with start_ts={current_since}: {e}")
                     
@@ -591,7 +595,11 @@ class CcxtExchange(Exchange):
                  return pd.DataFrame()
 
         except Exception as e:
-            logger.warning(f"Failed to fetch Long/Short Ratio from {self.exchange_id}: {e}")
+            msg = str(e)
+            if "testnet/sandbox URL" in msg:
+                 logger.info(f"Binance Sandbox does not support Long/Short Ratio (Expected). Skipping.")
+            else:
+                 logger.warning(f"Failed to fetch Long/Short Ratio from {self.exchange_id}: {e}")
             return pd.DataFrame()
 
         if not data:
