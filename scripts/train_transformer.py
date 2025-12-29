@@ -4,7 +4,10 @@ import pandas as pd
 import logging
 import time
 import argparse
+import argparse
 import numpy as np
+import pickle
+from sklearn.preprocessing import StandardScaler
 
 # Add project root
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -21,13 +24,17 @@ def train_and_save():
     
     parser = argparse.ArgumentParser()
     parser.add_argument("--data", type=str, required=True, help="Path to training data CSV")
+    parser.add_argument("--data", type=str, required=True, help="Path to training data CSV")
     parser.add_argument("--model_path", type=str, default="models/transformer_v1.pth", help="Path to save trained model")
+    parser.add_argument("--scaler_path", type=str, default="models/scaler_v1.pkl", help="Path to save feature scaler")
     parser.add_argument("--epochs", type=int, default=20)
     args = parser.parse_args()
 
     # 1. Config
     DATA_PATH = args.data
+    DATA_PATH = args.data
     MODEL_PATH = args.model_path
+    SCALER_PATH = args.scaler_path
     EPOCHS = args.epochs
     BATCH_SIZE = 64
     
@@ -80,7 +87,20 @@ def train_and_save():
     feature_cols = [c for c in df.columns if c not in exclude_cols]
     
     # Ensure they are numeric
+    # Ensure they are numeric
     feature_cols = [c for c in feature_cols if pd.api.types.is_numeric_dtype(df[c])]
+    
+    logger.info(f"Selected {len(feature_cols)} features for training.")
+    
+    # 3.5 Normalize Data (CRITICAL for Transformer)
+    logger.info("Normalizing features (StandardScaler)...")
+    scaler = StandardScaler()
+    df[feature_cols] = scaler.fit_transform(df[feature_cols])
+    
+    # Save Scaler
+    with open(SCALER_PATH, 'wb') as f:
+        pickle.dump(scaler, f)
+    logger.info(f"Scaler saved to {SCALER_PATH}")
     
     logger.info(f"Selected {len(feature_cols)} features for training: {feature_cols}")
 
@@ -108,7 +128,9 @@ def train_and_save():
     # 6. Save
     strategy.save_model(MODEL_PATH)
     logger.info(f"✅ Model saved to: {os.path.abspath(MODEL_PATH)}")
-    logger.info("Transfer this file to your cloud server for live trading.")
+    logger.info(f"✅ Model saved to: {os.path.abspath(MODEL_PATH)}")
+    logger.info(f"✅ Scaler saved to: {os.path.abspath(SCALER_PATH)}")
+    logger.info("Transfer BOTH files to your cloud server for live trading.")
 
 if __name__ == "__main__":
     train_and_save()
