@@ -79,7 +79,10 @@ class TransformerStrategy:
     def build_model(self, input_dim):
         if not HAS_TORCH: return
         self.model = TimeSeriesTransformer(input_dim=input_dim).to(self.device).float() # Ensure float32
-        self.optimizer = optim.Adam(self.model.parameters(), lr=0.001)
+        # Use AdamW for better regularization
+        self.optimizer = optim.AdamW(self.model.parameters(), lr=0.0005, weight_decay=1e-4)
+        # Scheduler to reduce LR when loss plateaus
+        self.scheduler = optim.lr_scheduler.ReduceLROnPlateau(self.optimizer, mode='min', factor=0.5, patience=3, verbose=True)
         self.criterion = nn.BCEWithLogitsLoss() # More stable than BCELoss
         self.logger.info(f"Model built with Input Dim: {input_dim}")
 
@@ -120,9 +123,17 @@ class TransformerStrategy:
                 total_loss += loss.item()
                 batch_count += 1
             
+                total_loss += loss.item()
+                batch_count += 1
+            
             if batch_count > 0:
                 avg_loss = total_loss / batch_count
-                self.logger.info(f"Epoch {epoch+1}/{epochs} - Loss: {avg_loss:.4f}")
+                # Step the scheduler
+                if hasattr(self, 'scheduler'):
+                    self.scheduler.step(avg_loss)
+                
+                current_lr = self.optimizer.param_groups[0]['lr']
+                self.logger.info(f"Epoch {epoch+1}/{epochs} - Loss: {avg_loss:.4f} - LR: {current_lr:.6f}")
             
     def generate_signal(self, df: pd.DataFrame) -> int:
         """
