@@ -113,6 +113,7 @@ risk_monitoring:
     - admin@yourcompany.com
 strategy_management:
   enabled_strategies:
+  - transformer
   - lgb
   - ma_fast
   - ma_slow
@@ -120,6 +121,12 @@ strategy_management:
     model_dir: models
     model_name: improved_best_model_1H_0.5y.pkl
     metadata_name: improved_metadata_1H_0.5y.json
+  transformer_strategy:
+    enabled: true
+    window_size: 60
+    input_dim: 108 # Default approx, auto-checked by code
+    model_path: models/transformer_v1.pth
+    scaler_path: models/scaler_v1.pkl
   ma_fast_strategy:
     short_window: 5
     long_window: 15

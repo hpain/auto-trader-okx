@@ -319,14 +319,25 @@ strategy_management:
   # List of enabled strategies
   enabled_strategies:
     - "lgb"        # Main ML strategy
+    - "transformer" # Deep Learning Strategy (New)
     - "ma_fast"    # Fast mean reversion strategy
+    - "ma_slow"    # Slow trend following strategy
     - "ma_slow"    # Slow trend following strategy
   
   # Strategy-specific configurations
   lgb_strategy:
     model_dir: "models"
     model_name: "best_model.pkl"
+    model_name: "best_model.pkl"
     metadata_name: "metadata.json"
+
+  # Transformer Model Config (Add this to your real settings.yaml)
+  transformer_strategy:
+    enabled: true
+    window_size: 60
+    input_dim: 108 # Adjust based on your feature set (check scaler.n_features_in_)
+    model_path: "models/transformer_v1.pth"
+    scaler_path: "models/scaler_v1.pkl"
   
   ma_fast_strategy:
     short_window: 5

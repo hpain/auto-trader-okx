@@ -8,6 +8,7 @@ import argparse
 # 导入我们所有的新组件
 from strategies.moving_average import MovingAverageStrategy
 from strategies.lgb_strategy import LGBStrategy
+from strategies.transformer_strategy import TransformerStrategy
 from trader.portfolio_manager import PortfolioManager
 from trader.execution_handler import ExecutionHandler
 from strategies.strategy_manager import StrategyManager
@@ -98,7 +99,33 @@ async def main_loop(args):
     })
     lgb_strategy = LGBStrategy(strategy_name="LGB_Main", config=lgb_cfg)
     
+    # Transformer Strategy (New)
+    transformer_cfg = strat_mgmt_config.get('transformer_strategy')
+    transformer_strategy = None
+    if transformer_cfg and transformer_cfg.get('enabled', False):
+        print("Initializing Transformer Strategy...")
+        transformer_strategy = TransformerStrategy(
+            strategy_name="Transformer_Main",
+            window_size=transformer_cfg.get('window_size', 60),
+            features=None # Will be auto-loaded/set during load_model or inference
+        )
+        # Load model weights if provided
+        model_path = transformer_cfg.get('model_path')
+        scaler_path = transformer_cfg.get('scaler_path') # We might need to pass this to strategy or handler
+        input_dim = transformer_cfg.get('input_dim', 108) # Default approx
+        
+        try:
+             # Just build/load. Note: input_dim might need dynamic check from scaler in real implementation
+             transformer_strategy.build_model(input_dim)
+             transformer_strategy.load_model(model_path, input_dim)
+             print(f"Transformer loaded from {model_path}")
+        except Exception as e:
+             print(f"Failed to load Transformer: {e}")
+    
     strategy_army = [ma_strategy_1, ma_strategy_2, lgb_strategy]
+    if transformer_strategy:
+        # Insert at 0 to make it the DEFAULT active strategy
+        strategy_army.insert(0, transformer_strategy)
     print(f"Initialized {len(strategy_army)} strategies: {[s.strategy_name for s in strategy_army]}")
 
     # 3.3 初始化StrategyManager
