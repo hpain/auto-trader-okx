@@ -270,6 +270,22 @@ class AggregatedExchange(Exchange):
         logger.debug(f"Aggregated {len(dfs)} long/short ratio dataframes into one.")
         return agg_df
 
+    def aggregate_open_interest(self, dfs: List[pd.DataFrame]) -> pd.DataFrame:
+        if not dfs:
+            return pd.DataFrame()
+        combined_df = pd.concat(dfs)
+        grouped = combined_df.groupby(combined_df.index)
+        
+        agg_rules = {}
+        if 'open_interest' in combined_df.columns:
+            agg_rules['open_interest'] = 'sum'
+        if 'open_interest_value' in combined_df.columns:
+            agg_rules['open_interest_value'] = 'sum'
+            
+        agg_df = grouped.agg(agg_rules)
+        logger.debug(f"Aggregated {len(dfs)} open interest dataframes into one.")
+        return agg_df
+
     def fetch_onchain_data(self, query_id: int, params: dict = None) -> pd.DataFrame:
         """
         Fetches on-chain data from Dune Analytics using a specific query ID.

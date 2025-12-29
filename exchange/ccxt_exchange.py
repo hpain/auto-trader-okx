@@ -540,8 +540,14 @@ class CcxtExchange(Exchange):
              df.rename(columns={'openInterestValue': 'open_interest_value'}, inplace=True)
         if 'openInterestAmount' in df.columns and 'open_interest' not in df.columns:
              df.rename(columns={'openInterestAmount': 'open_interest'}, inplace=True)
-             
-        return df[['open_interest']]
+        
+        cols_to_return = []
+        if 'open_interest' in df.columns:
+            cols_to_return.append('open_interest')
+        if 'open_interest_value' in df.columns:
+            cols_to_return.append('open_interest_value')
+            
+        return df[cols_to_return]
 
     async def fetch_long_short_ratio(self, symbol: str, timeframe: str, limit: Optional[int] = 100) -> pd.DataFrame:
         """
