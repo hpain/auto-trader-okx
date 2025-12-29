@@ -223,12 +223,26 @@ class TransformerStrategy:
 
         # Predict
         self.model.eval()
-        with torch.no_grad():
-            input_tensor = torch.tensor(scaled_window, dtype=torch.float32).unsqueeze(0).to(self.device)
-            logits = self.model(input_tensor)
-            prob = torch.sigmoid(logits).item() 
+
+        # NAN SANITIZATION
+        if np.isnan(scaled_window).any():
+            self.logger.warning("Input data contains NaNs after scaling. Replacing with 0.0.")
+            scaled_window = np.nan_to_num(scaled_window, nan=0.0, posinf=0.0, neginf=0.0)
+
+        try:
+            with torch.no_grad():
+                input_tensor = torch.tensor(scaled_window, dtype=torch.float32).unsqueeze(0).to(self.device)
+                logits = self.model(input_tensor)
+                prob = torch.sigmoid(logits).item() 
             
-        self.logger.info(f"Transformer Prediction Prob: {prob:.4f}")
+            if np.isnan(prob):
+                 self.logger.error("Model predicted NaN! Defaulting to 0.5")
+                 prob = 0.5
+
+            self.logger.info(f"Transformer Prediction Prob: {prob:.4f}")
+        except Exception as e:
+            self.logger.error(f"Inference error: {e}")
+            prob = 0.5
         
         if prob > 0.6:
             return 1 # Buy

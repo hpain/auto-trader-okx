@@ -570,11 +570,12 @@ class CcxtExchange(Exchange):
         data = []
         try:
             if self.exchange_id == 'binance':
-                # Binance Futures: fapiData_get_toplongshortaccountratio
+                # Binance Futures: fapiData_get_topLongShortAccountRatio
                 # params: symbol, period, limit
                 # Symbols for fapi are usually without slash, e.g. BTCUSDT
                 f_symbol = symbol.replace('/', '')
-                response = await self.exchange.fapiData_get_toplongshortaccountratio({
+                # Note: Correct CCXT mapping for GET /fapi/data/topLongShortAccountRatio matches case segments
+                response = await self.exchange.fapiData_get_topLongShortAccountRatio({
                     'symbol': f_symbol,
                     'period': timeframe,
                     'limit': limit
