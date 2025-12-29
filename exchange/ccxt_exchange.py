@@ -560,12 +560,19 @@ class CcxtExchange(Exchange):
         # Determine period string expected by exchange
         period = timeframe # Default
         if self.exchange_id == 'binance':
-            # Binance expects '5m', '15m', '1h', etc.
+            # Binance expects '5m', '15m', '1h' (lowercase is fine for implicit API usually, but let's stick to standard)
             pass 
         elif self.exchange_id == 'okx':
-            # OKX expects '5m', '1H', '4H' etc.
+            # OKX expects '5m', '1H', '4H', '1D' (Uppercase H/D required)
+            if timeframe.endswith('h'):
+                period = timeframe.upper() # 1h -> 1H
+            elif timeframe.endswith('d'):
+                period = timeframe.upper() # 1d -> 1D
+            else:
+                period = timeframe
+            
             # Map standard generic intervals to OKX format if needed
-            period = timeframe # CCXT usually standardizes this, but raw params might need specific format
+            # period = timeframe # CCXT usually standardizes this, but raw params might need specific format
         
         data = []
         try:

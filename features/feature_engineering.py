@@ -434,38 +434,43 @@ def _add_derivatives_features(df: pd.DataFrame, derivatives_dfs: dict) -> pd.Dat
     # --- ROBUSTNESS: Handle missing historical data (e.g., 2017-2019) ---
     # Funding Rate: Missing implies neutral (0.0)
     if 'funding_rate' in all_features.columns:
-        all_features['funding_rate'] = all_features['funding_rate'].fillna(0.0)
+        all_features['funding_rate'] = pd.to_numeric(all_features['funding_rate'], errors='coerce').fillna(0.0)
     
     # Open Interest: Missing likely means data unavailable. 
     # Propagate last known or 0. Since OI is absolute, 0 is technically "no interest", but better to be careful?
     # Actually, for ML, constant 0 is better than dropping rows.
     if 'open_interest' in all_features.columns:
-        all_features['open_interest'] = all_features['open_interest'].fillna(0.0)
+        all_features['open_interest'] = pd.to_numeric(all_features['open_interest'], errors='coerce').fillna(0.0)
     
     # Sentiment Features: Fill with forward fill then 0 (neutralish, or use mean)
     # Using 1.0 for ratios (neutral sentiment is often 1:1)
     ratio_cols = ['long_short_ratio', 'toptrader_long_short_ratio']
     for col in ratio_cols:
-        if col in all_features.columns:
-            all_features[col] = all_features[col].fillna(1.0) # Neutral ratio is usually 1.0
+         if col in all_features.columns:
+            all_features[col] = pd.to_numeric(all_features[col], errors='coerce').fillna(1.0) # Neutral ratio is usually 1.0
 
-            # Auto-generate 'count' and 'sum' features for Robustness if missing
-            # (Model trained on aggregated data expects these)
-            if col == 'toptrader_long_short_ratio':
-                count_col = f'count_{col}'
-                sum_col = f'sum_{col}'
-                
-                if count_col not in all_features.columns:
-                    # In live mode with single aggregated stream, count is effectively 1 (valid data)
-                    all_features[count_col] = 1.0
-                
-                if sum_col not in all_features.columns:
-                     # Sum is just the value itself
-                    all_features[sum_col] = all_features[col]
+    # UNCONDITIONAL GENERATION: Guarantee Scaler features exist even if fetch failed completely
+    # Model expects: 'toptrader_long_short_ratio', 'count_toptrader_long_short_ratio', 'sum_toptrader_long_short_ratio'
+    target_base = 'toptrader_long_short_ratio'
+    count_col = f'count_{target_base}'
+    sum_col = f'sum_{target_base}'
+
+    if target_base not in all_features.columns:
+        # If fetch failed (0 records), create neutral column (ratio=1.0)
+        all_features[target_base] = 1.0
+    
+    # Ensure derivatives exist (Model trained on aggregated data)
+    if count_col not in all_features.columns:
+        # If missing, assume single source validity (or 0 if base was imputed, but 1 is safer for scaler stats)
+        all_features[count_col] = 1.0 
+    
+    if sum_col not in all_features.columns:
+        # Sum is just the value itself
+        all_features[sum_col] = all_features[target_base]
 
     # Also handle legacy names just in case
     if 'sum_open_interest' in all_features.columns:
-        all_features['sum_open_interest'] = all_features['sum_open_interest'].fillna(0.0)
+        all_features['sum_open_interest'] = pd.to_numeric(all_features['sum_open_interest'], errors='coerce').fillna(0.0)
 
     return all_features
 
