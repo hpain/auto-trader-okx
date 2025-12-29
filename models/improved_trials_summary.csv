@@ -1,2 +1,4 @@
 trial_number,stability_score,overall_sharpe,fold_sharpes,confidence_threshold,params
+
 0,-0.4770525068524111,-0.4375191391360208,"[-2.2972, 2.5565]",0.3556259740440644,"{""model"": ""lgb"", ""lgb_n_estimators"": 194, ""learning_rate"": 0.043297432500673264, ""num_leaves"": 24, ""max_depth"": 7, ""min_child_samples"": 39, ""subsample"": 0.7973127052480208, ""colsample_bytree"": 0.6361738004372441, ""confidence_threshold"": 0.3556259740440644}"
+
