@@ -47,8 +47,7 @@ config.yaml
 .env
 
 # OKX 交易项目数据
-data/*.csv
-data/*.json
+data/
 
 # 临时文件
 *.tmp
