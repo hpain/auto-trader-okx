@@ -449,6 +449,20 @@ def _add_derivatives_features(df: pd.DataFrame, derivatives_dfs: dict) -> pd.Dat
         if col in all_features.columns:
             all_features[col] = all_features[col].fillna(1.0) # Neutral ratio is usually 1.0
 
+            # Auto-generate 'count' and 'sum' features for Robustness if missing
+            # (Model trained on aggregated data expects these)
+            if col == 'toptrader_long_short_ratio':
+                count_col = f'count_{col}'
+                sum_col = f'sum_{col}'
+                
+                if count_col not in all_features.columns:
+                    # In live mode with single aggregated stream, count is effectively 1 (valid data)
+                    all_features[count_col] = 1.0
+                
+                if sum_col not in all_features.columns:
+                     # Sum is just the value itself
+                    all_features[sum_col] = all_features[col]
+
     # Also handle legacy names just in case
     if 'sum_open_interest' in all_features.columns:
         all_features['sum_open_interest'] = all_features['sum_open_interest'].fillna(0.0)
