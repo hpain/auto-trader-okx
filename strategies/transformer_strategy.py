@@ -143,8 +143,22 @@ class TransformerStrategy:
             return 0
             
         # Extract last window
+        # Dynamic Feature Adaptation:
+        # If the number of features in df matches the model's input dimension,
+        # update self.features to use ALL numeric columns from df.
+        if hasattr(self.model, 'embedding'):
+            expected_dim = self.model.embedding.in_features
+            numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
+            if len(self.features) != expected_dim and len(numeric_cols) == expected_dim:
+                self.logger.info(f"Auto-updating features list from {len(self.features)} to {len(numeric_cols)} columns to match model input.")
+                self.features = numeric_cols
+
         # Ensure we use the same features
-        last_window = df[self.features].iloc[-self.window_size:].values
+        try:
+            last_window = df[self.features].iloc[-self.window_size:].values
+        except KeyError as e:
+            self.logger.error(f"Missing features in dataframe: {e}")
+            return 0
         
         # Predict
         self.model.eval()
