@@ -3,6 +3,7 @@ __pycache__/
 *.py[cod]
 *.pyo
 *.pyd
+data/cache/
 
 # 虚拟环境
 venv/
