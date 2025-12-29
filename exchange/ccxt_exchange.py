@@ -145,9 +145,9 @@ class CcxtExchange(Exchange):
 
     def _get_swap_symbol(self, symbol: str) -> str:
         if self.exchange_id == 'okx':
-            return symbol + '-SWAP'
+            return symbol.replace('/', '-') + '-SWAP'
         else:
-            return symbol.replace('-', '')
+            return symbol.replace('-', '').replace('/', '')
 
     async def fetch_candles(self, symbol: str, timeframe: str, since: Optional[int] = None, limit: Optional[int] = 100) -> pd.DataFrame:
         ccxt_symbol = self._format_symbol(symbol)

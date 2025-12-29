@@ -124,9 +124,9 @@ strategy_management:
   transformer_strategy:
     enabled: true
     window_size: 60
-    input_dim: 108 # Default approx, auto-checked by code
-    model_path: models/transformer_v1.pth
-    scaler_path: models/scaler_v1.pkl
+    input_dim: 139 # Updated to match training data
+    model_path: models/transformer_long_term.pth
+    scaler_path: models/scaler_long_term.pkl
   ma_fast_strategy:
     short_window: 5
     long_window: 15

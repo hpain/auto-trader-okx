@@ -83,6 +83,11 @@ class PortfolioManager:
         # 新增：用于跟踪各资产的持仓
         self.positions = {}
 
+        # ========== 移植 1.3: 每日盈亏跟踪 ==========
+        self.daily_pnl = 0.0
+        self.last_pnl_reset = datetime.utcnow().date()
+        self.daily_loss_limit = -500.0  # 硬编码阈值，建议后续放入 config
+
     def _calculate_position_size(self, symbol: str, price: float, signal: int, volatility_scalar: float = 1.0) -> float:
         """
         计算头寸大小
@@ -116,16 +121,7 @@ class PortfolioManager:
         
         return quantity
         
-        # 新增：用于跟踪各资产的策略分配
-        self.asset_strategies = {symbol: self.strategies for symbol in self.symbols}
-        
-        # 新增：用于跟踪各资产的持仓
-        self.positions = {}
-        
-        # ========== 移植 1.3: 每日盈亏跟踪 ==========
-        self.daily_pnl = 0.0
-        self.last_pnl_reset = datetime.utcnow().date()
-        self.daily_loss_limit = -500.0  # 硬编码阈值，建议后续放入 config
+        return quantity
     
     def calculate_target_allocations(self, market_data: Dict[str, pd.DataFrame]) -> Dict[str, float]:
         """

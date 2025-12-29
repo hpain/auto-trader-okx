@@ -125,12 +125,12 @@ class MarketRegimeDetector:
         regime = regime_info['regime']
         
         if regime == 'high_volatility':
-            return 'ma_fast', 'High volatility - Use fast MA for quick entries/exits'
+            return 'transformer', 'High volatility - Use Transformer for complex pattern recognition'
         elif regime == 'sideways':
             return 'ma_fast', 'Sideways market - Use mean reversion strategy with fast MA'
         elif regime == 'uptrend':
-            return 'lgb', 'Uptrend - Use ML strategy for trend following'
+            return 'transformer', 'Uptrend - Use Transformer for trend following'
         elif regime == 'downtrend':
-            return 'lgb', 'Downtrend - Use ML strategy for trend following (short positions if supported)'
+            return 'transformer', 'Downtrend - Use Transformer for trend following'
         else:  # moderate
-            return 'lgb', 'Moderate conditions - Use ML strategy'
+            return 'transformer', 'Moderate conditions - Use Transformer'

@@ -40,7 +40,7 @@ Thumbs.db
 htmlcov/
 
 # 项目特定的敏感文件
-settings.yaml
+
 config.yaml
 *.pem
 *.key
@@ -55,4 +55,3 @@ data/
 *.tmp
 *.bak
 *.parquet
-
