@@ -331,6 +331,11 @@ def _add_onchain_features(df: pd.DataFrame, onchain_dfs: dict) -> pd.DataFrame:
                 temp_df.index = temp_df.index.tz_localize('UTC').tz_convert(df.index.tz)
             else:
                 temp_df.index = temp_df.index.tz_convert(df.index.tz)
+        else:
+            # df is time-zone naive (likely naive UTC)
+            if temp_df.index.tz is not None:
+                # Convert temp_df to naive UTC compatible with df
+                temp_df.index = temp_df.index.tz_convert('UTC').tz_localize(None)
         
         temp_df = temp_df.add_prefix(f"onchain_{name}_")
         all_features = all_features.merge(temp_df, how='left', left_index=True, right_index=True)
@@ -380,6 +385,11 @@ def _add_derivatives_features(df: pd.DataFrame, derivatives_dfs: dict) -> pd.Dat
                 temp_df.index = temp_df.index.tz_localize('UTC').tz_convert(df.index.tz)
             else:
                 temp_df.index = temp_df.index.tz_convert(df.index.tz)
+        else:
+            # df is time-zone naive (likely naive UTC)
+            if temp_df.index.tz is not None:
+                # Convert temp_df to naive UTC compatible with df
+                temp_df.index = temp_df.index.tz_convert('UTC').tz_localize(None)
         
         # Prefix columns to avoid collisions (e.g., funding_rates -> funding_rate)
         # Usually these dfs have columns like 'fundingRate' or 'open_interest'.
