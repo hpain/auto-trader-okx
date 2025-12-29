@@ -22,3 +22,6 @@ pytest-asyncio
 pytest-mock
 riskfolio-lib>=5.0.0
 scipy>=1.10.0
+torch>=2.0.0
+gplearn
+fastparquet
