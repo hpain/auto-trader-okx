@@ -41,7 +41,20 @@ def train_and_save():
     df = pd.read_csv(DATA_PATH)
     
     # Standardize Column Names
-    df.rename(columns={'ts': 'timestamp', 'o': 'open', 'h': 'high', 'l': 'low', 'c': 'close', 'v': 'volume'}, inplace=True)
+    # Standardize Column Names
+    # Check if standard columns already exist (new format) vs old format
+    rename_map = {'ts': 'timestamp', 'o': 'open', 'h': 'high', 'l': 'low', 'c': 'close', 'v': 'volume'}
+    # Only rename if 'open' is missing but 'o' is present
+    if 'open' not in df.columns and 'o' in df.columns:
+        df.rename(columns=rename_map, inplace=True)
+    
+    # Handle possible timestamp column variations
+    if 'timestamp' not in df.columns:
+        if 'open_time' in df.columns:
+            df.rename(columns={'open_time': 'timestamp'}, inplace=True)
+        elif 'date' in df.columns:
+             df.rename(columns={'date': 'timestamp'}, inplace=True)
+             
     df['timestamp'] = pd.to_datetime(df['timestamp'])
     df.set_index('timestamp', inplace=True)
     logger.info(f"Loaded {len(df)} candles.")
@@ -56,7 +69,19 @@ def train_and_save():
     
     # 4. Strategy & Model
     start_time = time.time()
-    strategy = TransformerStrategy(window_size=60)
+    # Feature Selection: Use ALL numeric features generated
+    # Exclude non-feature columns
+    exclude_cols = ['target_up', 'timestamp', 'date', 'open_time', 'symbol']
+    feature_cols = [c for c in df.columns if c not in exclude_cols]
+    
+    # Ensure they are numeric
+    feature_cols = [c for c in feature_cols if pd.api.types.is_numeric_dtype(df[c])]
+    
+    logger.info(f"Selected {len(feature_cols)} features for training: {feature_cols}")
+
+    # 4. Strategy & Model
+    start_time = time.time()
+    strategy = TransformerStrategy(window_size=60, features=feature_cols)
     
     # Build Model
     # Note: strategy.features is auto-set. input_dim = len(features)

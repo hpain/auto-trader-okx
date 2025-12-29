@@ -139,6 +139,8 @@ def download_and_process_url(symbol, interval, date_obj, data_type, market_type,
                          df.rename(columns={'create_time': 'timestamp'}, inplace=True)
                          # Drop symbol if exists
                          if 'symbol' in df.columns: df.drop(columns=['symbol'], inplace=True)
+                         # Rename sum_open_interest
+                         df.rename(columns={'sum_open_interest': 'open_interest', 'sum_open_interest_value': 'open_interest_value'}, inplace=True)
                     else:
                         # Fallback (rare for metrics to not have header but just in case)
                         df.rename(columns={df.columns[0]: 'timestamp'}, inplace=True)

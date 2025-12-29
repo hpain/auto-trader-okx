@@ -180,10 +180,17 @@ class EnhancedFeatureMiner:
 
                 else:
                     self.data = pd.read_csv(data_path)
-                    self.data.columns = ['timestamp', 'open', 'high', 'low', 'close', 'volume']
-                    self.data['timestamp'] = pd.to_datetime(self.data['timestamp'])
-                    self.data = self.data.sort_values('timestamp').set_index('timestamp')
-                    print("CSV Data loaded successfully.")
+                    # If columns match standard 6 use specific names, otherwise assume headers are correct (or new 13-col format)
+                    if len(self.data.columns) == 6:
+                         self.data.columns = ['timestamp', 'open', 'high', 'low', 'close', 'volume']
+                    elif 'timestamp' not in self.data.columns and 'open' not in self.data.columns:
+                         # Fallback if no header and length != 6 (unlikely but safe)
+                         self.data.columns = ['timestamp', 'open', 'high', 'low', 'close', 'volume'] + list(self.data.columns[6:])
+                    
+                    if 'timestamp' in self.data.columns:
+                        self.data['timestamp'] = pd.to_datetime(self.data['timestamp'])
+                        self.data = self.data.sort_values('timestamp').set_index('timestamp')
+                    print(f"CSV Data loaded successfully. Columns: {list(self.data.columns)}")
                     
             except FileNotFoundError:
                 print(f"Error: Data file not found at {data_path}")

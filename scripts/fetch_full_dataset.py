@@ -129,11 +129,18 @@ def main():
         
     df_m.set_index('timestamp', inplace=True)
     
+    # Rename "sum_open_interest" to "open_interest" if present
+    # (Binance names it 'sum_open_interest' but it is the snapshot)
+    rename_map = {
+        'sum_open_interest': 'open_interest',
+        'sum_open_interest_value': 'open_interest_value'
+    }
+    df_m.rename(columns=rename_map, inplace=True)
+    
     # Resample Metrics (Daily/5m -> 1h)
-    # Using 'ffill' or 'last' makes sense for state variables (OI).
-    # Since metrics are Daily in this source, we only have 00:00 data.
-    # We essentially forward fill it for the day.
-    df_m_1h = df_m.resample('1h').ffill()
+    # Use .last() to get the "Close" Open Interest (e.g. at 00:55) for the 00:00 bin.
+    # This aligns better with 'Close' price.
+    df_m_1h = df_m.resample('1h').last()
     
     # Merge
     # Left join on Base (1H spine)

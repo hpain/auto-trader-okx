@@ -35,14 +35,15 @@ def main():
     # --- Core Parameters ---
     parser.add_argument("--profit-threshold", type=float, default=0.005, help="每日最低收益目标")
     parser.add_argument("--confidence-threshold", type=float, default=0.95, help="执行交易的最低置信度")
-    parser.add_argument("--stop-loss-pct", type=float, default=0.02, help="止损百分比 (例如 0.02 代表 2%)")
-    parser.add_argument("--take-profit-pct", type=float, default=0.05, help="止盈百分比 (例如 0.05 代表 5%)")
-    parser.add_argument("--max-drawdown", type=float, default=0.1, help="最大回撤限制 (例如 0.1 代表 10%)")
+    parser.add_argument("--stop-loss-pct", type=float, default=0.02, help="止损百分比 (例如 0.02 代表 2%%)")
+    parser.add_argument("--take-profit-pct", type=float, default=0.05, help="止盈百分比 (例如 0.05 代表 5%%)")
+    parser.add_argument("--max-drawdown", type=float, default=0.1, help="最大回撤限制 (例如 0.1 代表 10%%)")
     parser.add_argument("--success-rate-threshold", type=float, default=0.75, help="可接受的最低达标交易成功率")
     parser.add_argument("--tp", type=float, default=0.015, help="Take Profit threshold (e.g., 0.015)")
     parser.add_argument("--sl", type=float, default=0.01, help="Stop Loss threshold (e.g., 0.01)")
     parser.add_argument("--timeout", type=int, default=12, help="Triple Barrier timeout in bars")
     parser.add_argument("--mining-generations", type=int, default=0, help="Number of generations for genetic factor mining (0 to disable)")
+    parser.add_argument("--local-csv", type=str, default=None, help="Path to local Full Dataset CSV (skips API fetch if provided)")
 
     # Step 2: Parse arguments
     args = parser.parse_args()
@@ -86,7 +87,45 @@ def main():
     os.makedirs(cache_dir, exist_ok=True)
     feature_cache_path = os.path.join(cache_dir, f"features_{config_hash}.parquet")
 
-    if os.path.exists(feature_cache_path) and not args.ignore_local:
+    if args.local_csv and os.path.exists(args.local_csv):
+         logging.info(f"LOCAL CSV: Loading full dataset from {args.local_csv}...")
+         try:
+             # Load CSV
+             df_full = pd.read_csv(args.local_csv)
+             
+             # Flexible timestamp parsing
+             possible_ts_cols = ['timestamp', 'open_time', 'ts', 'date']
+             ts_col = next((c for c in possible_ts_cols if c in df_full.columns), None)
+             
+             if not ts_col:
+                 raise ValueError(f"Could not find timestamp column in CSV. Checked: {possible_ts_cols}")
+                 
+             df_full[ts_col] = pd.to_datetime(df_full[ts_col])
+             df_full.set_index(ts_col, inplace=True)
+             df_full.sort_index(inplace=True)
+             
+             # Initialize containers
+             dfp = df_full # Use the full dataframe as primary
+             feature_dfs = {}
+             derivatives_dfs = {}
+             
+             # Compatibility: Ensure open_interest exists if sum_open_interest is there
+             if 'sum_open_interest' in dfp.columns and 'open_interest' not in dfp.columns:
+                 logging.info("Renaming 'sum_open_interest' to 'open_interest' for compatibility.")
+                 dfp['open_interest'] = dfp['sum_open_interest']
+                 
+             logging.info(f"Loaded {len(dfp)} rows from local CSV. Columns: {list(dfp.columns)}")
+             
+             # Since we loaded fully merged data, we don't need 'all_dfs', but we should set it for compatibility just in case
+             all_dfs = {primary_symbol: dfp}
+             
+             # We skip cache loading if local-csv is explicitly provided (user intent override)
+             
+         except Exception as e:
+             logging.error(f"Failed to load local CSV: {e}")
+             return
+
+    elif os.path.exists(feature_cache_path) and not args.ignore_local:
         logging.info(f"OK CACHE: Found feature cache, loading from {feature_cache_path}")
         try:
             dfm = pd.read_parquet(feature_cache_path, engine='fastparquet')
@@ -374,7 +413,7 @@ def main():
     logging.info(f"Training on {len(train_data)} samples, validating on {len(val_data)} samples")
 
     # Train with improved cross-validation
-    logging.debug("--- DEBUG: Calling improved train_evolve ---")
+    # Train with improved cross-validation
     best_score, best_params = train_evolve(
         train_data=train_data,
         val_data=val_data,
@@ -394,7 +433,7 @@ def main():
         timeout=args.timeout,
         years=args.years
     )
-    logging.debug("--- DEBUG: Returned from train_evolve ---")
+
     
     if best_score is None and best_params is None:
         logging.warning("Training finished without producing a valid model. Please check logs for details.")
@@ -421,7 +460,7 @@ def train_evolve(
     timeout: int = 12,
     years: float = 0.5
 ):
-    logging.debug("--- DEBUG: Entered train_evolve (IMPROVED CLASSIFICATION MODE) ---")
+
     X_train = train_data[feature_cols]
     y_train = train_data["y"] # y is a classification label (0 or 1)
     
@@ -772,7 +811,6 @@ def train_evolve(
         logging.warning("Skipped saving specific model artifacts.")
 
     
-    logging.debug("--- DEBUG: Exiting train_evolve ---")
     return best_score, best_params
 
 if __name__ == "__main__":
