@@ -51,6 +51,7 @@ config.yaml
 data/
 
 # 临时文件
+*.swp
 *.tmp
 *.bak
 *.parquet
