@@ -51,14 +51,28 @@ def download_and_process_url(symbol, interval, date_obj, data_type, market_type,
     url = f"{base}/{path}"
     
     # 4. Download
-    try:
-        response = requests.get(url, stream=True, timeout=10) # Added timeout
-        if response.status_code == 404:
-            return None
-        if response.status_code != 200:
+    max_retries = 3
+    for attempt in range(max_retries):
+        try:
+            response = requests.get(url, stream=True, timeout=30) # Increased timeout
+            if response.status_code == 404:
+                return None
+            if response.status_code == 200:
+                break # Success
             logger.debug(f"Failed {url}: {response.status_code}")
-            return None
+        except Exception as e:
+            if attempt < max_retries - 1:
+                import time
+                time.sleep(1) # Wait a bit before retry
+                continue
+            else:
+                logger.error(f"Error processing {date_str} after {max_retries} retries: {e}")
+                return None
+                
+    if response.status_code != 200:
+        return None
             
+    try:
         with zipfile.ZipFile(io.BytesIO(response.content)) as z:
             # Find CSV
             target_file = None
