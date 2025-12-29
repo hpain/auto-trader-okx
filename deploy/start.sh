@@ -56,17 +56,22 @@ mkdir -p logs models data/history data/cache charts
 # Build and Start
 echo -e "${GREEN}Building and Starting Docker Containers...${NC}"
 
-# Check if 'docker compose' (v2) is available
 if docker compose version >/dev/null 2>&1; then
     DOCKER_COMPOSE_CMD="docker compose"
+    echo "Using: Docker Compose V2 ($DOCKER_COMPOSE_CMD)"
 else
     # Fallback to legacy docker-compose
     DOCKER_COMPOSE_CMD="docker-compose"
+    echo -e "${YELLOW}Warning: Docker Compose V2 not found. Using legacy docker-compose.${NC}"
+    echo "Attempting to fix known Python dependency issues for legacy docker-compose..."
+    
+    # AGGRESSIVE FIX: Downgrade requests/urllib3 to make docker-compose v1 work
+    # This addresses 'Not supported URL scheme http+docker' error
+    pip install "urllib3<2.0" "requests<2.29.0" --quiet || echo -e "${RED}Failed to auto-fix python dependencies. You might need sudo.${NC}"
 fi
 
-echo "Using: $DOCKER_COMPOSE_CMD"
-
-$DOCKER_COMPOSE_CMD down # Stop existing if any
+echo "Executing: $DOCKER_COMPOSE_CMD up -d --build"
+$DOCKER_COMPOSE_CMD down 
 $DOCKER_COMPOSE_CMD up -d --build
 
 echo -e "${GREEN}Deployment Successful!${NC}"
