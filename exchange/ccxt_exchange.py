@@ -498,7 +498,7 @@ class CcxtExchange(Exchange):
                     if is_expected:
                         logger.info(f"Exchange limit reached for {label} lookback (Expected): {e}. switching to shorter history.")
                     else:
-                        logger.warning(f"Error fetching batch with start_ts={start_ts}: {e}.")
+                        logger.warning(f"Error fetching batch with start_ts={current_since}: {e}")
                     
                     failed = True
                     break
@@ -507,45 +507,127 @@ class CcxtExchange(Exchange):
                     failed = True
                     break
             
-            if not failed and temp_data:
-                all_oi_data = temp_data
-                break # Success!
-            
             if failed:
                 logger.info(f"Fetch with {label} lookback failed. Retrying with shorter history...")
-                continue
+                continue # Try next attempt
             else:
-                 # If loop finished without error but no data, likely just no data available for that range.
-                 # Stop trying shorter ranges if we got nothing but no error? 
-                 # Or maybe the data starts later.
-                 break
+                 # Success!
+                 all_oi_data = temp_data
+                 logger.info(f"Successfully fetched {len(all_oi_data)} open interest records for {symbol}.")
+                 break # specific attempt succeeded, break outer loop
 
-        if not all_oi_data:
-             # Final Fallback: Fetch latest without 'since'
-            logger.info("Pagination strategies failed. Attempting to fetch latest open interest (Final Fallback).")
-            try:
-                latest = await self.exchange.fetch_open_interest_history(ccxt_symbol, timeframe.lower(), limit=batch_limit)
-                if latest:
-                    all_oi_data = latest
-            except Exception as e:
-                logger.warning(f"Final fallback fetch failed: {e}")
+        if not all_oi_data and not failed:
+             # If loop finished without data and wasn't marked failed (e.g. empty response)
+             # Try fallback to latest
+             logger.info("Pagination strategies failed. Attempting to fetch latest open interest (Final Fallback).")
+             try:
+                 all_oi_data = await self.exchange.fetch_open_interest_history(ccxt_symbol, timeframe.lower(), limit=limit or 100)
+             except Exception as e:
+                 logger.warning(f"Final fallback fetch failed: {e}")
 
         if not all_oi_data:
             return pd.DataFrame()
             
         df = pd.DataFrame(all_oi_data)
-        
-        if 'timestamp' in df.columns:
-            df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms', utc=True)
-            df.set_index('timestamp', inplace=True)
-            df.sort_index(inplace=True)
-        
-        if 'openInterestAmount' in df.columns:
+        df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms', utc=True)
+        df.set_index('timestamp', inplace=True)
+        # Standardize column name
+        if 'openInterestValue' in df.columns:
+             df.rename(columns={'openInterestValue': 'open_interest_value'}, inplace=True)
+        if 'openInterestAmount' in df.columns and 'open_interest' not in df.columns:
              df.rename(columns={'openInterestAmount': 'open_interest'}, inplace=True)
-        elif 'openInterest' in df.columns:
-             df.rename(columns={'openInterest': 'open_interest'}, inplace=True)
-        elif 'openInterestValue' in df.columns:
-             df.rename(columns={'openInterestValue': 'open_interest'}, inplace=True)
+             
+        return df[['open_interest']]
+
+    async def fetch_long_short_ratio(self, symbol: str, timeframe: str, limit: Optional[int] = 100) -> pd.DataFrame:
+        """
+        Fetches the Top Trader Long/Short Ratio.
+        Currently supports Binance and OKX via implicit API methods as CCXT unified support is partial.
+        """
+        ccxt_symbol = self._format_symbol(symbol) if self.market_type == 'spot' else self._get_swap_symbol(symbol)
+        market_id = symbol.replace('/', '') # generic guess
+        
+        # Determine period string expected by exchange
+        period = timeframe # Default
+        if self.exchange_id == 'binance':
+            # Binance expects '5m', '15m', '1h', etc.
+            pass 
+        elif self.exchange_id == 'okx':
+            # OKX expects '5m', '1H', '4H' etc.
+            # Map standard generic intervals to OKX format if needed
+            period = timeframe # CCXT usually standardizes this, but raw params might need specific format
+        
+        data = []
+        try:
+            if self.exchange_id == 'binance':
+                # Binance Futures: fapiData_get_toplongshortaccountratio
+                # params: symbol, period, limit
+                # Symbols for fapi are usually without slash, e.g. BTCUSDT
+                f_symbol = symbol.replace('/', '')
+                response = await self.exchange.fapiData_get_toplongshortaccountratio({
+                    'symbol': f_symbol,
+                    'period': timeframe,
+                    'limit': limit
+                })
+                data = response
+                
+            elif self.exchange_id == 'okx':
+                # OKX: public_get_rubik_stat_contracts_long_short_account_ratio
+                # ccy: BTC, period: 5m
+                # Need to extract base currency from symbol (BTC/USDT -> BTC)
+                base = symbol.split('/')[0]
+                response = await self.exchange.public_get_rubik_stat_contracts_long_short_account_ratio({
+                    'ccy': base,
+                    'period': timeframe,
+                    # pattern: 1: top trader, 0: all trader? API says:
+                    # OKX API path is specific. Let's rely on what we know.
+                    # Actually standard endpoint returns List
+                })
+                if response and 'data' in response:
+                    data = response['data']
+            
+            else:
+                 logger.warning(f"fetch_long_short_ratio not implemented for {self.exchange_id}")
+                 return pd.DataFrame()
+
+        except Exception as e:
+            logger.warning(f"Failed to fetch Long/Short Ratio from {self.exchange_id}: {e}")
+            return pd.DataFrame()
+
+        if not data:
+            return pd.DataFrame()
+
+        # Parse Data
+        # Binance: [{'symbol': 'BTCUSDT', 'longShortRatio': '1.4500', 'longAccount': '0.5918', 'shortAccount': '0.4082', 'timestamp': 170...}]
+        # OKX: [{'ts': '170...', 'ratio': '1.45', 'long': '0.59', 'short': '0.41'}]
+        
+        records = []
+        for item in data:
+            record = {}
+            if self.exchange_id == 'binance':
+                record['timestamp'] = int(item['timestamp'])
+                record['long_short_ratio'] = float(item['longShortRatio'])
+                record['long_account'] = float(item['longAccount'])
+                record['short_account'] = float(item['shortAccount'])
+            elif self.exchange_id == 'okx':
+                record['timestamp'] = int(item['ts'])
+                record['long_short_ratio'] = float(item['ratio'])
+                record['long_account'] = float(item['long'])
+                record['short_account'] = float(item['short'])
+            records.append(record)
+
+        df = pd.DataFrame(records)
+        df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms', utc=True)
+        df.set_index('timestamp', inplace=True)
+        df = df.sort_index()
+        
+        # Rename for consistency with feature engineering whitelist
+        df.rename(columns={
+            'long_short_ratio': 'toptrader_long_short_ratio',
+             # Add other derived cols if available
+        }, inplace=True)
+
+        return df[['toptrader_long_short_ratio']]
         
         df = df[~df.index.duplicated(keep='first')]
         

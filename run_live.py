@@ -229,6 +229,11 @@ async def main_loop(args):
                     oi_df = await exchange_client.fetch_open_interest(symbol, interval, limit=200)
                     if not oi_df.empty:
                         derivatives_data['oi'] = oi_df
+                    
+                    # 3. Long/Short Ratio
+                    ls_df = await exchange_client.fetch_long_short_ratio(symbol, interval, limit=200)
+                    if not ls_df.empty:
+                        derivatives_data['ls_ratio'] = ls_df
                         
                 except Exception as e:
                     print(f"Warning: Failed to fetch derivatives data for {symbol}: {e}. Continuing with Price only.")

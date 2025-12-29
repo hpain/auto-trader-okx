@@ -172,9 +172,20 @@ class TransformerStrategy:
                 required_features = self.scaler.feature_names_in_.tolist()
                 # Check if all required features exist
                 missing = [f for f in required_features if f not in df.columns]
+                
                 if missing:
-                    self.logger.warning(f"DataFrame missing required features: {missing[:3]}...")
-                    return 0
+                    self.logger.warning(f"Feature mismatch: Filling {len(missing)} missing features with training mean (neutral). Example: {missing[:2]}...")
+                    # impute missing features with mean from scaler to get 0 after normalization
+                    if hasattr(self.scaler, 'mean_'):
+                        feature_map = dict(zip(required_features, self.scaler.mean_))
+                        for m in missing:
+                             # Fill with mean so transform -> 0
+                            df[m] = feature_map.get(m, 0.0) 
+                    else:
+                         # Fallback if no mean_ (unlikely for StandardScaler)
+                         for m in missing:
+                            df[m] = 0.0
+                
                 self.features = required_features
             
             # 2. Select and Scale Data

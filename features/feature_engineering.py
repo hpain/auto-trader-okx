@@ -396,10 +396,11 @@ def _add_derivatives_features(df: pd.DataFrame, derivatives_dfs: dict) -> pd.Dat
         # We want final cols: 'funding_rate', 'open_interest'
         
         # Standardize known columns
-        rename_map = {}
-        if 'fundingRate' in temp_df.columns:
-            rename_map['fundingRate'] = 'funding_rate'
-        
+        if 'longShortRatio' in temp_df.columns:
+            rename_map['longShortRatio'] = 'long_short_ratio'
+        if 'globalLongShortRatio' in temp_df.columns:
+            rename_map['globalLongShortRatio'] = 'long_short_ratio'
+
         if rename_map:
             temp_df.rename(columns=rename_map, inplace=True)
 
@@ -409,7 +410,18 @@ def _add_derivatives_features(df: pd.DataFrame, derivatives_dfs: dict) -> pd.Dat
         # But simple merge also works if we ffill after.
         
         # Taking intersection of available columns to avoid index issues
-        valid_cols = [c for c in temp_df.columns if c in ['funding_rate', 'open_interest', 'fundingRate']]
+        # Updated whitelist to include sentiment features
+        allowed_cols = [
+            'funding_rate', 'fundingRate', 
+            'open_interest', 'openInterest', 
+            'long_short_ratio', 'longShortRatio',
+            'toptrader_long_short_ratio',
+            'count_toptrader_long_short_ratio',
+            'sum_toptrader_long_short_ratio',
+            'open_interest_value'
+        ]
+        valid_cols = [c for c in temp_df.columns if c in allowed_cols]
+        
         if not valid_cols:
              continue
              
@@ -428,6 +440,13 @@ def _add_derivatives_features(df: pd.DataFrame, derivatives_dfs: dict) -> pd.Dat
     # Actually, for ML, constant 0 is better than dropping rows.
     if 'open_interest' in all_features.columns:
         all_features['open_interest'] = all_features['open_interest'].fillna(0.0)
+    
+    # Sentiment Features: Fill with forward fill then 0 (neutralish, or use mean)
+    # Using 1.0 for ratios (neutral sentiment is often 1:1)
+    ratio_cols = ['long_short_ratio', 'toptrader_long_short_ratio']
+    for col in ratio_cols:
+        if col in all_features.columns:
+            all_features[col] = all_features[col].fillna(1.0) # Neutral ratio is usually 1.0
 
     # Also handle legacy names just in case
     if 'sum_open_interest' in all_features.columns:

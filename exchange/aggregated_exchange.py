@@ -221,13 +221,53 @@ class AggregatedExchange(Exchange):
         logger.info(f"Fusing open interest from {len(successful_sources)} sources: {successful_sources}")
         return self.aggregate_open_interest(all_dfs)
 
-    def aggregate_open_interest(self, dfs: List[pd.DataFrame]) -> pd.DataFrame:
+    async def fetch_long_short_ratio_async(self, exchange: Exchange, symbol: str, timeframe: str, limit: Optional[int] = None) -> Optional[tuple[str, pd.DataFrame]]:
+        exchange_name = f"{exchange.exchange_id}-{exchange.market_type}"
+        try:
+            # Check if method exists (it's custom, not standard CCXT)
+            if hasattr(exchange, 'fetch_long_short_ratio'):
+                df = await exchange.fetch_long_short_ratio(symbol, timeframe, limit=limit)
+                logger.info(f"OK: Successfully fetched {len(df)} long/short ratio records from {exchange_name} for {symbol}")
+                return exchange_name, df
+            else:
+                logger.warning(f"FAIL: Exchange {exchange_name} does not implement fetch_long_short_ratio.")
+                return exchange_name, None
+        except Exception as e:
+            logger.warning(f"FAIL: Failed to fetch long/short ratio from {exchange_name}: {e}")
+            return exchange_name, None
+
+    async def fetch_long_short_ratio(self, symbol: str, timeframe: str, limit: Optional[int] = None) -> pd.DataFrame:
+        """
+        Fetch recent Top Trader Long/Short Ratio by aggregating results from all available SWAP exchanges.
+        """
+        exchange_names = [f"{exc.exchange_id}-{exc.market_type}" for exc in self.all_swap_exchanges]
+        logger.info(f"Querying {len(self.all_swap_exchanges)} SWAP sources for long/short ratio: {exchange_names}")
+        
+        tasks = [self.fetch_long_short_ratio_async(exc, symbol, timeframe, limit=limit) for exc in self.all_swap_exchanges]
+        results = await asyncio.gather(*tasks)
+        
+        all_dfs = []
+        successful_sources = []
+        for exchange_name, df in results:
+            if df is not None and not df.empty:
+                all_dfs.append(df)
+                successful_sources.append(exchange_name)
+
+        if not all_dfs:
+            logger.warning("Failed to fetch long/short ratio from ALL sources.")
+            return pd.DataFrame()
+
+        logger.info(f"Fusing long/short ratio from {len(successful_sources)} sources: {successful_sources}")
+        return self.aggregate_long_short_ratio(all_dfs)
+
+    def aggregate_long_short_ratio(self, dfs: List[pd.DataFrame]) -> pd.DataFrame:
         if not dfs:
             return pd.DataFrame()
         combined_df = pd.concat(dfs)
         grouped = combined_df.groupby(combined_df.index)
-        agg_df = pd.DataFrame({'open_interest': grouped['open_interest'].sum()})
-        logger.debug(f"Aggregated {len(dfs)} open interest dataframes into one.")
+        # Average the ratios
+        agg_df = pd.DataFrame({'toptrader_long_short_ratio': grouped['toptrader_long_short_ratio'].mean()})
+        logger.debug(f"Aggregated {len(dfs)} long/short ratio dataframes into one.")
         return agg_df
 
     def fetch_onchain_data(self, query_id: int, params: dict = None) -> pd.DataFrame:
