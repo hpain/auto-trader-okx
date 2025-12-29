@@ -132,6 +132,27 @@ class TransformerStrategy:
                 current_lr = self.optimizer.param_groups[0]['lr']
                 self.logger.info(f"Epoch {epoch+1}/{epochs} - Loss: {avg_loss:.4f} - LR: {current_lr:.6f}")
             
+    def load_scaler(self, scaler_path: str):
+        """Load the feature scaler from a pickle file."""
+        if not os.path.exists(scaler_path):
+            self.logger.warning(f"Scaler file not found: {scaler_path}")
+            return
+        
+        try:
+            with open(scaler_path, 'rb') as f:
+                self.scaler = pickle.load(f)
+            self.logger.info(f"Scaler loaded from {scaler_path}")
+            
+            # Auto-detect features from scaler if available
+            if hasattr(self.scaler, 'feature_names_in_'):
+                self.features = self.scaler.feature_names_in_.tolist()
+                self.logger.info(f"Auto-configured {len(self.features)} features from scaler.")
+            elif hasattr(self.scaler, 'n_features_in_'):
+                # Fallback if names aren't saved (older sklearn), checking dimension later
+                self.logger.info(f"Scaler expects {self.scaler.n_features_in_} features.")
+        except Exception as e:
+            self.logger.error(f"Failed to load scaler: {e}")
+
     def generate_signal(self, df: pd.DataFrame) -> int:
         """
         Generate Buy(1)/Sell(-1)/Hold(0) signal based on latest window.
@@ -141,31 +162,59 @@ class TransformerStrategy:
             
         if len(df) < self.window_size:
             return 0
-            
-        # Extract last window
-        # Dynamic Feature Adaptation:
-        # If the number of features in df matches the model's input dimension,
-        # update self.features to use ALL numeric columns from df.
-        if hasattr(self.model, 'embedding'):
-            expected_dim = self.model.embedding.in_features
-            numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
-            if len(self.features) != expected_dim and len(numeric_cols) == expected_dim:
-                self.logger.info(f"Auto-updating features list from {len(self.features)} to {len(numeric_cols)} columns to match model input.")
-                self.features = numeric_cols
 
-        # Ensure we use the same features
-        try:
-            last_window = df[self.features].iloc[-self.window_size:].values
-        except KeyError as e:
-            self.logger.error(f"Missing features in dataframe: {e}")
-            return 0
-        
+        # Dynamic Feature & Scaling Logic
+        if hasattr(self, 'scaler') and self.scaler:
+            # 1. Update features list if possible
+            if hasattr(self.scaler, 'feature_names_in_'):
+                # Strict alignment: use exactly the features the scaler expects
+                required_features = self.scaler.feature_names_in_.tolist()
+                # Check if all required features exist
+                missing = [f for f in required_features if f not in df.columns]
+                if missing:
+                    self.logger.warning(f"DataFrame missing required features: {missing[:3]}...")
+                    return 0
+                self.features = required_features
+            
+            # 2. Select and Scale Data
+            try:
+                # Select the exact features
+                feature_data = df[self.features].iloc[-self.window_size:].values
+                
+                # Check dimension
+                if feature_data.shape[1] != self.scaler.n_features_in_:
+                     # If previous step relied on self.features list which was wrong
+                     self.logger.error(f"Feature count mismatch. Strategy: {feature_data.shape[1]}, Scaler: {self.scaler.n_features_in_}")
+                     return 0
+
+                # SCALE THE DATA (Crucial!)
+                scaled_window = self.scaler.transform(feature_data)
+                
+            except Exception as e:
+                self.logger.error(f"Error during feature scaling: {e}")
+                return 0
+        else:
+            # Fallback for un-normalized raw data (Not recommended for Transformer)
+            self.logger.warning("No scaler loaded! Models trained on scaled data will fail with raw input.")
+            # Previous dynamic logic as last resort
+            if hasattr(self.model, 'embedding'):
+                expected_dim = self.model.embedding.in_features
+                numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
+                # Only use if counts match exactly
+                if len(self.features) != expected_dim and len(numeric_cols) == expected_dim:
+                    self.features = numeric_cols
+            
+            try:
+                scaled_window = df[self.features].iloc[-self.window_size:].values
+            except KeyError:
+                return 0
+
         # Predict
         self.model.eval()
         with torch.no_grad():
-            input_tensor = torch.tensor(last_window, dtype=torch.float32).unsqueeze(0).to(self.device)
+            input_tensor = torch.tensor(scaled_window, dtype=torch.float32).unsqueeze(0).to(self.device)
             logits = self.model(input_tensor)
-            prob = torch.sigmoid(logits).item() # Apply sigmoid here for inference
+            prob = torch.sigmoid(logits).item() 
             
         self.logger.info(f"Transformer Prediction Prob: {prob:.4f}")
         

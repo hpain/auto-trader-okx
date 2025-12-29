@@ -118,6 +118,8 @@ async def main_loop(args):
              # Just build/load. Note: input_dim might need dynamic check from scaler in real implementation
              transformer_strategy.build_model(input_dim)
              transformer_strategy.load_model(model_path, input_dim)
+             if scaler_path:
+                 transformer_strategy.load_scaler(scaler_path)
              print(f"Transformer loaded from {model_path}")
         except Exception as e:
              print(f"Failed to load Transformer: {e}")
