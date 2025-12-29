@@ -36,7 +36,7 @@ class TimeSeriesTransformer(nn.Module if HAS_TORCH else object):
         # Flatten and project to output
         # Here we use a simple linear head on the last time step
         self.decoder = nn.Linear(d_model, 1) 
-        self.activation = nn.Sigmoid()
+        # self.activation = nn.Sigmoid() # Removed for BCEWithLogitsLoss stability
 
     def forward(self, src):
         # src: [Batch, Seq_Len, Features]
@@ -51,8 +51,9 @@ class TimeSeriesTransformer(nn.Module if HAS_TORCH else object):
         last_step = output[:, -1, :]
         
         # Project to target
+        # Project to target
         prediction = self.decoder(last_step)
-        return self.activation(prediction)
+        return prediction # Return raw logits for BCEWithLogitsLoss stability
 
 class TransformerStrategy:
     """
@@ -79,7 +80,7 @@ class TransformerStrategy:
         if not HAS_TORCH: return
         self.model = TimeSeriesTransformer(input_dim=input_dim).to(self.device).float() # Ensure float32
         self.optimizer = optim.Adam(self.model.parameters(), lr=0.001)
-        self.criterion = nn.BCELoss() # Binary Cross Entropy for Up/Down
+        self.criterion = nn.BCEWithLogitsLoss() # More stable than BCELoss
         self.logger.info(f"Model built with Input Dim: {input_dim}")
 
     def train_model(self, df: pd.DataFrame, target_col='target_up', epochs=5, batch_size=32):
@@ -141,7 +142,8 @@ class TransformerStrategy:
         self.model.eval()
         with torch.no_grad():
             input_tensor = torch.tensor(last_window, dtype=torch.float32).unsqueeze(0).to(self.device)
-            prob = self.model(input_tensor).item()
+            logits = self.model(input_tensor)
+            prob = torch.sigmoid(logits).item() # Apply sigmoid here for inference
             
         self.logger.info(f"Transformer Prediction Prob: {prob:.4f}")
         

@@ -4,6 +4,7 @@ import pandas as pd
 import logging
 import time
 import argparse
+import numpy as np
 
 # Add project root
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -61,7 +62,11 @@ def train_and_save():
     
     # 3. Features
     logger.info("Generating features...")
+    logger.info("Generating features...")
     df = generate_features(df)
+    
+    # CRITICAL FIX: Replace infs with NaN before dropna to prevent CUDA assertions
+    df.replace([np.inf, -np.inf], np.nan, inplace=True)
     df.dropna(inplace=True)
     
     # Target (Next Close > Current Close)
