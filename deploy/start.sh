@@ -53,9 +53,21 @@ echo "Ensuring directory structure..."
 mkdir -p logs models data/history data/cache charts
 
 # Build and Start
+# Build and Start
 echo -e "${GREEN}Building and Starting Docker Containers...${NC}"
-docker-compose down # Stop existing if any
-docker-compose up -d --build
+
+# Check if 'docker compose' (v2) is available
+if docker compose version >/dev/null 2>&1; then
+    DOCKER_COMPOSE_CMD="docker compose"
+else
+    # Fallback to legacy docker-compose
+    DOCKER_COMPOSE_CMD="docker-compose"
+fi
+
+echo "Using: $DOCKER_COMPOSE_CMD"
+
+$DOCKER_COMPOSE_CMD down # Stop existing if any
+$DOCKER_COMPOSE_CMD up -d --build
 
 echo -e "${GREEN}Deployment Successful!${NC}"
-echo "Use 'docker-compose logs -f' to view logs."
+echo "Use '$DOCKER_COMPOSE_CMD logs -f' to view logs."
