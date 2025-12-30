@@ -19,9 +19,36 @@ def setup_script_logger(log_dir: str = 'logs', file_name: str = 'script.log', le
     if logger.hasHandlers():
         logger.handlers.clear()
 
+    # Custom Colored Formatter
+    class ColoredFormatter(logging.Formatter):
+        """Custom formatter to add colors to console logs"""
+        
+        # ANSI Escape Codes
+        GREY = "\033[38;5;244m"
+        GREEN = "\033[32m"
+        YELLOW = "\033[33m"
+        RED = "\033[31m"
+        BOLD_RED = "\033[1;31m"
+        RESET = "\033[0m"
+
+        FORMAT = "%(asctime)s - %(levelname)s - %(message)s"
+
+        FORMATS = {
+            logging.DEBUG: GREY + FORMAT + RESET,
+            logging.INFO: GREEN + FORMAT + RESET,
+            logging.WARNING: YELLOW + FORMAT + RESET,
+            logging.ERROR: RED + FORMAT + RESET,
+            logging.CRITICAL: BOLD_RED + FORMAT + RESET
+        }
+
+        def format(self, record):
+            log_fmt = self.FORMATS.get(record.levelno, self.RESET + self.FORMAT + self.RESET)
+            formatter = logging.Formatter(log_fmt)
+            return formatter.format(record)
+
     # Create formatters
-    file_formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-    console_formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
+    file_formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
+    console_formatter = ColoredFormatter()
 
     # File handler
     file_handler = logging.FileHandler(log_path / file_name)

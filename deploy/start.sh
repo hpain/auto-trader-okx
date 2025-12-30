@@ -70,9 +70,19 @@ else
     pip install "urllib3<2.0" "requests<2.29.0" --quiet || echo -e "${RED}Failed to auto-fix python dependencies. You might need sudo.${NC}"
 fi
 
-echo "Executing: $DOCKER_COMPOSE_CMD up -d --build"
+BUILD_FLAG=""
+
+# Check arguments
+for arg in "$@"; do
+    if [ "$arg" == "--build" ]; then
+        BUILD_FLAG="--build"
+        echo -e "${YELLOW}Build flag detected. Rebuilding image...${NC}"
+    fi
+done
+
+echo "Executing: $DOCKER_COMPOSE_CMD up -d $BUILD_FLAG"
 $DOCKER_COMPOSE_CMD down 
-$DOCKER_COMPOSE_CMD up -d --build
+$DOCKER_COMPOSE_CMD up -d $BUILD_FLAG
 
 echo -e "${GREEN}Deployment Successful!${NC}"
 echo "Use '$DOCKER_COMPOSE_CMD logs -f' to view logs."

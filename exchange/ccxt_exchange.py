@@ -735,6 +735,5 @@ class CcxtExchange(Exchange):
             return df
 
         except Exception as e:
-            if "Sandbox" in str(e): logger.info(f"Sandbox skipped for Taker Ratio: {e}")
-            else: logger.warning(f"Failed to fetch Taker Ratio from {self.exchange_id}: {e}")
+            logger.warning(f"Failed to fetch Taker Ratio from {self.exchange_id}: {e}")
             return pd.DataFrame()
