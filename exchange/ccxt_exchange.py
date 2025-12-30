@@ -584,7 +584,7 @@ class CcxtExchange(Exchange):
                 # Note: Correct CCXT mapping verified via dir() is fapiDataGetTopLongShortAccountRatio
                 response = await self.exchange.fapiDataGetTopLongShortAccountRatio({
                     'symbol': f_symbol,
-                    'period': timeframe,
+                    'period': period,
                     'limit': limit
                 })
                 data = response
@@ -596,7 +596,7 @@ class CcxtExchange(Exchange):
                 base = symbol.split('/')[0]
                 response = await self.exchange.public_get_rubik_stat_contracts_long_short_account_ratio({
                     'ccy': base,
-                    'period': timeframe,
+                    'period': period,
                     # pattern: 1: top trader, 0: all trader? API says:
                     # OKX API path is specific. Let's rely on what we know.
                     # Actually standard endpoint returns List
@@ -650,12 +650,91 @@ class CcxtExchange(Exchange):
         }, inplace=True)
 
         return df[['toptrader_long_short_ratio']]
-        
-        df = df[~df.index.duplicated(keep='first')]
-        
-        if 'open_interest' in df.columns:
-            logger.info(f"Successfully fetched {len(df)} open interest records for {symbol}.")
-            return df[['open_interest']]
-        else:
-            logger.warning(f"Open interest data from {self.exchange.id} missing expected columns. Available: {df.columns}")
+
+    async def fetch_global_long_short_ratio(self, symbol: str, timeframe: str, limit: Optional[int] = 100) -> pd.DataFrame:
+        """
+        Fetches the Global Long/Short Ratio (All Accounts).
+        """
+        data = []
+        try:
+            # Period handling
+            period = timeframe
+            if self.exchange_id == 'okx': 
+                 if timeframe.endswith('h'): period = timeframe.upper()
+                 elif timeframe.endswith('d'): period = timeframe.upper()
+
+            if self.exchange_id == 'binance':
+                # fapiDataGetGlobalLongShortAccountRatio
+                f_symbol = symbol.replace('/', '')
+                response = await self.exchange.fapiDataGetGlobalLongShortAccountRatio({
+                    'symbol': f_symbol,
+                    'period': period,
+                    'limit': limit
+                })
+                data = response
+            
+            if not data:
+                return pd.DataFrame()
+
+            parsed = []
+            for item in data:
+                res = {}
+                if self.exchange_id == 'binance':
+                    res['timestamp'] = int(item['timestamp'])
+                    res['long_short_ratio'] = float(item['longShortRatio'])
+                parsed.append(res)
+            
+            df = pd.DataFrame(parsed)
+            df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms', utc=True)
+            df.set_index('timestamp', inplace=True)
+            df.sort_index(inplace=True)
+            return df
+
+        except Exception as e:
+            if "Sandbox" in str(e): logger.info(f"Sandbox skipped for Global L/S: {e}")
+            else: logger.warning(f"Failed to fetch Global L/S from {self.exchange_id}: {e}")
+            return pd.DataFrame()
+
+    async def fetch_taker_buy_sell_vol_ratio(self, symbol: str, timeframe: str, limit: Optional[int] = 100) -> pd.DataFrame:
+        """
+        Fetches Taker Buy/Sell Volume Ratio.
+        """
+        data = []
+        try:
+             # Period handling
+            period = timeframe
+            if self.exchange_id == 'okx':
+                 if timeframe.endswith('h'): period = timeframe.upper()
+                 elif timeframe.endswith('d'): period = timeframe.upper()
+
+            if self.exchange_id == 'binance':
+                # fapiDataGetTakerlongshortRatio
+                f_symbol = symbol.replace('/', '')
+                response = await self.exchange.fapiDataGetTakerlongshortRatio({
+                    'symbol': f_symbol,
+                    'period': period,
+                    'limit': limit
+                })
+                data = response
+            
+            if not data:
+                return pd.DataFrame()
+
+            parsed = []
+            for item in data:
+                res = {}
+                if self.exchange_id == 'binance':
+                    res['timestamp'] = int(item['timestamp'])
+                    res['taker_long_short_vol_ratio'] = float(item['buySellRatio']) # Binance returns 'buySellRatio'
+                parsed.append(res)
+            
+            df = pd.DataFrame(parsed)
+            df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms', utc=True)
+            df.set_index('timestamp', inplace=True)
+            df.sort_index(inplace=True)
+            return df
+
+        except Exception as e:
+            if "Sandbox" in str(e): logger.info(f"Sandbox skipped for Taker Ratio: {e}")
+            else: logger.warning(f"Failed to fetch Taker Ratio from {self.exchange_id}: {e}")
             return pd.DataFrame()

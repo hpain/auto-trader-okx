@@ -417,8 +417,10 @@ def _add_derivatives_features(df: pd.DataFrame, derivatives_dfs: dict) -> pd.Dat
             'open_interest', 'openInterest', 
             'long_short_ratio', 'longShortRatio',
             'toptrader_long_short_ratio',
-            'count_toptrader_long_short_ratio',
-            'sum_toptrader_long_short_ratio',
+            'taker_long_short_vol_ratio',
+            'count_toptrader_long_short_ratio', 'sum_toptrader_long_short_ratio',
+            'count_long_short_ratio', 'sum_long_short_ratio',
+            'count_taker_long_short_vol_ratio', 'sum_taker_long_short_vol_ratio',
             'open_interest_value'
         ]
         valid_cols = [c for c in temp_df.columns if c in allowed_cols]

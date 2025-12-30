@@ -235,6 +235,16 @@ async def main_loop(args):
                     if not ls_df.empty:
                         derivatives_data['ls_ratio'] = ls_df
                         
+                    # 4. Global Long/Short Ratio (NEW)
+                    global_ls_df = await exchange_client.fetch_global_long_short_ratio(symbol, interval, limit=200)
+                    if not global_ls_df.empty:
+                        derivatives_data['global_ls'] = global_ls_df
+
+                    # 5. Taker Buy/Sell Volume Ratio (NEW)
+                    taker_df = await exchange_client.fetch_taker_buy_sell_vol_ratio(symbol, interval, limit=200)
+                    if not taker_df.empty:
+                         derivatives_data['taker_ratio'] = taker_df
+                        
                 except Exception as e:
                     print(f"Warning: Failed to fetch derivatives data for {symbol}: {e}. Continuing with Price only.")
                     # 不因衍生品数据缺失而中断交易，但模型可能会受到影响

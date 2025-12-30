@@ -286,6 +286,60 @@ class AggregatedExchange(Exchange):
         logger.debug(f"Aggregated {len(dfs)} open interest dataframes into one.")
         return agg_df
 
+    async def fetch_global_long_short_ratio(self, symbol: str, timeframe: str, limit: int = 100) -> pd.DataFrame:
+        """Fetching Global L/S Ratio from all swap exchanges."""
+        tasks = []
+        for name, exchange in self.exchanges.items():
+            if exchange.market_type == 'swap':
+                tasks.append(self._fetch_wrapper(name, exchange.fetch_global_long_short_ratio, symbol, timeframe, limit))
+        
+        results = await asyncio.gather(*tasks)
+        
+        all_dfs = []
+        for exchange_name, df in results:
+            if df is not None and not df.empty:
+                all_dfs.append(df)
+        
+        if not all_dfs:
+            return pd.DataFrame()
+            
+        return self.aggregate_global_long_short_ratio(all_dfs)
+
+    def aggregate_global_long_short_ratio(self, dfs: List[pd.DataFrame]) -> pd.DataFrame:
+        if not dfs: return pd.DataFrame()
+        combined_df = pd.concat(dfs)
+        grouped = combined_df.groupby(combined_df.index)
+        # Global L/S is a ratio, so we average it
+        agg_df = pd.DataFrame({'long_short_ratio': grouped['long_short_ratio'].mean()})
+        return agg_df
+
+    async def fetch_taker_buy_sell_vol_ratio(self, symbol: str, timeframe: str, limit: int = 100) -> pd.DataFrame:
+        """Fetching Taker Buy/Sell Ratio from all swap exchanges."""
+        tasks = []
+        for name, exchange in self.exchanges.items():
+            if exchange.market_type == 'swap':
+                tasks.append(self._fetch_wrapper(name, exchange.fetch_taker_buy_sell_vol_ratio, symbol, timeframe, limit))
+        
+        results = await asyncio.gather(*tasks)
+        
+        all_dfs = []
+        for exchange_name, df in results:
+            if df is not None and not df.empty:
+                all_dfs.append(df)
+        
+        if not all_dfs:
+            return pd.DataFrame()
+            
+        return self.aggregate_taker_buy_sell_vol_ratio(all_dfs)
+
+    def aggregate_taker_buy_sell_vol_ratio(self, dfs: List[pd.DataFrame]) -> pd.DataFrame:
+        if not dfs: return pd.DataFrame()
+        combined_df = pd.concat(dfs)
+        grouped = combined_df.groupby(combined_df.index)
+        # Taker Ratio is a ratio, so we average it
+        agg_df = pd.DataFrame({'taker_long_short_vol_ratio': grouped['taker_long_short_vol_ratio'].mean()})
+        return agg_df
+
     def fetch_onchain_data(self, query_id: int, params: dict = None) -> pd.DataFrame:
         """
         Fetches on-chain data from Dune Analytics using a specific query ID.
