@@ -286,57 +286,81 @@ class AggregatedExchange(Exchange):
         logger.debug(f"Aggregated {len(dfs)} open interest dataframes into one.")
         return agg_df
 
+    async def fetch_global_long_short_ratio_async(self, exchange: Exchange, symbol: str, timeframe: str, limit: int = 100) -> Optional[tuple[str, pd.DataFrame]]:
+        exchange_name = f"{exchange.exchange_id}-{exchange.market_type}"
+        try:
+            if hasattr(exchange, 'fetch_global_long_short_ratio'):
+                df = await exchange.fetch_global_long_short_ratio(symbol, timeframe, limit=limit)
+                if df is not None and not df.empty:
+                    logger.info(f"OK: Successfully fetched {len(df)} global L/S records from {exchange_name}")
+                    return exchange_name, df
+            return exchange_name, None
+        except Exception as e:
+            logger.warning(f"FAIL: Failed to fetch global L/S from {exchange_name}: {e}")
+            return exchange_name, None
+
     async def fetch_global_long_short_ratio(self, symbol: str, timeframe: str, limit: int = 100) -> pd.DataFrame:
         """Fetching Global L/S Ratio from all swap exchanges."""
-        tasks = []
-        for name, exchange in self.exchanges.items():
-            if exchange.market_type == 'swap':
-                tasks.append(self._fetch_wrapper(name, exchange.fetch_global_long_short_ratio, symbol, timeframe, limit))
-        
+        tasks = [self.fetch_global_long_short_ratio_async(exc, symbol, timeframe, limit) for exc in self.all_swap_exchanges]
         results = await asyncio.gather(*tasks)
         
         all_dfs = []
+        successful_sources = []
         for exchange_name, df in results:
             if df is not None and not df.empty:
                 all_dfs.append(df)
+                successful_sources.append(exchange_name)
         
         if not all_dfs:
+            logger.info("Fetched 0 Global L/S records (likely Sandbox limitation).")
             return pd.DataFrame()
             
+        logger.info(f"Fusing Global L/S from {len(successful_sources)} sources: {successful_sources}")
         return self.aggregate_global_long_short_ratio(all_dfs)
 
     def aggregate_global_long_short_ratio(self, dfs: List[pd.DataFrame]) -> pd.DataFrame:
         if not dfs: return pd.DataFrame()
         combined_df = pd.concat(dfs)
         grouped = combined_df.groupby(combined_df.index)
-        # Global L/S is a ratio, so we average it
         agg_df = pd.DataFrame({'long_short_ratio': grouped['long_short_ratio'].mean()})
         return agg_df
 
+    async def fetch_taker_buy_sell_vol_ratio_async(self, exchange: Exchange, symbol: str, timeframe: str, limit: int = 100) -> Optional[tuple[str, pd.DataFrame]]:
+        exchange_name = f"{exchange.exchange_id}-{exchange.market_type}"
+        try:
+            if hasattr(exchange, 'fetch_taker_buy_sell_vol_ratio'):
+                df = await exchange.fetch_taker_buy_sell_vol_ratio(symbol, timeframe, limit=limit)
+                if df is not None and not df.empty:
+                    logger.info(f"OK: Successfully fetched {len(df)} taker volume records from {exchange_name}")
+                    return exchange_name, df
+            return exchange_name, None
+        except Exception as e:
+            logger.warning(f"FAIL: Failed to fetch taker volume from {exchange_name}: {e}")
+            return exchange_name, None
+
     async def fetch_taker_buy_sell_vol_ratio(self, symbol: str, timeframe: str, limit: int = 100) -> pd.DataFrame:
         """Fetching Taker Buy/Sell Ratio from all swap exchanges."""
-        tasks = []
-        for name, exchange in self.exchanges.items():
-            if exchange.market_type == 'swap':
-                tasks.append(self._fetch_wrapper(name, exchange.fetch_taker_buy_sell_vol_ratio, symbol, timeframe, limit))
-        
+        tasks = [self.fetch_taker_buy_sell_vol_ratio_async(exc, symbol, timeframe, limit) for exc in self.all_swap_exchanges]
         results = await asyncio.gather(*tasks)
         
         all_dfs = []
+        successful_sources = []
         for exchange_name, df in results:
             if df is not None and not df.empty:
                 all_dfs.append(df)
+                successful_sources.append(exchange_name)
         
         if not all_dfs:
+            logger.info("Fetched 0 Taker Buy/Sell records (likely Sandbox limitation).")
             return pd.DataFrame()
             
+        logger.info(f"Fusing Taker Buy/Sell from {len(successful_sources)} sources: {successful_sources}")
         return self.aggregate_taker_buy_sell_vol_ratio(all_dfs)
 
     def aggregate_taker_buy_sell_vol_ratio(self, dfs: List[pd.DataFrame]) -> pd.DataFrame:
         if not dfs: return pd.DataFrame()
         combined_df = pd.concat(dfs)
         grouped = combined_df.groupby(combined_df.index)
-        # Taker Ratio is a ratio, so we average it
         agg_df = pd.DataFrame({'taker_long_short_vol_ratio': grouped['taker_long_short_vol_ratio'].mean()})
         return agg_df
 

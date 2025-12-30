@@ -508,37 +508,7 @@ class PortfolioManager:
         else:
             return False
 
-    def _calculate_position_size(self, symbol: str, price: float, signal: int) -> float:
-        """
-        计算头寸大小
-        
-        Args:
-            symbol: 交易对符号
-            price: 当前价格
-            signal: 信号 (1=buy, 0=hold, -1=sell)
-        
-        Returns:
-            计算出的头寸大小
-        """
-        if price <= 0:
-            return 0.0
-        
-        # 基于风险配置计算头寸大小
-        risk_per_trade = self.risk_config.get('risk_per_trade', 0.01)
-        max_portfolio_risk = self.risk_config.get('max_portfolio_risk', 0.05)
-        
-        # 使用总资本的一定比例计算订单大小
-        risk_amount = self.capital * risk_per_trade
-        quantity = risk_amount / price
-        
-        # 如果是卖出信号，只卖出当前持仓的一部分
-        # 如果是卖出信号，全仓卖出
-        if signal < 0:
-            current_position = self.positions.get(symbol, 0.0)
-            # FORCE CLOSE: Overwrite calculated risk-based quantity with full position size
-            quantity = current_position
-        
-        return quantity
+
 
     def _check_risk_limits(self, order: Dict) -> bool:
         """
