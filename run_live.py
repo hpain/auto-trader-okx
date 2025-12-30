@@ -127,9 +127,13 @@ async def main_loop(args):
              print(f"Failed to load Transformer: {e}")
     
     strategy_army = [ma_strategy_1, ma_strategy_2, lgb_strategy]
+    print(f"DEBUG: Strategy Army Base: {[s.strategy_name for s in strategy_army]}")
+    
     if transformer_strategy:
         # Insert at 0 to make it the DEFAULT active strategy
         strategy_army.insert(0, transformer_strategy)
+        print(f"DEBUG: Added Transformer. Army now: {[s.strategy_name for s in strategy_army]}")
+        
     print(f"Initialized {len(strategy_army)} strategies: {[s.strategy_name for s in strategy_army]}")
 
     # 3.3 初始化StrategyManager
