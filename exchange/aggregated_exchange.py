@@ -312,7 +312,7 @@ class AggregatedExchange(Exchange):
                 successful_sources.append(exchange_name)
         
         if not all_dfs:
-            logger.info("Fetched 0 Global L/S records (likely Sandbox limitation).")
+            logger.warning("Fetched 0 Global L/S records (likely Sandbox limitation).")
             return pd.DataFrame()
             
         logger.info(f"Fusing Global L/S from {len(successful_sources)} sources: {successful_sources}")
@@ -351,7 +351,7 @@ class AggregatedExchange(Exchange):
                 successful_sources.append(exchange_name)
         
         if not all_dfs:
-            logger.info("Fetched 0 Taker Buy/Sell records (likely Sandbox limitation).")
+            logger.warning("Fetched 0 Taker Buy/Sell records (likely Sandbox limitation).")
             return pd.DataFrame()
             
         logger.info(f"Fusing Taker Buy/Sell from {len(successful_sources)} sources: {successful_sources}")

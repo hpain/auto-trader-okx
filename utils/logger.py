@@ -20,11 +20,14 @@ def setup_script_logger(log_dir: str = 'logs', file_name: str = 'script.log', le
         logger.handlers.clear()
 
     # Custom Colored Formatter
+    # Custom Colored Formatter
     class ColoredFormatter(logging.Formatter):
         """Custom formatter to add colors to console logs"""
         
         # ANSI Escape Codes
-        GREY = "\033[38;5;244m"
+        # Debug/Info(Default) -> Grey (Dim)
+        GREY = "\033[38;5;250m" # Light Grey
+        DIM_GREY = "\033[38;5;240m" # Darker Grey for Debug
         GREEN = "\033[32m"
         YELLOW = "\033[33m"
         RED = "\033[31m"
@@ -33,16 +36,26 @@ def setup_script_logger(log_dir: str = 'logs', file_name: str = 'script.log', le
 
         FORMAT = "%(asctime)s - %(levelname)s - %(message)s"
 
+        # Base formats without conditional INFO
         FORMATS = {
-            logging.DEBUG: GREY + FORMAT + RESET,
-            logging.INFO: GREEN + FORMAT + RESET,
+            logging.DEBUG: DIM_GREY + FORMAT + RESET,
             logging.WARNING: YELLOW + FORMAT + RESET,
             logging.ERROR: RED + FORMAT + RESET,
             logging.CRITICAL: BOLD_RED + FORMAT + RESET
         }
 
         def format(self, record):
-            log_fmt = self.FORMATS.get(record.levelno, self.RESET + self.FORMAT + self.RESET)
+            if record.levelno == logging.INFO:
+                msg = record.msg if isinstance(record.msg, str) else str(record.msg)
+                # Success/Positive keywords -> GREEN
+                if any(k in msg for k in ["Successfully", "OK:", "Complete", "Loaded", "Saved"]):
+                     log_fmt = self.GREEN + self.FORMAT + self.RESET
+                else:
+                     # Normal Info -> Light Grey
+                     log_fmt = self.GREY + self.FORMAT + self.RESET
+            else:
+                log_fmt = self.FORMATS.get(record.levelno, self.RESET + self.FORMAT + self.RESET)
+                
             formatter = logging.Formatter(log_fmt)
             return formatter.format(record)
 

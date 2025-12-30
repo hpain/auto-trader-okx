@@ -512,7 +512,7 @@ class CcxtExchange(Exchange):
                     break
             
             if failed:
-                logger.info(f"Fetch with {label} lookback failed. Retrying with shorter history...")
+                logger.warning(f"Fetch with {label} lookback failed. Retrying with shorter history...")
                 continue # Try next attempt
             else:
                  # Success!
