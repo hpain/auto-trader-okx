@@ -3,7 +3,7 @@ pandas
 numpy
 pyyaml
 python-dateutil
-scikit-learn
+scikit-learn==1.7.2
 optuna
 vaderSentiment
 ta
