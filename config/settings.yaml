@@ -124,6 +124,8 @@ strategy_management:
   transformer_strategy:
     enabled: true
     window_size: 60
+    buy_threshold: 0.55
+    sell_threshold: 0.45
     input_dim: 139 # Updated to match training data
     model_path: models/transformer_long_term.pth
     scaler_path: models/scaler_long_term.pkl

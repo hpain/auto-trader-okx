@@ -107,7 +107,9 @@ async def main_loop(args):
         transformer_strategy = TransformerStrategy(
             strategy_name="Transformer_Main",
             window_size=transformer_cfg.get('window_size', 60),
-            features=None # Will be auto-loaded/set during load_model or inference
+            features=None, # Will be auto-loaded/set during load_model or inference
+            buy_threshold=transformer_cfg.get('buy_threshold', 0.55),
+            sell_threshold=transformer_cfg.get('sell_threshold', 0.45)
         )
         # Load model weights if provided
         model_path = transformer_cfg.get('model_path')

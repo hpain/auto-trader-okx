@@ -62,11 +62,16 @@ class TransformerStrategy:
     Hardware Agnostic: Runs on CPU or CUDA.
     Memory Optimized: Uses Lazy Loading for low RAM environments.
     """
-    def __init__(self, strategy_name="Transformer_v1", window_size=60, features=None):
+    def __init__(self, strategy_name="Transformer_v1", window_size=60, features=None, buy_threshold=0.55, sell_threshold=0.45):
         self.logger = logging.getLogger(__name__)
         self.strategy_name = strategy_name
         self.window_size = window_size
         self.features = features or ['close', 'volume', 'high', 'low'] # Default features
+        
+        # Dynamic Thresholds
+        self.buy_threshold = buy_threshold
+        self.sell_threshold = sell_threshold
+        self.logger.info(f"Thresholds -> Buy: {self.buy_threshold}, Sell: {self.sell_threshold}")
         
         self.device = 'cpu'
         self.model = None
@@ -244,9 +249,9 @@ class TransformerStrategy:
             self.logger.error(f"Inference error: {e}")
             prob = 0.5
         
-        if prob > 0.6:
+        if prob > self.buy_threshold:
             return 1 # Buy
-        elif prob < 0.4:
+        elif prob < self.sell_threshold:
             return -1 # Sell
         else:
             return 0
