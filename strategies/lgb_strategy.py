@@ -35,9 +35,11 @@ class LGBStrategy(BaseStrategy):
                 metadata = json.load(f)
             
             self.features = metadata['feature_cols']
-            self.buy_threshold = metadata.get('best_params', {}).get('confidence_threshold', 0.55)
-            # Add sell threshold (default to 0.45 or slightly lower than buy threshold)
-            self.sell_threshold = metadata.get('best_params', {}).get('sell_threshold', 0.45)
+            
+            # Prioritize config > metadata > default
+            meta_params = metadata.get('best_params', {})
+            self.buy_threshold = self.config.get('buy_threshold', meta_params.get('confidence_threshold', 0.55))
+            self.sell_threshold = self.config.get('sell_threshold', meta_params.get('sell_threshold', 0.45))
 
             self.logger.info(f"MODEL LOADED: {self.model_path}")
             self.logger.info(f"Features Used: {len(self.features)}")

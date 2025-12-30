@@ -121,6 +121,8 @@ strategy_management:
     model_dir: models
     model_name: improved_best_model_1H_0.5y.pkl
     metadata_name: improved_metadata_1H_0.5y.json
+    buy_threshold: 0.55
+    sell_threshold: 0.45
   transformer_strategy:
     enabled: true
     window_size: 60
