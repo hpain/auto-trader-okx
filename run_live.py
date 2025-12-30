@@ -24,7 +24,7 @@ async def main_loop(args):
     全新的自动化交易主循环，集成了市场状态检测和策略管理。
     """
 
-    print("11111111111111111111111111111111 开始开始开始")
+    print("11111111111111111111111111111111 开始开始开始",flush=True)
     # --- SAFETY CHECK: PREVENT ACCIDENTAL LIVE/PAPER TRADING ON DEV MACHINE ---
     if sys.platform == 'win32' and not args.mock and not os.environ.get('ALLOW_LOCAL_TRADING'):
         print("\n" + "!" * 80)
