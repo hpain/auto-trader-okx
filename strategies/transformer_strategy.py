@@ -196,7 +196,7 @@ class TransformerStrategy:
             # 2. Select and Scale Data
             try:
                 # Select the exact features
-                feature_data = df[self.features].iloc[-self.window_size:].values
+                feature_data = df[self.features].iloc[-self.window_size:]
                 
                 # Check dimension
                 if feature_data.shape[1] != self.scaler.n_features_in_:
