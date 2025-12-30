@@ -450,23 +450,33 @@ def _add_derivatives_features(df: pd.DataFrame, derivatives_dfs: dict) -> pd.Dat
             all_features[col] = pd.to_numeric(all_features[col], errors='coerce').fillna(1.0) # Neutral ratio is usually 1.0
 
     # UNCONDITIONAL GENERATION: Guarantee Scaler features exist even if fetch failed completely
-    # Model expects: 'toptrader_long_short_ratio', 'count_toptrader_long_short_ratio', 'sum_toptrader_long_short_ratio'
-    target_base = 'toptrader_long_short_ratio'
-    count_col = f'count_{target_base}'
-    sum_col = f'sum_{target_base}'
+    # Model expects: 
+    # 1. Top Trader Ratio: 'toptrader_long_short_ratio'
+    # 2. Global Ratio: 'long_short_ratio'
+    # 3. Taker Volume Ratio: 'taker_long_short_vol_ratio' (if scaler trained on full set)
+    
+    sentiment_bases = [
+        'toptrader_long_short_ratio', 
+        'long_short_ratio', 
+        'taker_long_short_vol_ratio'
+    ]
 
-    if target_base not in all_features.columns:
-        # If fetch failed (0 records), create neutral column (ratio=1.0)
-        all_features[target_base] = 1.0
-    
-    # Ensure derivatives exist (Model trained on aggregated data)
-    if count_col not in all_features.columns:
-        # If missing, assume single source validity (or 0 if base was imputed, but 1 is safer for scaler stats)
-        all_features[count_col] = 1.0 
-    
-    if sum_col not in all_features.columns:
-        # Sum is just the value itself
-        all_features[sum_col] = all_features[target_base]
+    for target_base in sentiment_bases:
+        count_col = f'count_{target_base}'
+        sum_col = f'sum_{target_base}'
+
+        if target_base not in all_features.columns:
+            # If fetch failed or feature not fetched, create neutral column (ratio=1.0)
+            all_features[target_base] = 1.0
+        
+        # Ensure derivatives exist (Model trained on aggregated data)
+        if count_col not in all_features.columns:
+            # If missing, assume single source validity (or 0 if base was imputed, but 1 is safer for scaler stats)
+            all_features[count_col] = 1.0 
+        
+        if sum_col not in all_features.columns:
+            # Sum is just the value itself
+            all_features[sum_col] = all_features[target_base]
 
     # Also handle legacy names just in case
     if 'sum_open_interest' in all_features.columns:
