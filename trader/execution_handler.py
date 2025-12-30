@@ -1,3 +1,5 @@
+import logging
+
 class ExecutionHandler:
     """
     订单执行器。
@@ -13,6 +15,7 @@ class ExecutionHandler:
 
         :param exchange_client: 一个交易所客户端的实例 (例如 OKXClient)。
         """
+        self.logger = logging.getLogger(__name__)
         self.client = exchange_client
 
     async def execute_trades(self, trade_orders: list, cycle_logger) -> list:
@@ -23,10 +26,10 @@ class ExecutionHandler:
         :param cycle_logger: 用于记录本次循环日志的CycleLogger实例。
         :return: 一个包含执行结果的字典列表 (执行报告)。
         """
-        print("\n--- [ExecutionHandler] Starting Trade Execution ---")
+        self.logger.info("--- [ExecutionHandler] Starting Trade Execution ---")
         if not trade_orders:
-            print("No trade orders to execute.")
-            print("--- [ExecutionHandler] Execution Finished ---")
+            self.logger.info("No trade orders to execute.")
+            self.logger.info("--- [ExecutionHandler] Execution Finished ---")
             return []
 
         execution_report = []
@@ -38,7 +41,7 @@ class ExecutionHandler:
                 side = 'buy' if order['action'].upper() == 'BUY' else 'sell'
             
             if not side:
-                print(f"  - Error: Order missing 'side' or 'action': {order}")
+                self.logger.error(f"  - Error: Order missing 'side' or 'action': {order}")
                 continue
 
             quantity = order.get('quantity')
@@ -53,7 +56,7 @@ class ExecutionHandler:
             }
 
             try:
-                print(f"  - Received order: {side.upper()} {quantity:.6f} {symbol}")
+                self.logger.info(f"  - Received order: {side.upper()} {quantity:.6f} {symbol}")
 
                 # side is already determined above
                 
@@ -79,7 +82,7 @@ class ExecutionHandler:
                 # 保留小数点精度 (假设大多数加密货币 2-4 位，严谨做法应查询 instrument info)
                 # 这里暂时不做过度工程，交给交易所 API 处理精度或后续优化
                 
-                print(f"    - Strategy Price: {base_price:.4f}, Limit Price (w/ protection): {limit_price:.4f}")
+                self.logger.info(f"    - Strategy Price: {base_price:.4f}, Limit Price (w/ protection): {limit_price:.4f}")
 
                 if self.client and hasattr(self.client, 'create_order'):
                     # 3. 发送限价单
@@ -103,20 +106,20 @@ class ExecutionHandler:
                              is_success = True
                     
                     if is_success:
-                        print(f"    - SUCCESS: Limit Order placed. ID: {order_result.get('id') or order_result.get('data', [{}])[0].get('ordId')}")
+                        self.logger.info(f"    - SUCCESS: Limit Order placed. ID: {order_result.get('id') or order_result.get('data', [{}])[0].get('ordId')}")
                         report_item['status'] = 'SUCCESS'
                         # 注意：限价单不一定立即成交，但在下单层面是成功的
                         report_item['filled_quantity'] = quantity
                         # CRITICAL FIX: Include price in report so PortfolioManager can calculate value
                         report_item['price'] = limit_price
                     else:
-                        print(f"    - FAILURE: Exchange rejected order. Response: {order_result}")
+                        self.logger.error(f"    - FAILURE: Exchange rejected order. Response: {order_result}")
                         report_item['status'] = 'FAILURE'
                 else:
                     report_item['raw_response'] = "Client not configured or method 'create_order' not found."
 
             except Exception as e:
-                print(f"    - CRITICAL ERROR: An exception occurred while placing order: {e}")
+                self.logger.critical(f"    - CRITICAL ERROR: An exception occurred while placing order: {e}")
                 report_item['raw_response'] = str(e)
                 # 移除危险的对冲逻辑
                 report_item['status'] = 'ERROR'
@@ -127,5 +130,5 @@ class ExecutionHandler:
         # 使用CycleLogger记录执行信息
         cycle_logger.add_execution_info(reports=execution_report)
 
-        print("--- [ExecutionHandler] Execution Finished ---")
+        self.logger.info("--- [ExecutionHandler] Execution Finished ---")
         return execution_report

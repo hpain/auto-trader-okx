@@ -62,13 +62,13 @@ class LGBStrategy(BaseStrategy):
         result_df['signal'] = 0
 
         if self.model is None:
-            print(f"WARN [{self.strategy_name}]: 模型未加载，无法生成信号。")
+            self.logger.warning(f"WARN [{self.strategy_name}]: 模型未加载，无法生成信号。")
             return result_df
         
         # 确保所有需要的特征都存在
         missing_features = set(self.features) - set(data.columns)
         if missing_features:
-            print(f"WARN [{self.strategy_name}]: 数据中缺少以下必要特征: {missing_features}，无法生成信号。")
+            self.logger.warning(f"WARN [{self.strategy_name}]: 数据中缺少以下必要特征: {missing_features}，无法生成信号。")
             return result_df
 
         X = data[self.features].copy()
@@ -105,7 +105,7 @@ class LGBStrategy(BaseStrategy):
             result_df['signal'] = np.select(conditions, choices, default=0)
             
         except Exception as e:
-            print(f"ERROR [{self.strategy_name}]: 模型批量预测时发生错误: {e}")
+            self.logger.error(f"ERROR [{self.strategy_name}]: 模型批量预测时发生错误: {e}")
             # 出错时返回HOLD信号
             result_df['signal'] = 0
 

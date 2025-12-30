@@ -197,7 +197,7 @@ async def main_loop(args):
     # This prevents the bot from buying what it already has on restart
     await portfolio_manager.sync_with_exchange()
 
-    print("--- Initialization Complete. Starting Live Trading Loop ---")
+    trader_logger.info("--- Initialization Complete. Starting Live Trading Loop ---")
 
     cycle_count = 0
 
@@ -205,13 +205,12 @@ async def main_loop(args):
     while True:
         # Check cycle limit
         if args.cycles is not None and cycle_count >= args.cycles:
-            print(f"Reached cycle limit of {args.cycles}. Exiting.")
+            trader_logger.info(f"Reached cycle limit of {args.cycles}. Exiting.")
             break
 
         # ========== Emergency Stop Check ==========
         if os.path.exists('emergency_stop.flag'):
             msg = "🚨 CRITICAL: emergency_stop.flag detected! Shutting down immediately."
-            print(msg)
             trader_logger.critical(msg)
             break
         # ==========================================
@@ -220,10 +219,10 @@ async def main_loop(args):
         cycle_logger = CycleLogger(logger=trader_logger, cycle_id=cycle_timestamp)
         
         try:
-            print(f"\n{'='*20} New Cycle {cycle_count+1} at {pd.Timestamp.now()} {'='*20}")
+            trader_logger.info(f"\n{'='*20} New Cycle {cycle_count+1} at {pd.Timestamp.now()} {'='*20}")
             
             # 4.1 获取多个交易对的最新市场数据
-            print("Fetching latest market data...")
+            trader_logger.info("Fetching latest market data...")
             
             # (Symbols are already determined above)
             interval = config.get('trading', {}).get('interval', '1H')
@@ -236,7 +235,7 @@ async def main_loop(args):
                 raw_data = await exchange_client.fetch_candles(symbol, interval, limit=1000)
                 
                 if raw_data is None or raw_data.empty:
-                    print(f"Warning: Failed to fetch market data for {symbol}, skipping...")
+                    trader_logger.warning(f"Warning: Failed to fetch market data for {symbol}, skipping...")
                     continue
 
                 # --- 4.1.2 获取衍生品数据 (Live Data Upgrade) ---
@@ -271,7 +270,7 @@ async def main_loop(args):
                          derivatives_data['taker_ratio'] = taker_df
                         
                 except Exception as e:
-                    print(f"Warning: Failed to fetch derivatives data for {symbol}: {e}. Continuing with Price only.")
+                    trader_logger.warning(f"Warning: Failed to fetch derivatives data for {symbol}: {e}. Continuing with Price only.")
                     # 不因衍生品数据缺失而中断交易，但模型可能会受到影响
 
                 # 特征工程 (注入衍生品数据)
@@ -279,14 +278,14 @@ async def main_loop(args):
                 data_for_pm[symbol] = featured_data
 
             if not data_for_pm:
-                print("Failed to fetch market data for any symbol. Retrying in 60 seconds...")
+                trader_logger.warning("Failed to fetch market data for any symbol. Retrying in 60 seconds...")
                 # Skip sleep if in mock mode to speed up debugging, unless explicitly waiting
                 if not args.mock:
                     await asyncio.sleep(60)
                 continue
 
             # 4.2 (后续逻辑与之前相同...)
-            print("Analyzing market regime for each asset and selecting strategies...")
+            trader_logger.info("Analyzing market regime for each asset and selecting strategies...")
             for symbol in data_for_pm.keys():
                 featured_data = data_for_pm[symbol]
                 
@@ -305,7 +304,7 @@ async def main_loop(args):
                 execution_report = await execution_handler.execute_trades(trade_orders, cycle_logger)
                 portfolio_manager.update_positions(execution_report)
             else:
-                print("No new trade orders to execute.")
+                trader_logger.info("No new trade orders to execute.")
                 cycle_logger.set_status("NO_ACTION")
 
             total_position_value = 0.0
@@ -327,21 +326,21 @@ async def main_loop(args):
             
             # Calculate sleep time
             if args.mock:
-                 print("Mock mode: Skipping sleep.")
+                 trader_logger.info("Mock mode: Skipping sleep.")
             else:
                 now = pd.Timestamp.now(tz='UTC')
                 seconds_remaining = 3600 - (now.minute * 60 + now.second)
                 wait_seconds = seconds_remaining + 5
-                print(f"Cycle finished. Waiting for {wait_seconds / 60:.1f} minutes to align with next hour...")
+                trader_logger.info(f"Cycle finished. Waiting for {wait_seconds / 60:.1f} minutes to align with next hour...")
                 await asyncio.sleep(wait_seconds)
 
         except KeyboardInterrupt:
-            print("\nUser interrupted the process. Shutting down.")
+            trader_logger.warning("\nUser interrupted the process. Shutting down.")
             cycle_logger.set_error("User interrupted.")
             cycle_logger.commit()
             break
         except Exception as e:
-            print(f"FATAL ERROR in main loop: {e}")
+            trader_logger.critical(f"FATAL ERROR in main loop: {e}")
             cycle_logger.set_error(str(e))
             if not args.mock:
                 await asyncio.sleep(60)

@@ -199,7 +199,7 @@ class OKXExchange(Exchange):
 
     def place_oco_order(self, symbol: str, side: str, amount: float, take_profit_price: float, stop_loss_price: float) -> Dict[str, Any]:
         """下单并附带止盈和止损"""
-        print(f"准备下 OCO 订单: {side.upper()} {amount} {symbol}, TP: {take_profit_price}, SL: {stop_loss_price}")
+        self.logger.info(f"准备下 OCO 订单: {side.upper()} {amount} {symbol}, TP: {take_profit_price}, SL: {stop_loss_price}")
         body = {
             "instId": symbol,
             "tdMode": "cash",
@@ -212,7 +212,7 @@ class OKXExchange(Exchange):
             "slOrdPx": "-1"   # 以市价执行止损
         }
         response = self._request('POST', '/api/v5/trade/order', body=body, authenticated=True)
-        print(f"OCO 下单响应: {response}")
+        self.logger.info(f"OCO 下单响应: {response}")
         return response
 
     def fetch_funding_rates(self, symbol: str, timeframe: str, years: Optional[float] = None, since: Optional[int] = None, limit: Optional[int] = None) -> pd.DataFrame:
