@@ -159,12 +159,22 @@ async def main_loop(args):
     print(f"Trading Symbols: {symbols}")
     # ===========================================
 
+    # ========== Strategy Weights (Silver Tier) ==========
+    strategy_weights = {
+        'Transformer_Main': 1.5,
+        'LGB_Main': 1.2,
+        'MA_Slow': 1.0,
+        'MA_Fast': 0.5
+    }
+    # ====================================================
+
     portfolio_manager = PortfolioManager(
         strategies=strategy_army, 
         capital=initial_capital, 
         risk_config=risk_config, 
         exchange_client=exchange_client,
-        symbols=symbols # Pass symbols here
+        symbols=symbols, # Pass symbols here
+        strategy_weights=strategy_weights # Pass weights here
     )
 
     # 3.5 初始化ExecutionHandler

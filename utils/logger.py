@@ -25,13 +25,14 @@ def setup_script_logger(log_dir: str = 'logs', file_name: str = 'script.log', le
         """Custom formatter to add colors to console logs"""
         
         # ANSI Escape Codes
-        # Debug/Info(Default) -> Grey (Dim)
         GREY = "\033[38;5;250m" # Light Grey
         DIM_GREY = "\033[38;5;240m" # Darker Grey for Debug
         GREEN = "\033[32m"
+        BOLD_GREEN = "\033[1;32m" # Bright Green for Buy
         YELLOW = "\033[33m"
         RED = "\033[31m"
-        BOLD_RED = "\033[1;31m"
+        BOLD_RED = "\033[1;31m" # Bold Red for Sell/Critical
+        CYAN = "\033[36m" # Cyan for Scores
         RESET = "\033[0m"
 
         FORMAT = "%(asctime)s - %(levelname)s - %(message)s"
@@ -47,8 +48,17 @@ def setup_script_logger(log_dir: str = 'logs', file_name: str = 'script.log', le
         def format(self, record):
             if record.levelno == logging.INFO:
                 msg = record.msg if isinstance(record.msg, str) else str(record.msg)
-                # Success/Positive keywords -> GREEN
-                if any(k in msg for k in ["Successfully", "OK:", "Complete", "Loaded", "Saved"]):
+                
+                # 1. Trade Action (Highest Priority)
+                if any(k in msg for k in ["BUY", "PURCHASING", "LONG"]):
+                    log_fmt = self.BOLD_GREEN + self.FORMAT + self.RESET
+                elif any(k in msg for k in ["SELL", "SELLING", "SHORT"]):
+                    log_fmt = self.RED + self.FORMAT + self.RESET
+                # 2. Score / Analysis
+                elif "Score:" in msg:
+                     log_fmt = self.CYAN + self.FORMAT + self.RESET
+                # 3. Success Keywords
+                elif any(k in msg for k in ["Successfully", "OK:", "Complete", "Loaded", "Saved"]):
                      log_fmt = self.GREEN + self.FORMAT + self.RESET
                 else:
                      # Normal Info -> Light Grey

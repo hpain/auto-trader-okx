@@ -14,7 +14,8 @@ class PortfolioManager:
     """
     
     def __init__(self, strategies: List = None, capital: float = 10000.0, risk_config: Dict = None, 
-                 exchange_client: Any = None, config: Dict = None, symbols: List[str] = None):
+                 exchange_client: Any = None, config: Dict = None, symbols: List[str] = None, 
+                 strategy_weights: Dict[str, float] = None):
         """
         初始化投资组合管理器
         
@@ -54,6 +55,12 @@ class PortfolioManager:
             self.rebalance_frequency_days = 7
             self.per_asset_risk_limit = 0.10
             self.overall_risk_limit = 0.15
+            
+        self.strategy_weights = strategy_weights or {}
+        # Default weight 1.0 if not specified
+        for s in self.strategies:
+            if hasattr(s, 'strategy_name') and s.strategy_name not in self.strategy_weights:
+                self.strategy_weights[s.strategy_name] = 1.0
         
         self.logger = logging.getLogger(__name__)
         self.current_allocations = {}
@@ -397,8 +404,27 @@ class PortfolioManager:
                         cycle_logger.add_warning(f"Error getting signal from strategy {strategy.strategy_name}: {e}")
                     continue
             
-            # 融合多个策略的信号
-            final_signal = self._fuse_signals(signals) if signals else 0  # 0 表示 hold
+            # 融合多个策略的信号 (Weighted Fuse)
+            final_signal, fusion_details = self._fuse_signals_weighted(signals, selected_strategies)
+            
+            # --- Enhanced Consolidated Logging ---
+            if cycle_logger:
+                score_str = f"{final_signal:+.1f}"
+                action_str = "BUY" if final_signal > 0.5 else ("SELL" if final_signal < -0.5 else "HOLD")
+                
+                # Build detail string: "Trans(+1.5) MA_S(-1.0)..."
+                details_parts = []
+                for s, sig in zip(selected_strategies, signals):
+                    s_name = getattr(s, 'strategy_name', 'Unknown')
+                    # Shorten names for log clarity
+                    display_name = s_name.replace('Transformer_Main', 'Trans').replace('MovingAverage', 'MA').replace('LGB_Main', 'LGB').replace('Strategy', '')
+                    weight = self.strategy_weights.get(s_name, 1.0)
+                    contrib = sig * weight
+                    details_parts.append(f"{display_name}({contrib:+.1f})")
+                
+                details_str = " ".join(details_parts)
+                cycle_logger.add_info(f"[{symbol}] Score: {score_str} ({action_str}) | {details_str}")
+            # -------------------------------------
             
             # 决定是否交易
             should_trade = self._should_trade(symbol, final_signal)
@@ -462,27 +488,36 @@ class PortfolioManager:
         
         return trade_orders, info
 
-    def _fuse_signals(self, signals: List[int]) -> int:
+    def _fuse_signals_weighted(self, signals: List[int], strategies: List) -> Tuple[float, Dict]:
         """
-        融合多个策略信号
-        
-        Args:
-            signals: 策略信号列表 [1=buy, 0=hold, -1=sell]
-        
-        Returns:
-            融合后的信号
+        Weighted fusion of strategy signals.
+        Returns: (Weighted Score, Details Dict)
         """
-        if not signals:
-            return 0
+        if not signals or not strategies:
+            return 0.0, {}
             
-        # 简单多数投票
-        signal_sum = sum(signals)
-        if signal_sum > 0:
-            return 1  # 买入
-        elif signal_sum < 0:
-            return -1  # 卖出
-        else:
-            return 0  # 持有
+        total_score = 0.0
+        details = {}
+        
+        for strategy, signal in zip(strategies, signals):
+            name = getattr(strategy, 'strategy_name', 'Unknown')
+            weight = self.strategy_weights.get(name, 1.0)
+            score = signal * weight
+            total_score += score
+            details[name] = score
+            
+        # Decision Logic: 
+        # Score > 0.5 -> Buy (1)
+        # Score < -0.5 -> Sell (-1)
+        # Else -> Hold (0)
+        # However, we return the raw score for the 'signal_strength' field, 
+        # but for _should_trade we need integer logic direction.
+        
+        return total_score, details
+
+    def _fuse_signals(self, signals: List[int]) -> int:
+         # Deprecated legacy method
+        return sum(signals)
 
     def _should_trade(self, symbol: str, signal: int) -> bool:
         """
