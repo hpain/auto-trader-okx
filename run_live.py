@@ -210,7 +210,7 @@ async def main_loop(args):
             for symbol in symbols:
                 # 使用新的聚合交易所客户端获取数据
                 # 获取最近200条K线用于特征计算
-                raw_data = await exchange_client.fetch_candles(symbol, interval, limit=200)
+                raw_data = await exchange_client.fetch_candles(symbol, interval, limit=1000)
                 
                 if raw_data is None or raw_data.empty:
                     print(f"Warning: Failed to fetch market data for {symbol}, skipping...")
@@ -223,27 +223,27 @@ async def main_loop(args):
                 
                 try:
                     # 1. Funding Rate
-                    funding_df = await exchange_client.fetch_funding_rates(symbol, interval, limit=200)
+                    funding_df = await exchange_client.fetch_funding_rates(symbol, interval, limit=1000)
                     if not funding_df.empty:
                         derivatives_data['funding'] = funding_df
                     
                     # 2. Open Interest
-                    oi_df = await exchange_client.fetch_open_interest(symbol, interval, limit=200)
+                    oi_df = await exchange_client.fetch_open_interest(symbol, interval, limit=1000)
                     if not oi_df.empty:
                         derivatives_data['oi'] = oi_df
                     
                     # 3. Long/Short Ratio
-                    ls_df = await exchange_client.fetch_long_short_ratio(symbol, interval, limit=200)
+                    ls_df = await exchange_client.fetch_long_short_ratio(symbol, interval, limit=1000)
                     if not ls_df.empty:
                         derivatives_data['ls_ratio'] = ls_df
                         
                     # 4. Global Long/Short Ratio (NEW)
-                    global_ls_df = await exchange_client.fetch_global_long_short_ratio(symbol, interval, limit=200)
+                    global_ls_df = await exchange_client.fetch_global_long_short_ratio(symbol, interval, limit=1000)
                     if not global_ls_df.empty:
                         derivatives_data['global_ls'] = global_ls_df
 
                     # 5. Taker Buy/Sell Volume Ratio (NEW)
-                    taker_df = await exchange_client.fetch_taker_buy_sell_vol_ratio(symbol, interval, limit=200)
+                    taker_df = await exchange_client.fetch_taker_buy_sell_vol_ratio(symbol, interval, limit=1000)
                     if not taker_df.empty:
                          derivatives_data['taker_ratio'] = taker_df
                         
