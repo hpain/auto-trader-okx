@@ -18,18 +18,14 @@ class PortfolioManager:
                  strategy_weights: Dict[str, float] = None):
         """
         初始化投资组合管理器
-        
-        Args:
-            strategies: 策略列表
-            capital: 初始资本
-            risk_config: 风险配置
-            exchange_client: 交易所客户端
-            config: 配置字典（用于向后兼容）
-            symbols: 交易对列表
         """
+        # DEBUG INIT
+        print(f"DEBUG: PortfolioManager Init. Strategies: {len(strategies) if strategies else 0}, Config passed: {config is not None}")
+        
         # 支持新旧两种初始化方式
-        if config is not None:
-            # 旧版初始化方式
+        # If strategies are explicitly passed, use them! Don't overwrite with empty list from config.
+        if config is not None and not strategies:
+            # 旧版（或 Config-driven）初始化方式
             self.config = config.get('multi_asset', {})
             self.symbols = self.config.get('symbols', ['BTC-USDT'])
             self.allocation_strategy = self.config.get('allocation_strategy', 'equal')
@@ -44,6 +40,7 @@ class PortfolioManager:
             self.risk_config = {}
             self.exchange_client = None
         else:
+
             # 新版初始化方式，支持与 run_live.py 兼容
             self.strategies = strategies or []
             self.capital = capital
