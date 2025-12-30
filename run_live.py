@@ -24,7 +24,6 @@ async def main_loop(args):
     全新的自动化交易主循环，集成了市场状态检测和策略管理。
     """
 
-    print("11111111111111111111111111111111 开始开始开始",flush=True)
     # --- SAFETY CHECK: PREVENT ACCIDENTAL LIVE/PAPER TRADING ON DEV MACHINE ---
     if sys.platform == 'win32' and not args.mock and not os.environ.get('ALLOW_LOCAL_TRADING'):
         print("\n" + "!" * 80)
@@ -40,20 +39,20 @@ async def main_loop(args):
         return
     # --------------------------------------------------------------------------
 
-    print("--- System Initializing ---")
+    print("--- System Initializing ---",flush=True)
     if args.mock:
         print("!!! RUNNING IN MOCK MODE !!!")
 
     # 1. 初始化日志记录器
     trader_logger = setup_trader_logger()
-    print("Logger initialized.")
+    print("Logger initialized.",flush=True)
 
     # 2. 加载配置
     try:
         config = load_config('config/settings.yaml')
-        print("Configuration loaded.")
+        print("Configuration loaded.",flush=True)
     except Exception as e:
-        print(f"CRITICAL ERROR: Failed to load config: {e}")
+        print(f"CRITICAL ERROR: Failed to load config: {e}",flush=True)
         return
 
     # 3. 初始化所有组件
@@ -65,7 +64,7 @@ async def main_loop(args):
     # 默认为 True (安全起见) 如果没有找到配置
     flag = str(api_credentials.get('flag', '0'))
     is_sandbox = (flag == '0')
-    print(f"Exchange Mode: {'SANDBOX' if is_sandbox else 'LIVE'}")
+    print(f"Exchange Mode: {'SANDBOX' if is_sandbox else 'LIVE'}",flush=True)
     
     try:
         exchange_client = await ExchangeFactory.create_exchange(
@@ -76,9 +75,9 @@ async def main_loop(args):
             sandbox=is_sandbox,
             mock=args.mock # Pass mock argument
         )
-        print(f"Aggregated exchange client initialized.")
+        print(f"Aggregated exchange client initialized.",flush=True)
     except Exception as e:
-        print(f"CRITICAL ERROR: Failed to initialize exchange: {e}")
+        print(f"CRITICAL ERROR: Failed to initialize exchange: {e}",flush=True)
         return
 
     # 3.2 初始化策略
@@ -128,20 +127,19 @@ async def main_loop(args):
         except Exception as e:
              print(f"Failed to load Transformer: {e}")
     
-    print("11111111111111111111111111111111")
     strategy_army = [ma_strategy_1, ma_strategy_2, lgb_strategy]
-    print(f"DEBUG: Strategy Army Base: {[s.strategy_name for s in strategy_army]}")
+    trader_logger.info(f"DEBUG: Strategy Army Base: {[s.strategy_name for s in strategy_army]}")
     
     if transformer_strategy:
         # Insert at 0 to make it the DEFAULT active strategy
         strategy_army.insert(0, transformer_strategy)
-        print(f"DEBUG: Added Transformer. Army now: {[s.strategy_name for s in strategy_army]}")
+        trader_logger.info(f"DEBUG: Added Transformer. Army now: {[s.strategy_name for s in strategy_army]}")
         
-    print(f"Initialized {len(strategy_army)} strategies: {[s.strategy_name for s in strategy_army]}")
+    trader_logger.info(f"Initialized {len(strategy_army)} strategies: {[s.strategy_name for s in strategy_army]}")
 
     # 3.3 初始化StrategyManager
     strategy_manager = StrategyManager(strategies=strategy_army)
-    print(f"Initialized StrategyManager.")
+    trader_logger.info(f"Initialized StrategyManager.")
 
     # 3.4 初始化PortfolioManager
     # 尝试从配置读取初始资金，如果没有则默认 10000
@@ -177,9 +175,11 @@ async def main_loop(args):
 
     # ====================================================
 
-    print(f"DEBUG: FINAL STRATEGY CHECK. ID: {id(strategy_army)}")
-    print(f"DEBUG: STRATEGY COUNT: {len(strategy_army)}")
-    print(f"DEBUG: STRATEGY NAMES: {[s.strategy_name for s in strategy_army]}")
+    # ====================================================
+
+    trader_logger.info(f"DEBUG: FINAL STRATEGY CHECK. ID: {id(strategy_army)}")
+    trader_logger.info(f"DEBUG: STRATEGY COUNT: {len(strategy_army)}")
+    trader_logger.info(f"DEBUG: STRATEGY NAMES: {[s.strategy_name for s in strategy_army]}")
 
     portfolio_manager = PortfolioManager(
         strategies=strategy_army, 
