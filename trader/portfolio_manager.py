@@ -391,6 +391,10 @@ class PortfolioManager:
         for symbol, df in data.items():
             # 为每个资产选择合适的策略（这里可以集成MarketRegimeDetector的建议）
             selected_strategies = self.asset_strategies.get(symbol, self.strategies)
+            # DEBUG LOG
+            if cycle_logger:
+                 cycle_logger.add_info(f"DEBUG: Selected {len(selected_strategies)} strategies for {symbol}: {[s.strategy_name for s in selected_strategies]}")
+            
             
             # 从所有策略获取信号并进行融合
             strategy_signals = {}
