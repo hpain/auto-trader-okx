@@ -94,11 +94,11 @@ class MovingAverageStrategy(BaseStrategy):
             'description': 'A moving average crossover strategy that generates buy signals when short MA crosses above long MA and sell signals when short MA crosses below long MA.'
         }
     
-    def generate_signal(self, data: pd.DataFrame) -> int:
+    def generate_signal(self, df: pd.DataFrame, **kwargs) -> int:
         """
         为单个时间点生成信号（兼容旧接口）
         """
-        signals_df = self.generate_signals(data)
+        signals_df = self.generate_signals(df)
         if not signals_df.empty:
             # 返回最后一个信号
             return int(signals_df['signal'].iloc[-1])

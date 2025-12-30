@@ -159,7 +159,7 @@ class TransformerStrategy:
         except Exception as e:
             self.logger.error(f"Failed to load scaler: {e}")
 
-    def generate_signal(self, df: pd.DataFrame) -> int:
+    def generate_signal(self, df: pd.DataFrame, symbol: str = "") -> int:
         """
         Generate Buy(1)/Sell(-1)/Hold(0) signal based on latest window.
         """
@@ -244,7 +244,8 @@ class TransformerStrategy:
                  self.logger.error("Model predicted NaN! Defaulting to 0.5")
                  prob = 0.5
 
-            self.logger.info(f"Transformer Prediction Prob: {prob:.4f}")
+            symbol_tag = f" ({symbol})" if symbol else ""
+            self.logger.info(f"Transformer Prediction Prob{symbol_tag}: {prob:.4f}")
         except Exception as e:
             self.logger.error(f"Inference error: {e}")
             prob = 0.5

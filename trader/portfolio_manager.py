@@ -390,7 +390,7 @@ class PortfolioManager:
             for strategy in selected_strategies:
                 try:
                     # 获取策略信号
-                    signal = strategy.generate_signal(df)
+                    signal = strategy.generate_signal(df, symbol=symbol)
                     signals.append(signal)
                 except Exception as e:
                     if cycle_logger:

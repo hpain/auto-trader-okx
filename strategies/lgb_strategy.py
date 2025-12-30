@@ -123,11 +123,11 @@ class LGBStrategy(BaseStrategy):
             'buy_threshold': self.buy_threshold if hasattr(self, 'buy_threshold') else 0.5
         }
         
-    def generate_signal(self, data: pd.DataFrame) -> int:
+    def generate_signal(self, df: pd.DataFrame, **kwargs) -> int:
         """
         为单个时间点生成信号（兼容旧接口）
         """
-        signals_df = self.generate_signals(data)
+        signals_df = self.generate_signals(df)
         if not signals_df.empty:
             # 返回最后一个信号
             return int(signals_df['signal'].iloc[-1])
