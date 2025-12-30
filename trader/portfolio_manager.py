@@ -19,13 +19,30 @@ class PortfolioManager:
         """
         初始化投资组合管理器
         """
-        # DEBUG INIT
-        print(f"DEBUG: PortfolioManager Init. Strategies: {len(strategies) if strategies else 0}, Config passed: {config is not None}")
+        # DEBUG INIT (Using Logger for reliability)
+        self.logger = logging.getLogger(__name__)
+        self.logger.info(f"DEBUG: NUCLEAR PM INIT. Received Strategies: {len(strategies) if strategies else 0}, Config present: {config is not None}")
         
-        # 支持新旧两种初始化方式
-        # If strategies are explicitly passed, use them! Don't overwrite with empty list from config.
-        if config is not None and not strategies:
-            # 旧版（或 Config-driven）初始化方式
+        # NUCLEAR OPTION: Force use of passed strategies if available
+        # This overrides any legacy config behavior
+        if strategies:
+            self.strategies = strategies
+            self.logger.info(f"DEBUG: Using passed strategies: {[s.strategy_name for s in self.strategies if hasattr(s, 'strategy_name')]}")
+            
+            # Reset legacy defaults just in case
+            self.capital = capital
+            self.risk_config = risk_config or {}
+            self.exchange_client = exchange_client
+            self.symbols = symbols or ['BTC/USDT']
+            self.allocation_strategy = 'equal'
+            self.max_assets = 5
+            self.rebalance_frequency_days = 7
+            self.per_asset_risk_limit = 0.10
+            self.overall_risk_limit = 0.15
+            
+        elif config is not None:
+            # Fallback to Config-driven initialization ONLY if strategies list is empty
+            self.logger.info("DEBUG: No strategies passed, loading from Config...")
             self.config = config.get('multi_asset', {})
             self.symbols = self.config.get('symbols', ['BTC-USDT'])
             self.allocation_strategy = self.config.get('allocation_strategy', 'equal')
@@ -34,7 +51,6 @@ class PortfolioManager:
             self.per_asset_risk_limit = self.config.get('per_asset_risk_limit', 0.10)
             self.overall_risk_limit = self.config.get('overall_risk_limit', 0.15)
             
-            # 为旧版初始化设置默认值
             self.strategies = []
             self.capital = 10000.0
             self.risk_config = {}
