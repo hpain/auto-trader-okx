@@ -3,10 +3,6 @@ import asyncio
 import pandas as pd
 import os
 import sys
-
-# CRASH PROBE: VERIFY CODE SYNC
-print("CRASH PROBE EXECUTING... IF YOU SEE THIS, CODE SYNC IS WORKING!")
-raise RuntimeError("CODE_SYNC_VERIFICATION_SUCCESSFUL_PLEASE_REMOVE_THIS_LINE")
 import argparse
 
 # 导入我们所有的新组件
