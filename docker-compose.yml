@@ -17,8 +17,9 @@ services:
       - OKX_FLAG=${OKX_FLAG:-0}
       - TRADE_SYMBOL=${TRADE_SYMBOL:-BTC-USDT}
       - TRADE_INTERVAL=${TRADE_INTERVAL:-1H}
-      
+
     volumes:
+      - .:/app
       - ./config/settings.yaml:/app/config/settings.yaml
       - ./logs:/app/logs
       - ./models:/app/models
