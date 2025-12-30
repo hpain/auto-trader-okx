@@ -393,19 +393,24 @@ class PortfolioManager:
             selected_strategies = self.asset_strategies.get(symbol, self.strategies)
             
             # 从所有策略获取信号并进行融合
-            signals = []
+            strategy_signals = {}
+            valid_signals_list = []
+            
             for strategy in selected_strategies:
                 try:
                     # 获取策略信号
                     signal = strategy.generate_signal(df, symbol=symbol)
-                    signals.append(signal)
+                    strategy_signals[strategy.strategy_name] = signal
+                    valid_signals_list.append(signal)
                 except Exception as e:
                     if cycle_logger:
                         cycle_logger.add_warning(f"Error getting signal from strategy {strategy.strategy_name}: {e}")
                     continue
             
             # 融合多个策略的信号 (Weighted Fuse)
-            final_signal, fusion_details = self._fuse_signals_weighted(signals, selected_strategies)
+            # Filter strategies to only those that succeeded for the weighted calculation
+            succeeded_strategies = [s for s in selected_strategies if s.strategy_name in strategy_signals]
+            final_signal, fusion_details = self._fuse_signals_weighted(valid_signals_list, succeeded_strategies)
             
             # --- Enhanced Consolidated Logging ---
             if cycle_logger:
@@ -414,13 +419,18 @@ class PortfolioManager:
                 
                 # Build detail string: "Trans(+1.5) MA_S(-1.0)..."
                 details_parts = []
-                for s, sig in zip(selected_strategies, signals):
+                # Iterate over ALL selected strategies to show who failed
+                for s in selected_strategies:
                     s_name = getattr(s, 'strategy_name', 'Unknown')
-                    # Shorten names for log clarity
                     display_name = s_name.replace('Transformer_Main', 'Trans').replace('MovingAverage', 'MA').replace('LGB_Main', 'LGB').replace('Strategy', '')
-                    weight = self.strategy_weights.get(s_name, 1.0)
-                    contrib = sig * weight
-                    details_parts.append(f"{display_name}({contrib:+.1f})")
+                    
+                    if s_name in strategy_signals:
+                        sig = strategy_signals[s_name]
+                        weight = self.strategy_weights.get(s_name, 1.0)
+                        contrib = sig * weight
+                        details_parts.append(f"{display_name}({contrib:+.1f})")
+                    else:
+                        details_parts.append(f"{display_name}(ERR)")
                 
                 details_str = " ".join(details_parts)
                 cycle_logger.add_info(f"[{symbol}] Score: {score_str} ({action_str}) | {details_str}")
