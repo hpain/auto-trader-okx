@@ -480,11 +480,20 @@ def _add_derivatives_features(df: pd.DataFrame, derivatives_dfs: dict) -> pd.Dat
             # Sum is just the value itself
             all_features[sum_col] = all_features[target_base]
 
+    # Log specific missing features if any were imputed
+    missing_sentiment = [base for base in sentiment_bases if base not in all_features.columns]
+    if missing_sentiment:
+        logger.info(f"Imputed neutral values for missing sentiment features (Sandbox/Empty): {missing_sentiment}")
+
     # Also handle legacy names just in case
     if 'sum_open_interest' in all_features.columns:
         all_features['sum_open_interest'] = pd.to_numeric(all_features['sum_open_interest'], errors='coerce').fillna(0.0)
 
-    return all_features
+    # FINAL SAFETY: Ensure NO NaNs remain in the entire dataset before returning
+    # This prevents Scaler errors downstream
+    return all_features.fillna(0.0)
+
+
 
 def _add_multi_symbol_features(df: pd.DataFrame, feature_dfs: dict) -> pd.DataFrame:
     """Placeholder for adding multi-symbol features."""

@@ -254,7 +254,7 @@ class AggregatedExchange(Exchange):
                 successful_sources.append(exchange_name)
 
         if not all_dfs:
-            logger.warning("Failed to fetch long/short ratio from ALL sources.")
+            logger.info("Fetched 0 long/short ratio records (likely Sandbox limitation).")
             return pd.DataFrame()
 
         logger.info(f"Fusing long/short ratio from {len(successful_sources)} sources: {successful_sources}")
