@@ -28,7 +28,7 @@ class StrategyManager:
         self.logger = logging.getLogger(__name__)
         self.config = config or {}
         self.strategies: Dict[str, BaseStrategy] = {}
-        self.active_strategy: Optional[str] = None
+        self.active_strategies: List[str] = [] # Changed from single str to List[str]
         self.strategy_performance: Dict[str, List[Dict]] = {}
         
         # 初始化市场状态检测器
@@ -40,10 +40,10 @@ class StrategyManager:
                 self.strategy_performance[strategy.strategy_name] = []
                 self.logger.info(f"Registered strategy: {strategy.strategy_name}")
             
-            # 设置默认激活策略为列表中的第一个
+            # 设置默认激活策略为所有策略 (All Active by default for Ensemble/Fusion)
             if strategies:
-                self.active_strategy = strategies[0].strategy_name
-                self.logger.info(f"Set default active strategy: {self.active_strategy}")
+                self.active_strategies = [s.strategy_name for s in strategies]
+                self.logger.info(f"Set default active strategies: {self.active_strategies}")
         elif self.config:
             self._initialize_strategies()
         else:
@@ -124,8 +124,8 @@ class StrategyManager:
         
         # 设置默认策略
         if self.strategies:
-            self.active_strategy = list(self.strategies.keys())[0]
-            self.logger.info(f"Set default active strategy: {self.active_strategy}")
+            self.active_strategies = list(self.strategies.keys())
+            self.logger.info(f"Set default active strategies: {self.active_strategies}")
     
     def generate_signals(self, data: pd.DataFrame, strategy_name: Optional[str] = None) -> pd.DataFrame:
         """
@@ -135,11 +135,13 @@ class StrategyManager:
         :return: 信号DataFrame
         """
         if strategy_name is None:
-            strategy_name = self.active_strategy
+            # If multiple active, just pick the first one for this specific method call (backward compatibility)
+            # ideally caller should specify which one if multiple are active
+            strategy_name = self.active_strategies[0] if self.active_strategies else None
             
         if strategy_name not in self.strategies:
-            self.logger.error(f"Strategy {strategy_name} not found, using active strategy instead")
-            strategy_name = self.active_strategy
+            # Fallback to first active
+             strategy_name = self.active_strategies[0] if self.active_strategies else None
             
         if strategy_name not in self.strategies:
             raise ValueError("No strategies available")
@@ -156,21 +158,21 @@ class StrategyManager:
     
     def get_active_strategy_name(self) -> Optional[str]:
         """
-        获取当前激活的策略名称
+        获取当前激活的策略名称 (Legacy support: returns first active)
         """
-        return self.active_strategy
+        return self.active_strategies[0] if self.active_strategies else None
     
     def switch_strategy(self, strategy_name: str, logger: Optional[Any] = None) -> bool:
         """
-        切换到指定策略
+        切换到指定策略 (Sets ONLY this strategy as active)
         :param strategy_name: 要切换到的策略名称
         :param logger: 可选的日志记录器
         :return: 是否切换成功
         """
         if strategy_name in self.strategies:
-            old_strategy = self.active_strategy
-            self.active_strategy = strategy_name
-            msg = f"Switched strategy from {old_strategy} to {strategy_name}"
+            old_strategies = self.active_strategies
+            self.active_strategies = [strategy_name] # Overwrite list with single item
+            msg = f"Switched strategy from {old_strategies} to {[strategy_name]}"
             self.logger.info(msg)
             if logger and hasattr(logger, 'add_info'):
                 logger.add_info(msg)
@@ -232,9 +234,7 @@ class StrategyManager:
         """
         获取当前激活的策略实例列表
         """
-        if self.active_strategy and self.active_strategy in self.strategies:
-            return [self.strategies[self.active_strategy]]
-        return []
+        return [self.strategies[name] for name in self.active_strategies if name in self.strategies]
 
     def evaluate_strategy_performance(self, strategy_name: str, returns: pd.Series) -> Dict[str, float]:
         """

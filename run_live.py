@@ -293,8 +293,9 @@ async def main_loop(args):
                 regime_info = strategy_manager.analyze_market_regime(featured_data, cycle_logger)
                 recommended_strategy_name = strategy_manager.get_recommended_strategy(regime_info, cycle_logger)
                 
-                strategy_manager.switch_strategy(recommended_strategy_name, cycle_logger)
+                # strategy_manager.switch_strategy(recommended_strategy_name, cycle_logger)
                 
+                # Now get_active_strategies returns ALL strategies by default (Fusion Mode)
                 selected_strategies = strategy_manager.get_active_strategies()
                 portfolio_manager.asset_strategies[symbol] = selected_strategies
 

@@ -403,6 +403,8 @@ class PortfolioManager:
         # 遍历所有资产，为每个资产生成信号和订单
         for symbol, df in data.items():
             # 为每个资产选择合适的策略（这里可以集成MarketRegimeDetector的建议）
+            # Legacy Note: If asset_strategies is updated by external logic (Regime Switching), 
+            # this will respect it. For Weighted Fusion, ensure asset_strategies maps to ALL strategies.
             selected_strategies = self.asset_strategies.get(symbol, self.strategies)
             # DEBUG LOG
             if cycle_logger:
