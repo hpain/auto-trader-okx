@@ -126,6 +126,7 @@ async def main_loop(args):
         except Exception as e:
              print(f"Failed to load Transformer: {e}")
     
+    print("11111111111111111111111111111111")
     strategy_army = [ma_strategy_1, ma_strategy_2, lgb_strategy]
     print(f"DEBUG: Strategy Army Base: {[s.strategy_name for s in strategy_army]}")
     
@@ -171,6 +172,12 @@ async def main_loop(args):
         'MA_Fast': 0.5
     }
     # ====================================================
+
+    # ====================================================
+
+    print(f"DEBUG: FINAL STRATEGY CHECK. ID: {id(strategy_army)}")
+    print(f"DEBUG: STRATEGY COUNT: {len(strategy_army)}")
+    print(f"DEBUG: STRATEGY NAMES: {[s.strategy_name for s in strategy_army]}")
 
     portfolio_manager = PortfolioManager(
         strategies=strategy_army, 
