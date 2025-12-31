@@ -70,10 +70,10 @@ class ExecutionHandler:
                     else:
                          raise ValueError(f"Cannot determine price for {symbol} limit order.")
                 
-                # 2. 计算带保护的限价 (Slippage: 0.2%)
-                # 买入：允许最高买入价 = 当前价 * 1.002
-                # 卖出：允许最低卖出价 = 当前价 * 0.998
-                slippage_tolerance = 0.002
+                # 2. 计算带保护的限价 (Slippage: 0.05%)
+                # 买入：允许最高买入价 = 当前价 * 1.0005
+                # 卖出：允许最低卖出价 = 当前价 * 0.9995
+                slippage_tolerance = 0.0005
                 if side == 'buy':
                     limit_price = base_price * (1 + slippage_tolerance)
                 else:

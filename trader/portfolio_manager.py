@@ -571,13 +571,14 @@ class PortfolioManager:
         # Treat as empty if value is less than min_trade_value (Dust)
         is_effectively_empty = position_value < min_trade_val
 
-        # 如果有买入信号且无持仓(或仅持有粉尘)，则买入
-        if signal > 0 and is_effectively_empty:
+        # 只有当信号强度绝对值超过阈值(0.5)时才动作
+        # Buy: Signal > 0.5
+        if signal > 0.5 and is_effectively_empty:
             return True
-        # 如果有卖出信号且有持仓(非粉尘)，则卖出
-        elif signal < 0 and not is_effectively_empty:
+        # Sell: Signal < -0.5
+        elif signal < -0.5 and not is_effectively_empty:
             return True
-        # 其他情况不交易
+        # 其他情况(包括区间 -0.5 ~ 0.5 的 HOLD) 不交易
         else:
             return False
 
