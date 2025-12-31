@@ -456,11 +456,12 @@ class PortfolioManager:
             # -------------------------------------
             
             # 决定是否交易
-            should_trade = self._should_trade(symbol, final_signal)
+            current_price = df['close'].iloc[-1] if not df.empty else 0
+            should_trade = self._should_trade(symbol, final_signal, current_price)
             
             if should_trade:
                 # 计算订单大小
-                current_price = df['close'].iloc[-1] if not df.empty else 0
+                # current_price is already calculated above
                 
                 # --- Volatility Scalar Calculation ---
                 vol_scalar = 1.0
@@ -548,25 +549,33 @@ class PortfolioManager:
          # Deprecated legacy method
         return sum(signals)
 
-    def _should_trade(self, symbol: str, signal: int) -> bool:
+    def _should_trade(self, symbol: str, signal: int, current_price: float = 0.0) -> bool:
         """
         决定是否对指定资产进行交易
         
         Args:
             symbol: 交易对符号
             signal: 策略信号
+            current_price: 当前价格 (用于计算持仓价值)
         
         Returns:
             是否应该交易
         """
         # 获取当前持仓
-        current_position = self.positions.get(symbol, 0.0)
+        current_qty = self.positions.get(symbol, 0.0)
         
-        # 如果有买入信号且无持仓，则买入
-        if signal > 0 and current_position == 0:
+        # Calculate position value if price is available
+        position_value = abs(current_qty * current_price) if current_price > 0 else 0.0
+        min_trade_val = 10.0 # Threshold for "Dust"
+        
+        # Treat as empty if value is less than min_trade_value (Dust)
+        is_effectively_empty = position_value < min_trade_val
+
+        # 如果有买入信号且无持仓(或仅持有粉尘)，则买入
+        if signal > 0 and is_effectively_empty:
             return True
-        # 如果有卖出信号且有持仓，则卖出
-        elif signal < 0 and current_position > 0:
+        # 如果有卖出信号且有持仓(非粉尘)，则卖出
+        elif signal < 0 and not is_effectively_empty:
             return True
         # 其他情况不交易
         else:
