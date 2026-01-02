@@ -4,6 +4,7 @@
 import logging
 from datetime import datetime
 from typing import Dict, List, Optional, Tuple, Any
+import math
 import pandas as pd
 import numpy as np
 
@@ -137,9 +138,9 @@ class PortfolioManager:
         # 如果是卖出信号，全仓卖出
         if signal < 0:
             current_position = self.positions.get(symbol, 0.0)
-            quantity = current_position
-        
-        return quantity
+            # SAFETY TRUNCATION: Round down to 8 decimal places to prevents "Insufficient Funds"
+            # due to floating point precision issues (e.g. holding ...72, trying to sell ...73)
+            quantity = math.floor(current_position * 1e8) / 1e8
         
         return quantity
     
