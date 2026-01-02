@@ -3,6 +3,12 @@ import unittest
 import logging
 import pandas as pd
 import asyncio
+import sys
+import os
+
+# Add project root to sys.path to ensure 'trader' module is found
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
 from unittest.mock import MagicMock, AsyncMock
 
 print("DEBUG: Importing PortfolioManager...", flush=True)
