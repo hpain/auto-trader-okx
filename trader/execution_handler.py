@@ -84,39 +84,71 @@ class ExecutionHandler:
                 
                 self.logger.info(f"    - Strategy Price: {base_price:.4f}, Limit Price (w/ protection): {limit_price:.4f}")
 
-                if self.client and hasattr(self.client, 'create_order'):
-                    # 3. 发送限价单
-                    order_result = await self.client.create_order(
-                        symbol=symbol,
-                        order_type='limit',  # 强制 Limit
-                        side=side,
-                        amount=quantity,
-                        price=limit_price    # 传入限价
-                    )
+                if self.client:
+                    # Check for OCO parameters (Stop Loss & Take Profit)
+                    # Currently OKX supports OCO for placing orders with attached SL/TP
+                    stop_loss = order.get('stop_loss_price')
+                    take_profit = order.get('take_profit_price')
+                    
+                    is_oco_eligible = side == 'buy' and stop_loss and take_profit and hasattr(self.client, 'place_oco_order')
+                    
+                    if is_oco_eligible:
+                        self.logger.info(f"    - Placing OCO Order: SL={stop_loss}, TP={take_profit}")
+                        try:
+                            order_result = await self.client.place_oco_order(
+                                symbol=symbol,
+                                side=side,
+                                amount=quantity,
+                                take_profit_price=take_profit,
+                                stop_loss_price=stop_loss
+                            )
+                            report_item['type'] = 'OCO'
+                        except Exception as e:
+                            self.logger.error(f"    - OCO Failed: {e}. Falling back to standard Limit Order.")
+                            order_result = await self.client.create_order(
+                                symbol=symbol,
+                                order_type='limit',
+                                side=side,
+                                amount=quantity,
+                                price=limit_price
+                            )
+                            report_item['type'] = 'LIMIT'
+                    else:
+                         if hasattr(self.client, 'create_order'):
+                            # Standard Limit Order
+                            order_result = await self.client.create_order(
+                                symbol=symbol,
+                                order_type='limit',  # 强制 Limit
+                                side=side,
+                                amount=quantity,
+                                price=limit_price    # 传入限价
+                            )
+                            report_item['type'] = 'LIMIT'
+                         else:
+                             raise ValueError("Client missing create_order method")
+
                     report_item['raw_response'] = order_result
                     
                     # 4. 严格检查订单状态
                     # OKX API: code '0' = Success
-                    # Mock API: usually returns dict with 'id'
                     is_success = False
                     if isinstance(order_result, dict):
                         if str(order_result.get('code', '0')) == '0': # OKX 标准
                             is_success = True
                         elif 'id' in order_result: # Mock/CCXT 标准
-                             is_success = True
+                            is_success = True
                     
                     if is_success:
-                        self.logger.info(f"    - SUCCESS: Limit Order placed. ID: {order_result.get('id') or order_result.get('data', [{}])[0].get('ordId')}")
+                        order_id = order_result.get('id') or (order_result.get('data', [{}])[0].get('ordId'))
+                        self.logger.info(f"    - SUCCESS: Order placed. ID: {order_id}")
                         report_item['status'] = 'SUCCESS'
-                        # 注意：限价单不一定立即成交，但在下单层面是成功的
                         report_item['filled_quantity'] = quantity
-                        # CRITICAL FIX: Include price in report so PortfolioManager can calculate value
                         report_item['price'] = limit_price
                     else:
                         self.logger.error(f"    - FAILURE: Exchange rejected order. Response: {order_result}")
                         report_item['status'] = 'FAILURE'
                 else:
-                    report_item['raw_response'] = "Client not configured or method 'create_order' not found."
+                    report_item['raw_response'] = "Client not configured."
 
             except Exception as e:
                 self.logger.critical(f"    - CRITICAL ERROR: An exception occurred while placing order: {e}")

@@ -103,6 +103,18 @@ class PortfolioManager:
         
         # 新增：用于跟踪各资产的持仓
         self.positions = {}
+        
+        # 新增：Anti-Whipsaw (防止踏空) - High Watermark Tracking
+        self.high_watermarks = {} # Symbol -> Max Price seen during current position
+        
+        # 初始化 MarketRegimeDetector
+        try:
+            from trader.market_regime_detector import MarketRegimeDetector
+            self.regime_detector = MarketRegimeDetector()
+            self.logger.info("MarketRegimeDetector integrated into PortfolioManager.")
+        except ImportError:
+            self.regime_detector = None
+            self.logger.warning("MarketRegimeDetector NOT found. Anti-Whipsaw logic will be limited.")
 
         # ========== 移植 1.3: 每日盈亏跟踪 ==========
         self.daily_pnl = 0.0
@@ -458,7 +470,24 @@ class PortfolioManager:
             
             # 决定是否交易
             current_price = df['close'].iloc[-1] if not df.empty else 0
-            should_trade = self._should_trade(symbol, final_signal, current_price)
+            
+            # Update High Watermark if we have a position
+            if self.positions.get(symbol, 0) > 0 and current_price > 0:
+                self.high_watermarks[symbol] = max(self.high_watermarks.get(symbol, 0), current_price)
+            
+            # Detect Market Regime for this asset
+            current_regime = None
+            if self.regime_detector and len(df) > 30:
+                try:
+                    regime_info = self.regime_detector.detect_regime(df)
+                    current_regime = regime_info.get('regime')
+                    # Log regime for debug
+                    if cycle_logger and current_regime:
+                        cycle_logger.add_info(f"[{symbol}] Regime: {current_regime} (Vol={regime_info.get('volatility', 0):.2f})")
+                except Exception as e:
+                    self.logger.warning(f"Regime detection failed for {symbol}: {e}")
+
+            should_trade = self._should_trade(symbol, final_signal, current_price, market_regime=current_regime, cycle_logger=cycle_logger)
             
             if should_trade:
                 # 计算订单大小
@@ -486,6 +515,29 @@ class PortfolioManager:
                 if quantity > 0 and estimated_value >= min_trade_value:
                     side = 'buy' if final_signal > 0 else 'sell'
                     
+
+                    # Calculate Stop Loss and Take Profit
+                    # Default: SL = 2% below, TP = 4% above
+                    sl_pct = 0.02
+                    tp_pct = 0.04
+                    
+                    # If we have regime info, adjust dynamically
+                    if current_regime:
+                        vol = regime_info.get('volatility', 0.5) # Annualized
+                        # roughly convert annual vol to daily vol
+                        daily_vol = vol / 19.0 # sqrt(365) ~ 19.1
+                        
+                        # Set SL to 2x Daily Vol, TP to 3-4x Daily Vol
+                        sl_pct = max(0.015, daily_vol * 1.5) 
+                        tp_pct = max(0.025, daily_vol * 3.0)
+                    
+                    stop_loss_price = current_price * (1.0 - sl_pct)
+                    take_profit_price = current_price * (1.0 + tp_pct)
+                    
+                    # Rounding to appropriate precision (e.g. 2 decimals for now, can be improved)
+                    stop_loss_price = round(stop_loss_price, 2)
+                    take_profit_price = round(take_profit_price, 2)
+
                     order = {
                         'symbol': symbol,
                         'side': side,
@@ -494,6 +546,13 @@ class PortfolioManager:
                         'strategy': getattr(selected_strategies[0], 'strategy_name', 'unknown') if selected_strategies else 'unknown',
                         'signal_strength': final_signal
                     }
+                    
+                    # Only attach SL/TP to BUY orders (opening positions)
+                    if side == 'buy':
+                        order['stop_loss_price'] = stop_loss_price
+                        order['take_profit_price'] = take_profit_price
+                        if cycle_logger:
+                            cycle_logger.add_info(f"Generated SL/TP for {symbol}: SL={stop_loss_price} (-{sl_pct:.2%}), TP={take_profit_price} (+{tp_pct:.2%})")
                     
                     # 风险检查
                     if self._check_risk_limits(order):
@@ -550,17 +609,9 @@ class PortfolioManager:
          # Deprecated legacy method
         return sum(signals)
 
-    def _should_trade(self, symbol: str, signal: int, current_price: float = 0.0) -> bool:
+    def _should_trade(self, symbol: str, signal: int, current_price: float = 0.0, market_regime: str = None, cycle_logger=None) -> bool:
         """
-        决定是否对指定资产进行交易
-        
-        Args:
-            symbol: 交易对符号
-            signal: 策略信号
-            current_price: 当前价格 (用于计算持仓价值)
-        
-        Returns:
-            是否应该交易
+        决定是否对指定资产进行交易 (Enhanced with Anti-Whipsaw)
         """
         # 获取当前持仓
         current_qty = self.positions.get(symbol, 0.0)
@@ -572,16 +623,43 @@ class PortfolioManager:
         # Treat as empty if value is less than min_trade_value (Dust)
         is_effectively_empty = position_value < min_trade_val
 
-        # 只有当信号强度绝对值超过阈值(0.5)时才动作
-        # Buy: Signal > 0.5
+        # BUY Logic: Signal > 0.5
         if signal > 0.5 and is_effectively_empty:
+            # New Entry: Initialize High Watermark
+            self.high_watermarks[symbol] = current_price
             return True
-        # Sell: Signal < -0.5
+        
+        # SELL Logic: Signal < -0.5
         elif signal < -0.5 and not is_effectively_empty:
+            # 1. Anti-Whipsaw Logic: Trend Following Protection
+            # If we are in a strong uptrend, DO NOT SELL just because the model gets scared (signal < -0.5).
+            # ONLY Sell if the price also breaks our Trailing Stop.
+            
+            if market_regime == 'uptrend':
+                # Calculate Trailing Stop Threshold (e.g., 5% from High Watermark)
+                # In strong bull markets, give more room (e.g. 5-8%). In weak markets, strict.
+                trailing_pct = 0.05 
+                high_watermark = self.high_watermarks.get(symbol, current_price)
+                if high_watermark <= 0: high_watermark = current_price # Safety fallback
+                
+                stop_price = high_watermark * (1.0 - trailing_pct)
+                
+                if current_price > stop_price:
+                    # Still above strict stop -> IGNORE Sell Signal
+                    msg = f"🛡️ Anti-Whipsaw: Blocked SELL for {symbol} in Uptrend. Price {current_price:.2f} > Stop {stop_price:.2f} (HW: {high_watermark:.2f})"
+                    self.logger.info(msg)
+                    if cycle_logger: cycle_logger.add_info(msg)
+                    return False
+                else:
+                    msg = f"📉 Trailing Stop Triggered for {symbol}. Price {current_price:.2f} < Stop {stop_price:.2f}. Allowing SELL."
+                    self.logger.info(msg)
+                    if cycle_logger: cycle_logger.add_info(msg)
+                    return True
+            
+            # Default: If not in strong uptrend, trust the model's sell signal
             return True
-        # 其他情况(包括区间 -0.5 ~ 0.5 的 HOLD) 不交易
-        else:
-            return False
+            
+        return False
 
 
 
@@ -682,6 +760,15 @@ class PortfolioManager:
         self.asset_data[symbol]['position'] = quantity
         self.asset_data[symbol]['value'] = quantity * price if price > 0 else 0.0
         self.positions[symbol] = quantity  # 同步更新positions
+        
+        # Reset High Watermark if position is closed or near zero
+        if quantity * price < 5.0: # Close enough to zero
+            self.high_watermarks[symbol] = 0.0
+        else:
+            # If buying logic doesn't set it (e.g. initial sync), ensure it's set
+            if symbol not in self.high_watermarks or self.high_watermarks[symbol] == 0:
+                self.high_watermarks[symbol] = price
+        
         self.logger.info(f"Updated position for {symbol}: {quantity} units at {price}, value: {self.asset_data[symbol]['value']:.2f}")
 
     def get_optimal_symbols_to_trade(self, signals: Dict[str, int], 
