@@ -1,14 +1,19 @@
-
+print("DEBUG: Starting Imports...", flush=True)
 import unittest
 import logging
 import pandas as pd
 import asyncio
 from unittest.mock import MagicMock, AsyncMock
+
+print("DEBUG: Importing PortfolioManager...", flush=True)
 from trader.portfolio_manager import PortfolioManager
+print("DEBUG: Importing ExecutionHandler...", flush=True)
 from trader.execution_handler import ExecutionHandler
+print("DEBUG: Imports Done.", flush=True)
 
 class TestOCOExecution(unittest.TestCase):
     def setUp(self):
+        print("DEBUG: Setting up Test...", flush=True)
         logging.basicConfig(level=logging.INFO)
         self.logger = logging.getLogger("TestOCO")
         
@@ -31,6 +36,7 @@ class TestOCOExecution(unittest.TestCase):
         
         # 4. Setup ExecutionHandler
         self.eh = ExecutionHandler(exchange_client=self.mock_client)
+        print("DEBUG: Setup Complete.", flush=True)
 
     def test_oco_order_generation_and_execution(self):
         symbol = "BTC/USDT"
