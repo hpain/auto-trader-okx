@@ -57,8 +57,9 @@ class SimpleBot:
     async def initialize(self):
         """Async initialization"""
         self.exchange = await ExchangeFactory.create_exchange(
-            'okx', # Use direct OKX for simplicity? Or aggregated. Let's stick to factory default.
-            mock=self.mock
+            'okx', 
+            mock=self.mock,
+            market_type='swap' # Funding Rate Arb requires Perp/Swap market access
         )
         self.execution = ExecutionHandler(self.exchange)
         self.logger.info("Bot Initialized. Starting Loop.")
