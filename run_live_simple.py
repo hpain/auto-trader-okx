@@ -25,7 +25,8 @@ class SimpleBot:
         self.mock = mock
         
         # 1. Setup Logger (Distinct from main bot)
-        self.logger = setup_logger(f"SimpleBot_{strategy_name}", f"logs/simple_{strategy_name}.log")
+        # Fix: correctly pass dir and filename separately
+        self.logger = setup_logger("logs", f"simple_{strategy_name}.log")
         self.logger.info(f"Initializing SimpleBot for {strategy_name} on {symbol} (Mock={mock})")
 
         # 2. Config & Exchange
