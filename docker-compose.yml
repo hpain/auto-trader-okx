@@ -41,7 +41,8 @@ services:
       - ./config/settings.yaml:/app/config/settings.yaml
       - ./logs:/app/logs
     # Explicitly run the simple arb script
-    command: python run_live_simple.py --strategy funding_arb --symbol BTC/USDT
+    # Use ETH/USDT to avoid conflict with ML bot (which trades BTC/USDT)
+    command: python run_live_simple.py --strategy funding_arb --symbol ETH/USDT
     deploy:
       resources:
         limits:
