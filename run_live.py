@@ -307,22 +307,33 @@ async def main_loop(args):
                 trader_logger.info("No new trade orders to execute.")
                 cycle_logger.set_status("NO_ACTION")
 
-            # --- Log Current Positions (User Request) ---
+            # --- Log Current Positions (User Request: Colored & Visible) ---
             summary = portfolio_manager.get_portfolio_summary()
-            trader_logger.info("\n" + "-"*30)
-            trader_logger.info(f"📊 PORTFOLIO STATUS (Cycle {cycle_count+1})")
-            trader_logger.info(f"Total Equity: ${summary['total_value'] + portfolio_manager.capital:.2f} (Cash: ${portfolio_manager.capital:.2f})")
+            
+            # ANSI Color Codes
+            C_HEADER = "\033[1;36m" # Bold Cyan
+            C_GREEN = "\033[1;32m"  # Bold Green
+            C_YELLOW = "\033[1;33m" # Bold Yellow
+            C_RESET = "\033[0m"
+            
+            trader_logger.info("\n" + C_HEADER + "="*40 + C_RESET)
+            trader_logger.info(f"{C_HEADER}📊 PORTFOLIO STATUS (Cycle {cycle_count+1}){C_RESET}")
+            
+            total_val = summary['total_value'] + portfolio_manager.capital
+            trader_logger.info(f"💰 Total Equity: {C_GREEN}${total_val:.2f}{C_RESET} (Cash: ${portfolio_manager.capital:.2f})")
             
             has_pos = False
             for sym, data in summary['assets'].items():
                 if data['position'] > 0:
                     val = data['value']
-                    trader_logger.info(f"  • {sym}: {data['position']:.6f} units (~${val:.2f})")
+                    # Highlight Symbol in Yellow, Value in standard or Green
+                    trader_logger.info(f"  • {C_YELLOW}{sym}{C_RESET}: {data['position']:.6f} units (~${val:.2f})")
                     has_pos = True
             
             if not has_pos:
-                trader_logger.info("  • [Empty Portfolio]")
-            trader_logger.info("-" * 30 + "\n")
+                trader_logger.info("  • [Empty Portfolio - Waiting for Alpha]")
+            
+            trader_logger.info(C_HEADER + "="*40 + C_RESET + "\n")
             # --------------------------------------------
 
             total_position_value = 0.0
