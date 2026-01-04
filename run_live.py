@@ -316,7 +316,8 @@ async def main_loop(args):
             C_YELLOW = "\033[1;33m" # Bold Yellow
             C_RESET = "\033[0m"
             
-            trader_logger.info("\n" + C_HEADER + "="*40 + C_RESET)
+            # Use separate separators without leading \n to avoid empty log prefixes
+            trader_logger.info(C_HEADER + "="*40 + C_RESET)
             trader_logger.info(f"{C_HEADER}📊 PORTFOLIO STATUS (Cycle {cycle_count+1}){C_RESET}")
             
             total_val = summary['total_value'] + portfolio_manager.capital
@@ -324,16 +325,16 @@ async def main_loop(args):
             
             has_pos = False
             for sym, data in summary['assets'].items():
-                if data['position'] > 0:
+                # Filter dust: only show if value > $1 or pos > 0.0001
+                if data['position'] > 0.0001 or data['value'] > 1.0:
                     val = data['value']
-                    # Highlight Symbol in Yellow, Value in standard or Green
                     trader_logger.info(f"  • {C_YELLOW}{sym}{C_RESET}: {data['position']:.6f} units (~${val:.2f})")
                     has_pos = True
             
             if not has_pos:
                 trader_logger.info("  • [Empty Portfolio - Waiting for Alpha]")
             
-            trader_logger.info(C_HEADER + "="*40 + C_RESET + "\n")
+            trader_logger.info(C_HEADER + "="*40 + C_RESET)
             # --------------------------------------------
 
             total_position_value = 0.0
