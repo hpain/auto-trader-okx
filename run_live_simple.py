@@ -12,7 +12,7 @@ sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 from exchange.factory import ExchangeFactory
 from strategies.funding_arb import FundingRateArbitrageStrategy
 from trader.execution_handler import ExecutionHandler
-from utils.logger import setup_logger
+from utils.logger import setup_script_logger as setup_logger
 
 class SimpleBot:
     """
