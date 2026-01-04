@@ -74,11 +74,14 @@ class SimpleBot:
                 
                 # 1. Fetch Data
                 # Funding Arb only needs Funding Rate & Price
-                funding_info = await self.exchange.client.fetch_funding_rate(self.symbol)
-                ticker = await self.exchange.client.fetch_ticker(self.symbol)
+                # Fix: Use CcxtExchange wrapper methods instead of .client
+                # Note: fetch_funding_rates returns a DataFrame indexed by timestamp
+                funding_df = await self.exchange.fetch_funding_rates(self.symbol, limit=1, timeframe="")
+                current_price = await self.exchange.get_current_price(self.symbol)
                 
-                current_rate = funding_info.get('fundingRate', 0.0)
-                current_price = ticker.get('last', 0.0)
+                current_rate = 0.0
+                if not funding_df.empty:
+                    current_rate = float(funding_df.iloc[-1]['funding_rate'])
                 
                 self.logger.info(f"[{self.symbol}] Price: {current_price:.2f}, Funding: {current_rate:.6f}")
 
