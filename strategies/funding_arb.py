@@ -1,6 +1,6 @@
 import logging
 import pandas as pd
-from typing import Dict, Optional
+from typing import Dict, Optional, Any
 from .base_strategy import BaseStrategy
 
 class FundingRateArbitrageStrategy(BaseStrategy):
