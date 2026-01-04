@@ -307,6 +307,24 @@ async def main_loop(args):
                 trader_logger.info("No new trade orders to execute.")
                 cycle_logger.set_status("NO_ACTION")
 
+            # --- Log Current Positions (User Request) ---
+            summary = portfolio_manager.get_portfolio_summary()
+            trader_logger.info("\n" + "-"*30)
+            trader_logger.info(f"📊 PORTFOLIO STATUS (Cycle {cycle_count+1})")
+            trader_logger.info(f"Total Equity: ${summary['total_value'] + portfolio_manager.capital:.2f} (Cash: ${portfolio_manager.capital:.2f})")
+            
+            has_pos = False
+            for sym, data in summary['assets'].items():
+                if data['position'] > 0:
+                    val = data['value']
+                    trader_logger.info(f"  • {sym}: {data['position']:.6f} units (~${val:.2f})")
+                    has_pos = True
+            
+            if not has_pos:
+                trader_logger.info("  • [Empty Portfolio]")
+            trader_logger.info("-" * 30 + "\n")
+            # --------------------------------------------
+
             total_position_value = 0.0
             for symbol, qty in portfolio_manager.positions.items():
                 if symbol in data_for_pm and not data_for_pm[symbol].empty:
