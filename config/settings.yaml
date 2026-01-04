@@ -113,10 +113,12 @@ risk_monitoring:
     - admin@yourcompany.com
 strategy_management:
   enabled_strategies:
+  - funding_arb
   - transformer
   - lgb
-  - ma_fast
-  - ma_slow
+  funding_arb_strategy:
+    positive_threshold: 0.0001
+    negative_threshold: -0.0001
   lgb_strategy:
     model_dir: models
     model_name: improved_best_model_1H_0.5y.pkl

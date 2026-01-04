@@ -11,6 +11,7 @@ from strategies.lgb_strategy import LGBStrategy
 from strategies.moving_average import MovingAverageStrategy
 from strategies.mean_reversion_strategy import MeanReversionStrategy
 from strategies.arbitrage_strategy import ArbitrageStrategy
+from strategies.funding_arb import FundingRateArbitrageStrategy
 from trader.market_regime_detector import MarketRegimeDetector
 
 
@@ -110,6 +111,16 @@ class StrategyManager:
                     self.strategies['arbitrage'] = ArbitrageStrategy(
                         strategy_name="Arbitrage", 
                         config=strategy_config
+                    )
+
+                elif strategy_name == 'funding_arb':
+                    strategy_config = self.config.get('funding_arb_strategy', {
+                        'positive_threshold': 0.0001,
+                        'negative_threshold': -0.0001
+                    })
+                    self.strategies['funding_arb'] = FundingRateArbitrageStrategy(
+                        strategy_name="FundingArb", 
+                        **strategy_config
                     )
                     
                 else:
