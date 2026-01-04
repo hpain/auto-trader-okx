@@ -153,12 +153,20 @@ async def main_loop(args):
     }
 
     # ========== Determine Symbols FIRST ==========
-    symbols = config.get('trading', {}).get('symbols')
-    if not symbols:
+    # PRIORITY 1: Environment Variable (Safe Separation)
+    env_symbols = os.environ.get('TRADE_SYMBOL')
+    if env_symbols:
+        symbols = [s.strip() for s in env_symbols.split(',')]
+        print(f"Loaded symbols from ENV: {symbols}")
+    else:
+        # PRIORITY 2: Config File
+        symbols = config.get('trading', {}).get('symbols')
+        if not symbols:
             symbols = config.get('backtest', {}).get('symbols_to_test')
-    if not symbols:
-        symbols = ["BTC/USDT", "ETH/USDT"]
-        print("Warning: No symbols found in config, using default: BTC/USDT, ETH/USDT")
+        if not symbols:
+            symbols = ["BTC/USDT", "ETH/USDT"]
+            print("Warning: No symbols found in config, using default: BTC/USDT, ETH/USDT")
+    
     # Standardize symbols
     symbols = [s.replace('-', '/') for s in symbols]
     print(f"Trading Symbols: {symbols}")
