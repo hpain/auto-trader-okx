@@ -39,6 +39,44 @@ class FundingRateArbitrageStrategy(BaseStrategy):
         # State tracking
         self.current_state = "NEUTRAL" # NEUTRAL, POSITIVE_ARB, NEGATIVE_ARB
 
+    def generate_signals(self, data: pd.DataFrame) -> pd.DataFrame:
+        """
+        Implementation of abstract method.
+        Wraps generate_signal to return a DataFrame of signals.
+        """
+        signals = pd.DataFrame(index=data.index)
+        signals['signal'] = 0.0
+        
+        # Funding rate might be in data or fetched separately
+        # For bulk processing, we iterate or use vector ops if column exists
+        if 'fundingRate' in data.columns:
+             # Vectorized logic for backtesting efficiently
+            signals['signal'] = 0.0
+            # Short Perp (Signal -1) if Rate > Positive Threshold
+            signals.loc[data['fundingRate'] > self.positive_threshold, 'signal'] = -1.0
+            # Long Perp (Signal 1) if Rate < Negative Threshold
+            signals.loc[data['fundingRate'] < self.negative_threshold, 'signal'] = 1.0
+        else:
+            # Fallback for single row/live loop if needed, though this method is mostly for backtest
+            pass
+            
+        return signals
+
+    def get_strategy_info(self) -> Dict[str, Any]:
+        """
+        Implementation of abstract method.
+        """
+        return {
+            "name": self.strategy_name,
+            "type": "Arbitrage",
+            "thresholds": {
+                "positive": self.positive_threshold,
+                "negative": self.negative_threshold,
+                "neutral": self.neutral_threshold
+            },
+            "current_state": self.current_state
+        }
+
     def generate_signal(self, df: pd.DataFrame, symbol: str = "", funding_rate: Optional[float] = None) -> float:
         """
         Generate signal based on funding rate.
@@ -57,7 +95,7 @@ class FundingRateArbitrageStrategy(BaseStrategy):
         """
         if funding_rate is None:
             # Try to get from last row if available as column
-            if 'fundingRate' in df.columns:
+            if df is not None and 'fundingRate' in df.columns:
                 funding_rate = float(df['fundingRate'].iloc[-1])
             else:
                 self.logger.warning(f"[{symbol}] No funding rate data available for Arb.")
