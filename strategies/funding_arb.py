@@ -29,7 +29,7 @@ class FundingRateArbitrageStrategy(BaseStrategy):
                  negative_threshold=-0.0001, 
                  neutral_threshold=0.00005,
                  leverage=1.0):
-        super().__init__(strategy_name)
+        super().__init__(strategy_name, {}) # Pass empty config to satisfy BaseStrategy signature
         self.logger = logging.getLogger(__name__)
         self.positive_threshold = positive_threshold
         self.negative_threshold = negative_threshold
