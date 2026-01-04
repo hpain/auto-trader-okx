@@ -1,23 +1,18 @@
 version: '3.8'
 
 services:
-  auto-trader:
+  # Service A: The original ML-driven bot (Price Prediction)
+  auto-trader-ml:
     build: .
-    container_name: auto-trader-okx
+    container_name: auto-trader-ml
     restart: unless-stopped
     env_file:
       - .env
     environment:
-      # These will be overridden by values in .env if present
-      # We map them here explicitly to ensure they are passed to the container
-      # if the user sets them in the shell or .env
       - OKX_API_KEY=${OKX_API_KEY}
       - OKX_SECRET_KEY=${OKX_SECRET_KEY}
       - OKX_PASSPHRASE=${OKX_PASSPHRASE}
       - OKX_FLAG=${OKX_FLAG:-0}
-      - TRADE_SYMBOL=${TRADE_SYMBOL:-BTC-USDT}
-      - TRADE_INTERVAL=${TRADE_INTERVAL:-1H}
-
     volumes:
       - .:/app
       - ./config/settings.yaml:/app/config/settings.yaml
@@ -27,7 +22,27 @@ services:
       - ./data/cache:/app/data/cache
       - ./charts:/app/charts
       - ./status.json:/app/status.json
-    # If you are on Linux, you might want to add user mapping
-    # to avoid permission issues with the created files.
-    # user: "${UID}:${GID}"
+    command: python run_live.py
 
+  # Service B: The new Funding Arb bot (Structural Alpha)
+  auto-trader-arb:
+    build: .
+    container_name: auto-trader-arb
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      - OKX_API_KEY=${OKX_API_KEY}
+      - OKX_SECRET_KEY=${OKX_SECRET_KEY}
+      - OKX_PASSPHRASE=${OKX_PASSPHRASE}
+      - OKX_FLAG=${OKX_FLAG:-0}
+    volumes:
+      - .:/app
+      - ./config/settings.yaml:/app/config/settings.yaml
+      - ./logs:/app/logs
+    # Explicitly run the simple arb script
+    command: python run_live_simple.py --strategy funding_arb --symbol BTC/USDT
+    deploy:
+      resources:
+        limits:
+          memory: 512M
