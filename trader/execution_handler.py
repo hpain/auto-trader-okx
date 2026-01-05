@@ -18,6 +18,31 @@ class ExecutionHandler:
         self.logger = logging.getLogger(__name__)
         self.client = exchange_client
 
+    async def execute_order(self, symbol: str, side: str, amount: float, type: str = 'limit', price: float = None) -> dict:
+        """
+        Simplified wrapper for single order execution.
+        Used by run_live_simple.py.
+        """
+        order_dict = {
+            'symbol': symbol,
+            'side': side,
+            'quantity': amount,
+            'price': price
+        }
+        
+        # Create a dummy or minimal cycle logger if needed, or modify execute_trades to handle None
+        # Actually execute_trades requires cycle_logger. Let's create a dummy.
+        class DummyLogger:
+            def add_execution_info(self, reports): pass
+        
+        results = await self.execute_trades([order_dict], DummyLogger())
+        
+        if results and results[0]['status'] == 'SUCCESS':
+             return results[0]
+        else:
+             self.logger.error(f"Execution failed: {results}")
+             return None
+
     async def execute_trades(self, trade_orders: list, cycle_logger) -> list:
         """
         异步执行一个交易指令列表，并返回详细的执行报告。
