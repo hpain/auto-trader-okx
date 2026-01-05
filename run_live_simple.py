@@ -74,11 +74,68 @@ class SimpleBot:
 
         self.logger.info("Bot Initialized (Dual-Leg Mode). Starting Loop.")
 
+    async def reconcile_state(self):
+        """
+        Safety Check: Query exchange to see if we ALREADY have a position.
+        This handles crash recovery (Zombie State).
+        """
+        self.logger.info("♻️ RECONCILING STATE with Exchange...")
+        try:
+            # 1. Check Spot Holdings (Leg 1)
+            # Assumes ETH/USDT -> base currency is ETH
+            base_ccy = self.symbol.split('/')[0] 
+            spot_bal = await self.spot_exchange.get_balance(base_ccy)
+            
+            # 2. Check Perp Position (Leg 2)
+            # Use raw CCXT method as wrapper might not have specific fetch_position
+            # OKX usually returns a list
+            positions = await self.exchange.exchange.fetch_positions([self.symbol])
+            perp_sz = 0.0
+            if positions:
+                # OKX returns 'contracts' or 'size' depending on mode, but 'contracts' is usually safe for swap
+                # We care about direction. Short is negative? 
+                # CCXT standard: 'side': 'short', 'contracts': 10
+                pos = positions[0]
+                if pos['side'] == 'short':
+                    perp_sz = float(pos['contracts']) * float(pos['contractSize']) # Approximate logic, verify for OKX
+                    # Simpler: 'info'['pos'] usually contains signed size strings on OKX
+                    # Or verify 'side'
+                    perp_sz = -abs(float(pos['contracts'])) # Treat short as negative
+                elif pos['side'] == 'long':
+                     perp_sz = abs(float(pos['contracts']))
+            
+            self.logger.info(f"🧐 State Check: Spot {base_ccy}={spot_bal:.4f}, Perp Pos={perp_sz:.4f}")
+
+            # 3. Determine Logic
+            # Threshold: e.g. 0.005 ETH to account for dust
+            threshold = 0.005 
+            
+            # If we hold Spot AND Short Perp => We are likely in an Arb
+            if spot_bal > threshold and perp_sz < -threshold:
+                self.logger.warning(f"⚠️ FOUND EXISTING ARB POSITION! Restoring state to OPEN.")
+                return True
+            
+            # Partial states risks
+            if spot_bal > threshold and perp_sz == 0:
+                self.logger.critical(f"🚨 DANGER: Unhedged Spot Position detected! ({spot_bal} {base_ccy}). Please check manually.")
+                # Optional: self.spot_execution.execute_order(..., 'sell', ...) ? Too risky to auto-close.
+            
+            if spot_bal < threshold and perp_sz < -threshold:
+                 self.logger.critical(f"🚨 DANGER: Naked Short detected! ({perp_sz} contracts). Please check manually.")
+
+            return False
+
+        except Exception as e:
+            self.logger.error(f"State Reconciliation Failed: {e}")
+            return False
+
     async def run(self):
         await self.initialize()
         
+        # Recover state from actual exchange data
+        has_position = await self.reconcile_state() 
+        
         cycle_count = 0
-        has_position = False # Simple state tracking for simple runner
         trade_qty = 0.01     # Safe test amount (ETH)
 
         while True:
