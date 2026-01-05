@@ -16,26 +16,27 @@ from sklearn.preprocessing import StandardScaler
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger("Trainer")
 
-def train_main():
+import argparse
+
+def train_main(args):
     # 1. Load Data
-    # Priority list based on user environment (GPU machine vs VPS)
-    potential_files = [
-        'data/history/BTCUSDT_FULL_2020_2025.csv',       # User's GPU Machine (Priority)
-        'data/history/binance_BTCUSDT_1h_4y.csv',         # VPS Fallback
-        'data/history/BTCUSDT_FULL_2024_2025.csv',        # Short VPS Fallback
-    ]
+    data_path = args.data
     
-    data_path = None
-    for p in potential_files:
-        if os.path.exists(p):
-            data_path = p
-            break
-            
+    # Priority check if no path provided
     if not data_path:
-        logger.error(f"No suitable data file found. Checked: {potential_files}")
-        # Default string for error message clarity
-        data_path = potential_files[0] 
-        # Don't return yet, let read_csv fail or handle it
+        potential_files = [
+            'data/history/BTCUSDT_FULL_2020_2025.csv',       # Default GPU
+            'data/history/binance_BTCUSDT_1h_4y.csv',         # VPS Fallback
+            'data/history/BTCUSDT_FULL_2024_2025.csv',        # Short VPS Fallback
+        ]
+        for p in potential_files:
+            if os.path.exists(p):
+                data_path = p
+                break
+    
+    if not data_path:
+        logger.error("No data file found. Please provide --data argument.")
+        return
     else:
         logger.info(f"Loading data from {data_path}...")
 
@@ -56,12 +57,10 @@ def train_main():
     df.rename(columns=rename_map, inplace=True)
 
     if 'timestamp' in df.columns:
-        # Check if timestamp is string (already parsed) or int (unix ms)
         if df['timestamp'].dtype == object: 
              df['datetime'] = pd.to_datetime(df['timestamp'])
         else:
              df['datetime'] = pd.to_datetime(df['timestamp'], unit='ms')
-             
         df.set_index('datetime', inplace=True)
     elif 'date' in df.columns:
         df.index = pd.to_datetime(df['date'])
@@ -70,15 +69,11 @@ def train_main():
 
     # 2. Generate Features (P2-1 Logic)
     logger.info("Generating features (including logical derivatives)...")
-    # For training, we assume simulated derivatives if columns missing
-    # But generate_features handles missing columns gracefully by imputing
     df_features = generate_features(df)
     
     # 3. Labeling (Target)
-    # Target: 1 if return in next 24h > 1% (Volatile Up), 0 otherwise
-    # Or simplified: Next candle return > 0.05%
     horizon = 1
-    threshold = 0.002 # 0.2% per hour target
+    threshold = 0.002 
     
     df_labeled = make_supervised(df_features, horizon=horizon, threshold=threshold)
     target_col = 'y'
@@ -90,11 +85,9 @@ def train_main():
     # 4. Splitting & Scaling
     split_idx = int(len(df_labeled) * 0.8)
     train_df = df_labeled.iloc[:split_idx]
-    val_df = df_labeled.iloc[split_idx:]
     
-    # Select feature columns (All except target and future_)
+    # Select feature columns
     exclude = ['y'] + [c for c in df_labeled.columns if 'future' in c]
-    # Also exclude non-numeric
     feature_cols = [c for c in df_labeled.columns if c not in exclude and np.issubdtype(df_labeled[c].dtype, np.number)]
     
     logger.info(f"Training with {len(feature_cols)} features.")
@@ -112,38 +105,38 @@ def train_main():
     # 5. Initialize Strategy & Model
     strategy = TransformerStrategy(
         strategy_name="Transformer_P2",
-        window_size=60,
+        window_size=args.window,
         features=feature_cols,
         buy_threshold=0.6,
         sell_threshold=0.4
     )
     
     strategy.build_model(input_dim=len(feature_cols))
-    
-    # Assign scaler to strategy for internal use
     strategy.scaler = scaler
     
     # 6. Train
-    logger.info("Starting Training...")
-    # Passing the FULL train_df because strategy handles scaling internally via self.scaler if logic matches,
-    # BUT wait, train_model in strategy expects raw DF and doing lazy loading.
-    # The current Strategy.train_model implementation DOES NOT scale automatically inside the loop! 
-    # It assumes data passed is ready or simple.
-    # HACK: We need to scale the data BEFORE passing to train_model, or update train_model to use scaler.
-    # Let's scale the data here for training safety.
+    logger.info(f"Starting Training for {args.epochs} epochs...")
     
     train_df_scaled = train_df.copy()
     train_df_scaled[feature_cols] = scaler.transform(train_df[feature_cols])
     
-    strategy.train_model(train_df_scaled, target_col=target_col, epochs=30, batch_size=64)
+    strategy.train_model(train_df_scaled, target_col=target_col, epochs=args.epochs, batch_size=args.batch_size)
     
     # 7. Save Model
     strategy.save_model('models/transformer_v2.pth')
     logger.info("Model saved to models/transformer_v2.pth")
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description='Train Transformer Model')
+    parser.add_argument('--epochs', type=int, default=30, help='Number of training epochs')
+    parser.add_argument('--batch_size', type=int, default=64, help='Batch size')
+    parser.add_argument('--window', type=int, default=60, help='Lookback window size')
+    parser.add_argument('--data', type=str, help='Path to CSV data file')
+    
+    args = parser.parse_args()
+    
     try:
-        train_main()
+        train_main(args)
     except KeyboardInterrupt:
         pass
     except Exception as e:
