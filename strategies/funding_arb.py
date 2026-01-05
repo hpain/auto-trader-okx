@@ -25,9 +25,9 @@ class FundingRateArbitrageStrategy(BaseStrategy):
     
     def __init__(self, 
                  strategy_name="FundingArb_v1", 
-                 positive_threshold=0.0001,  # 0.01% per 8h (approx 11% APY)
-                 negative_threshold=-0.0001, 
-                 neutral_threshold=0.00005,
+                 positive_threshold=0.0015,  # ENTRY: 0.15% (Ensures breakeven within ~24h of fees)
+                 negative_threshold=-0.0015, 
+                 neutral_threshold=0.0005,   # EXIT: 0.05% (Close when APY drops below ~50%)
                  leverage=1.0):
         super().__init__(strategy_name, {}) # Pass empty config to satisfy BaseStrategy signature
         self.logger = logging.getLogger(__name__)

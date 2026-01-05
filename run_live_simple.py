@@ -44,10 +44,8 @@ class SimpleBot:
 
         # 3. Strategy
         if strategy_name == 'funding_arb':
-            self.strategy = FundingRateArbitrageStrategy(
-                positive_threshold=0.0001, # 0.01%
-                negative_threshold=-0.0001
-            )
+            # Use defaults from class (Entry=0.15%, Exit=0.05%)
+            self.strategy = FundingRateArbitrageStrategy()
         else:
             self.logger.error(f"Unknown strategy: {strategy_name}")
             sys.exit(1)
