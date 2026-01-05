@@ -136,7 +136,7 @@ class SimpleBot:
         has_position = await self.reconcile_state() 
         
         cycle_count = 0
-        trade_qty = 0.01     # Safe test amount (ETH)
+        trade_qty = 0.02     # Updated for $139 capital (approx $62 Spot + $62 Perp)
 
         while True:
             try:
