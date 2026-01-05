@@ -135,7 +135,7 @@ def train_main():
     train_df_scaled = train_df.copy()
     train_df_scaled[feature_cols] = scaler.transform(train_df[feature_cols])
     
-    strategy.train_model(train_df_scaled, target_col=target_col, epochs=5, batch_size=64)
+    strategy.train_model(train_df_scaled, target_col=target_col, epochs=30, batch_size=64)
     
     # 7. Save Model
     strategy.save_model('models/transformer_v2.pth')
