@@ -23,6 +23,10 @@ services:
       - ./charts:/app/charts
       - ./status.json:/app/status.json
     command: python run_live.py
+    deploy:
+      resources:
+        limits:
+          memory: 2G
 
   # Service B: The new Funding Arb bot (Structural Alpha)
   auto-trader-arb:
