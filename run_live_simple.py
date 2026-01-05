@@ -156,11 +156,15 @@ class SimpleBot:
                 funding_df = await self.exchange.fetch_funding_rates(self.symbol, limit=1, timeframe="")
                 current_price = await self.exchange.get_current_price(self.symbol)
                 
+                # Fetch Balance (Quote Currency for Funding Arb)
+                quote_ccy = self.symbol.split('/')[1]
+                balance = await self.spot_exchange.get_balance(quote_ccy)
+
                 current_rate = 0.0
                 if not funding_df.empty:
                     current_rate = float(funding_df.iloc[-1]['funding_rate'])
                 
-                self.logger.info(f"[{self.symbol}] Price: {current_price:.2f}, Funding: {current_rate:.6f}")
+                self.logger.info(f"[{self.symbol}] Price: {current_price:.2f}, Funding: {current_rate:.6f}, Balance: {balance:.2f} {quote_ccy}")
 
                 # 2. Generate Signal
                 # Strategy tracks its own state, but returns code:
