@@ -56,27 +56,37 @@ class SimpleBot:
 
     async def initialize(self):
         """Async initialization"""
+        # 1. Swap Exchange (Primary - for Funding Rates & Perp Orders)
         self.exchange = await ExchangeFactory.create_exchange(
             'okx', 
             mock=self.mock,
-            market_type='swap' # Funding Rate Arb requires Perp/Swap market access
+            market_type='swap'
         )
         self.execution = ExecutionHandler(self.exchange)
-        self.logger.info("Bot Initialized. Starting Loop.")
+
+        # 2. Spot Exchange (Secondary - for Hedging)
+        self.spot_exchange = await ExchangeFactory.create_exchange(
+            'okx',
+            mock=self.mock,
+            market_type='spot'
+        )
+        self.spot_execution = ExecutionHandler(self.spot_exchange)
+
+        self.logger.info("Bot Initialized (Dual-Leg Mode). Starting Loop.")
 
     async def run(self):
         await self.initialize()
         
         cycle_count = 0
+        has_position = False # Simple state tracking for simple runner
+        trade_qty = 0.01     # Safe test amount (ETH)
+
         while True:
             try:
                 cycle_count += 1
                 self.logger.info(f"--- Cycle {cycle_count} ---")
                 
                 # 1. Fetch Data
-                # Funding Arb only needs Funding Rate & Price
-                # Fix: Use CcxtExchange wrapper methods instead of .client
-                # Note: fetch_funding_rates returns a DataFrame indexed by timestamp
                 funding_df = await self.exchange.fetch_funding_rates(self.symbol, limit=1, timeframe="")
                 current_price = await self.exchange.get_current_price(self.symbol)
                 
@@ -87,32 +97,55 @@ class SimpleBot:
                 self.logger.info(f"[{self.symbol}] Price: {current_price:.2f}, Funding: {current_rate:.6f}")
 
                 # 2. Generate Signal
+                # Strategy tracks its own state, but returns code:
+                # -1.0: Rate is High (Enter Short Arb)
+                # 0.0: Rate is Normal (Exit/Neutral)
+                # 1.0: Rate is Low (Enter Long Arb - Rare)
                 signal = self.strategy.generate_signal(None, self.symbol, funding_rate=current_rate)
                 
-                self.logger.info(f"Signal: {signal} (State: {self.strategy.current_state})")
+                self.logger.info(f"Signal: {signal} (StratState: {self.strategy.current_state} | BotPos: {has_position})")
 
-                # 3. Execute
-                if signal != 0:
-                    if self.mock:
-                        self.logger.info(f"[MOCK] Would execute signal {signal} on {self.symbol}")
-                    else:
-                        # Real Execution Logic
-                        # Warning: This is "Naked" signal execution. 
-                        # Ideally we check current position first to avoid double entries.
-                        # For Funding Arb, generate_signal manages state transitions (Neutral -> Arb -> Neutral)
-                        # So we trust the state change.
+                # 3. Execute (Dual-Leg Hedging)
+                if self.mock:
+                     if signal != 0:
+                        self.logger.info(f"[MOCK] Signal {signal}. Position: {has_position}")
+                else:
+                    # ENTRY Logic (Positive Arb: Short Perp + Buy Spot)
+                    if signal == -1.0 and not has_position:
+                        self.logger.info(f"⚡ OPPORTUNITY! Opening Delta-Neutral Arb (Size: {trade_qty} ETH)...")
                         
-                        # Generate Order Dict
-                        side = 'sell' if signal < 0 else 'buy'
-                        # Size? We need a fixed size or config size. For now hardcode or use small amount.
-                        # P1-1 Goal: Prove it works.
-                         
-                        self.logger.info(f"Executing {side.upper()} order for Arb...")
-                        # await self.execution.execute_order(...) 
-                        # Placeholder: We need to implement dual-leg execution for Arb here.
-                        # But standard ExecutionHandler is single-leg.
-                        # For P1-1 MVP, we might just log "ACTION REQUIRED" or execute simple Perp leg.
-                        pass
+                        # Leg 1: Buy Spot (Hedge)
+                        spot_res = await self.spot_execution.execute_order(self.symbol, 'buy', trade_qty, type='market')
+                        if spot_res:
+                            self.logger.info(f"✅ Leg 1: Spot BUY Executed.")
+                            
+                            # Leg 2: Sell Perp (Income)
+                            perp_res = await self.execution.execute_order(self.symbol, 'sell', trade_qty, type='market')
+                            if perp_res:
+                                self.logger.info(f"✅ Leg 2: Perp SELL Executed.")
+                                has_position = True
+                                self.logger.info(f"🚀 ARBITRAGE POSITION OPENED SUCCESSFULLY.")
+                            else:
+                                self.logger.critical(f"❌ CRITICAL: Perp LEG FAILED. You have unhedged Spot position!")
+                                # TODO: Emergency Close Spot?
+                        else:
+                            self.logger.error("❌ Spot Leg Failed. Aborting Arb entry.")
+
+                    # EXIT Logic (Neutral: Close Both)
+                    elif signal == 0.0 and has_position:
+                        self.logger.info(f"📉 NORMALIZATION. Closing Arb Position...")
+                        
+                        # Close Leg 1: Sell Spot
+                        spot_res = await self.spot_execution.execute_order(self.symbol, 'sell', trade_qty, type='market')
+                        
+                        # Close Leg 2: Buy Perp
+                        perp_res = await self.execution.execute_order(self.symbol, 'buy', trade_qty, type='market')
+                        
+                        if spot_res and perp_res:
+                            self.logger.info(f"✅ Position Closed Successfully.")
+                            has_position = False
+                        else:
+                             self.logger.error(f"⚠️ Close Error. Spot: {bool(spot_res)}, Perp: {bool(perp_res)}")
 
                 # 4. Sleep
                 # Check every 5 minutes
