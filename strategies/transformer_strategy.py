@@ -4,6 +4,7 @@ import pandas as pd
 import json
 import os
 import pickle
+import math
 from typing import Dict, List, Optional, Tuple
 
 # Try importing torch, handle if not installed yet (for dry-run)
@@ -18,55 +19,89 @@ except ImportError:
     
 from features.tensor_loader import create_lazy_loader
 
+class PositionalEncoding(nn.Module if HAS_TORCH else object):
+    """
+    Injects some information about the relative or absolute position of the tokens in the sequence.
+    The positional encodings have the same dimension as the embeddings, so that the two can be summed.
+    """
+    def __init__(self, d_model, dropout=0.1, max_len=5000):
+        super(PositionalEncoding, self).__init__()
+        self.dropout = nn.Dropout(p=dropout)
+
+        pe = torch.zeros(max_len, d_model)
+        position = torch.arange(0, max_len, dtype=torch.float).unsqueeze(1)
+        div_term = torch.exp(torch.arange(0, d_model, 2).float() * (-math.log(10000.0) / d_model))
+        
+        pe[:, 0::2] = torch.sin(position * div_term)
+        pe[:, 1::2] = torch.cos(position * div_term)
+        
+        pe = pe.unsqueeze(0) # [1, max_len, d_model]
+        self.register_buffer('pe', pe)
+
+    def forward(self, x):
+        # x: [Batch, Seq_Len, d_model]
+        x = x + self.pe[:, :x.size(1), :]
+        return self.dropout(x)
+
 class TimeSeriesTransformer(nn.Module if HAS_TORCH else object):
     """
-    Simple Transformer for Time Series Forecasting.
+    Advanced Transformer for Time Series Forecasting.
     Input: (Batch, Seq_Len, Features)
-    Output: (Batch, 1) -> Binary Classification (Up/Down) or Regression
+    Output: (Batch, 1) -> Binary Classification (Up/Down) via Logits
     """
-    def __init__(self, input_dim, d_model=64, nhead=4, num_layers=2, dropout=0.1):
+    def __init__(self, input_dim, d_model=128, nhead=4, num_layers=3, dropout=0.2):
         super(TimeSeriesTransformer, self).__init__()
         
-        # Project input features to d_model size
-        # This ensures divisible by nhead and allows any input_dim
+        # 1. Input Projection
         self.embedding = nn.Linear(input_dim, d_model)
         
+        # 2. Positional Encoding (Crucial for Sequence Data)
+        self.pos_encoder = PositionalEncoding(d_model, dropout)
+        
+        # 3. Transformer Encoder
+        # batch_first=True is important!
         self.encoder_layer = nn.TransformerEncoderLayer(d_model=d_model, nhead=nhead, batch_first=True, dropout=dropout)
         self.transformer_encoder = nn.TransformerEncoder(self.encoder_layer, num_layers=num_layers)
         
-        # Flatten and project to output
-        # Here we use a simple linear head on the last time step
-        self.decoder = nn.Linear(d_model, 1) 
-        # self.activation = nn.Sigmoid() # Removed for BCEWithLogitsLoss stability
+        # 4. Output Head (MLP)
+        self.decoder = nn.Sequential(
+            nn.Linear(d_model, 64),
+            nn.ReLU(),
+            nn.Dropout(dropout),
+            nn.Linear(64, 1) # Output Logits
+        )
+        
+        self.input_dim = input_dim
 
     def forward(self, src):
         # src: [Batch, Seq_Len, Features]
         
         # Embed inputs
         x = self.embedding(src) # [Batch, Seq_Len, d_model]
+        x = self.pos_encoder(x) # Add position info
         
         # Transformer output: [Batch, Seq_Len, d_model]
         output = self.transformer_encoder(x)
         
-        # Take the last time step as the summary of the sequence
-        last_step = output[:, -1, :]
+        # Global Average Pooling (better than taking just the last step)
+        # Allows the model to aggregate signals from the entire window
+        x = torch.mean(output, dim=1) 
         
         # Project to target
-        # Project to target
-        prediction = self.decoder(last_step)
-        return prediction # Return raw logits for BCEWithLogitsLoss stability
+        prediction = self.decoder(x)
+        return prediction # Return raw logits
 
 class TransformerStrategy:
     """
-    Transformer-based Trading Strategy.
+    Transformer-based Trading Strategy (Phase 2 Upgrade).
     Hardware Agnostic: Runs on CPU or CUDA.
     Memory Optimized: Uses Lazy Loading for low RAM environments.
     """
-    def __init__(self, strategy_name="Transformer_v1", window_size=60, features=None, buy_threshold=0.55, sell_threshold=0.45):
+    def __init__(self, strategy_name="Transformer_v2", window_size=60, features=None, buy_threshold=0.60, sell_threshold=0.40):
         self.logger = logging.getLogger(__name__)
         self.strategy_name = strategy_name
         self.window_size = window_size
-        self.features = features or ['close', 'volume', 'high', 'low'] # Default features
+        self.features = features or ['close', 'volume'] # Should be set dynamically
         
         # Dynamic Thresholds
         self.buy_threshold = buy_threshold
@@ -75,6 +110,7 @@ class TransformerStrategy:
         
         self.device = 'cpu'
         self.model = None
+        self.scaler = None
         
         if HAS_TORCH:
             self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
@@ -84,15 +120,21 @@ class TransformerStrategy:
 
     def build_model(self, input_dim):
         if not HAS_TORCH: return
-        self.model = TimeSeriesTransformer(input_dim=input_dim).to(self.device).float() # Ensure float32
+        self.model = TimeSeriesTransformer(input_dim=input_dim).to(self.device).float()
+        
         # Use AdamW for better regularization
-        self.optimizer = optim.AdamW(self.model.parameters(), lr=0.0005, weight_decay=1e-4)
+        self.optimizer = optim.AdamW(self.model.parameters(), lr=0.0003, weight_decay=1e-3)
+        
         # Scheduler to reduce LR when loss plateaus
-        self.scheduler = optim.lr_scheduler.ReduceLROnPlateau(self.optimizer, mode='min', factor=0.5, patience=3)
-        self.criterion = nn.BCEWithLogitsLoss() # More stable than BCELoss
+        self.scheduler = optim.lr_scheduler.ReduceLROnPlateau(self.optimizer, mode='min', factor=0.5, patience=5)
+        
+        # Binary Cross Entropy with Logits (Combined Sigmoid + BCELoss for stability)
+        # Using pos_weight to handle class imbalance if needed (future upgrade)
+        self.criterion = nn.BCEWithLogitsLoss() 
+        
         self.logger.info(f"Model built with Input Dim: {input_dim}")
 
-    def train_model(self, df: pd.DataFrame, target_col='target_up', epochs=5, batch_size=32):
+    def train_model(self, df: pd.DataFrame, target_col='target_up', epochs=10, batch_size=32):
         """
         Train the model on provided DataFrame using Lazy Loader.
         """
@@ -102,7 +144,12 @@ class TransformerStrategy:
             
         # Prepare Data
         # Filter features
-        data = df[self.features]
+        try:
+            data = df[self.features]
+        except KeyError as e:
+            self.logger.error(f"Training features missing in DF: {e}")
+            return
+
         target = df[target_col] # Expecting binary 0/1 target
         
         loader = create_lazy_loader(data, target, self.window_size, batch_size)
@@ -124,6 +171,10 @@ class TransformerStrategy:
                 outputs = self.model(batch_X)
                 loss = self.criterion(outputs, batch_y)
                 loss.backward()
+                
+                # Gradient Clipping to prevent explosion
+                torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
+                
                 self.optimizer.step()
                 
                 total_loss += loss.item()
@@ -179,7 +230,7 @@ class TransformerStrategy:
                 missing = [f for f in required_features if f not in df.columns]
                 
                 if missing:
-                    self.logger.warning(f"Feature mismatch: Filling {len(missing)} missing features with training mean (neutral). Example: {missing[:2]}...")
+                    self.logger.warning(f"Feature mismatch: Filling {len(missing)} missing features with training mean (neutral).")
                     # impute missing features with mean from scaler to get 0 after normalization
                     if hasattr(self.scaler, 'mean_'):
                         feature_map = dict(zip(required_features, self.scaler.mean_))
@@ -213,16 +264,16 @@ class TransformerStrategy:
         else:
             # Fallback for un-normalized raw data (Not recommended for Transformer)
             self.logger.warning("No scaler loaded! Models trained on scaled data will fail with raw input.")
-            # Previous dynamic logic as last resort
-            if hasattr(self.model, 'embedding'):
-                expected_dim = self.model.embedding.in_features
-                numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
-                # Only use if counts match exactly
-                if len(self.features) != expected_dim and len(numeric_cols) == expected_dim:
-                    self.features = numeric_cols
-            
             try:
-                scaled_window = df[self.features].iloc[-self.window_size:].values
+                # Ensure we only pick numeric columns
+                numeric_df = df.select_dtypes(include=[np.number])
+                # Limit to input dim
+                if self.model.input_dim <= len(numeric_df.columns):
+                     target_cols = numeric_df.columns.tolist()[:self.model.input_dim]
+                else:
+                     target_cols = numeric_df.columns.tolist()
+                
+                scaled_window = df[target_cols].iloc[-self.window_size:].values
             except KeyError:
                 return 0
 

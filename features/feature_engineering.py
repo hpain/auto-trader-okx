@@ -14,6 +14,7 @@ from utils.helpers import check_data_length, handle_insufficient_data
 from analysis.bayesian_regime_detector import BayesianRegimeDetector
 from config.model_config import FEATURE_PARAMS
 from features.sentiment_utils import merge_price_and_sentiment
+from features.crypto_factors import generate_crypto_factors
 
 # --- 1. Custom Financial Operators (for execution of mined features) ---
 def _ts_rank(data, window=10):
@@ -626,6 +627,16 @@ def generate_features(df: pd.DataFrame, news_csv_path: str = None, mined_feature
     derivatives_features_df = _add_derivatives_features(df, derivatives_dfs)
     multi_symbol_features_df = _add_multi_symbol_features(df, feature_dfs)
 
+    # --- CRYPTO FACTORS (Phase 2 Upgrade) ---
+    # Merge Price + Derivatives to calculate Z-scores, Correlations, etc.
+    if not derivatives_features_df.empty:
+        temp_crypto_input = pd.concat([df, derivatives_features_df], axis=1)
+        # Handle duplicate cols just in case
+        temp_crypto_input = temp_crypto_input.loc[:, ~temp_crypto_input.columns.duplicated()]
+        crypto_factors_df = generate_crypto_factors(temp_crypto_input)
+    else:
+        crypto_factors_df = pd.DataFrame(index=df.index)
+
     # --- Compatibility Fix ---
     # Many indicators and mined features expect 'vol' instead of 'volume'.
     if 'volume' in df.columns and 'vol' not in df.columns:
@@ -758,7 +769,8 @@ def generate_features(df: pd.DataFrame, news_csv_path: str = None, mined_feature
         onchain_features_df,
         derivatives_features_df,
         multi_symbol_features_df,
-        mined_features_df
+        mined_features_df,
+        crypto_factors_df
     ]
 
     # Filter out any None or empty DataFrames
