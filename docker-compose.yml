@@ -32,10 +32,12 @@ services:
     env_file:
       - .env
     environment:
-      - OKX_API_KEY=${OKX_API_KEY}
-      - OKX_SECRET_KEY=${OKX_SECRET_KEY}
-      - OKX_PASSPHRASE=${OKX_PASSPHRASE}
-      - OKX_FLAG=${OKX_FLAG:-0}
+      # Inject LIVE keys for the Real Money service
+      # The code inside expects 'OKX_API_KEY', so we map LIVE_OKX_... -> OKX_...
+      - OKX_API_KEY=${LIVE_OKX_API_KEY}
+      - OKX_SECRET_KEY=${LIVE_OKX_SECRET_KEY}
+      - OKX_PASSPHRASE=${LIVE_OKX_PASSPHRASE}
+      - OKX_FLAG=0 # Force Live Mode Flag (0 = Live, 1 = Mock)
     volumes:
       - .:/app
       - ./config/settings.yaml:/app/config/settings.yaml
