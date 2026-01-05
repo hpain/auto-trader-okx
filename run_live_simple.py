@@ -56,10 +56,18 @@ class SimpleBot:
 
     async def initialize(self):
         """Async initialization"""
+        # Determine Sandbox Mode from Env
+        # OKX Convention: 0 = Live, 1 = Sandbox (Simulated Trading)
+        # Default to Live (0) if not set, to match Docker hardcoding for Arb
+        flag = os.environ.get('OKX_FLAG', '0')
+        is_sandbox = (str(flag) == '1')
+        self.logger.info(f"Environment OKX_FLAG={flag} -> Sandbox={is_sandbox}")
+
         # 1. Swap Exchange (Primary - for Funding Rates & Perp Orders)
         self.exchange = await ExchangeFactory.create_exchange(
             'okx', 
             mock=self.mock,
+            sandbox=is_sandbox,
             market_type='swap'
         )
         self.execution = ExecutionHandler(self.exchange)
@@ -68,6 +76,7 @@ class SimpleBot:
         self.spot_exchange = await ExchangeFactory.create_exchange(
             'okx',
             mock=self.mock,
+            sandbox=is_sandbox,
             market_type='spot'
         )
         self.spot_execution = ExecutionHandler(self.spot_exchange)
