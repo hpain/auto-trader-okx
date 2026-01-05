@@ -18,12 +18,26 @@ logger = logging.getLogger("Trainer")
 
 def train_main():
     # 1. Load Data
-    data_path = 'data/history/binance_BTCUSDT_1h_4y.csv'
-    logger.info(f"Loading data from {data_path}...")
+    # Priority list based on user environment (GPU machine vs VPS)
+    potential_files = [
+        'data/history/BTCUSDT_FULL_2020_2025.csv',       # User's GPU Machine (Priority)
+        'data/history/binance_BTCUSDT_1h_4y.csv',         # VPS Fallback
+        'data/history/BTCUSDT_FULL_2024_2025.csv',        # Short VPS Fallback
+    ]
     
-    if not os.path.exists(data_path):
-        logger.error(f"Data file not found: {data_path}")
-        return
+    data_path = None
+    for p in potential_files:
+        if os.path.exists(p):
+            data_path = p
+            break
+            
+    if not data_path:
+        logger.error(f"No suitable data file found. Checked: {potential_files}")
+        # Default string for error message clarity
+        data_path = potential_files[0] 
+        # Don't return yet, let read_csv fail or handle it
+    else:
+        logger.info(f"Loading data from {data_path}...")
 
     df = pd.read_csv(data_path)
     
