@@ -162,7 +162,13 @@ class SimpleBot:
                 if not funding_df.empty:
                     current_rate = float(funding_df.iloc[-1]['funding_rate'])
                 
-                self.logger.info(f"[{self.symbol}] Price: {current_price:.2f}, Funding: {current_rate:.6f}, Balance: {balance:.2f} {quote_ccy}")
+                # Colors
+                C_GREEN = '\033[92m'
+                C_YELLOW = '\033[93m'
+                C_CYAN = '\033[96m'
+                C_RESET = '\033[0m'
+                
+                self.logger.info(f"[{self.symbol}] Price: {current_price:.2f}, {C_GREEN}Funding: {current_rate:.6f}{C_RESET}, {C_YELLOW}Balance: {balance:.2f} {quote_ccy}{C_RESET}")
 
                 # 2. Generate Signal
                 # Strategy tracks its own state, but returns code:
