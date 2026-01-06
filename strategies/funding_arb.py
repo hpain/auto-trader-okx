@@ -98,3 +98,47 @@ class FundingRateArbitrageStrategy(BaseStrategy):
         
         return score
 
+    def generate_signals(self, data: pd.DataFrame) -> pd.DataFrame:
+        """
+        Implementation of abstract method.
+        Wraps generate_signal to return a DataFrame of signals.
+        """
+        signals = pd.DataFrame(index=data.index)
+        signals['signal'] = 0.0
+        
+        # Funding rate might be in data or fetched separately
+        # For bulk processing, we iterate or use vector ops if column exists
+        if 'fundingRate' in data.columns:
+             # Vectorized logic for backtesting efficiently
+            signals['signal'] = 0.0
+            # Note: For vectorized dynamic calculation, we'd need to apply rolling logic.
+            # For simplicity in this fix, we use basic thresholds or iterate.
+            # Given this is mostly for Live Mode (which uses generate_signal), 
+            # we provide a basic pass-through or static check if thresholds are set.
+            if self.positive_threshold:
+                signals.loc[data['fundingRate'] > self.positive_threshold, 'signal'] = -1.0
+                signals.loc[data['fundingRate'] < self.negative_threshold, 'signal'] = 1.0
+            else:
+                # Fallback: Use current dynamic threshold (approximate for backtest)
+                dyn = self._calculate_dynamic_threshold()
+                signals.loc[data['fundingRate'] > dyn, 'signal'] = -1.0
+                signals.loc[data['fundingRate'] < -dyn, 'signal'] = 1.0
+                
+        return signals
+
+    def get_strategy_info(self) -> Dict[str, Any]:
+        """
+        Implementation of abstract method.
+        """
+        return {
+            "name": self.strategy_name,
+            "type": "Arbitrage",
+            "thresholds": {
+                "positive": self.positive_threshold,
+                "negative": self.negative_threshold,
+                "neutral": self.neutral_threshold,
+                "dynamic_cost": getattr(self, 'transaction_cost', 0),
+                "dynamic_days": getattr(self, 'target_days', 0)
+            },
+            "current_state": self.current_state
+        }
