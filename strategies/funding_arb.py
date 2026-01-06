@@ -25,116 +25,76 @@ class FundingRateArbitrageStrategy(BaseStrategy):
     
     def __init__(self, 
                  strategy_name="FundingArb_v1", 
-                 positive_threshold=0.0015,  # ENTRY: 0.15% (Ensures breakeven within ~24h of fees)
-                 negative_threshold=-0.0015, 
-                 neutral_threshold=0.0005,   # EXIT: 0.05% (Close when APY drops below ~50%)
+                 positive_threshold=None,  # If None, use dynamic calculation
+                 negative_threshold=None, 
+                 neutral_threshold=0.0001,
+                 transaction_cost=0.003,   # 0.3% Round Trip Estimate (Fees+Slippage)
+                 target_days=5.0,          # Target Breakeven Time (Days)
                  leverage=1.0):
-        super().__init__(strategy_name, {}) # Pass empty config to satisfy BaseStrategy signature
+        super().__init__(strategy_name, {}) 
         self.logger = logging.getLogger(__name__)
+        
+        # Fixed Thresholds (Optional)
         self.positive_threshold = positive_threshold
         self.negative_threshold = negative_threshold
         self.neutral_threshold = neutral_threshold
+        
+        # Dynamic Parameters
+        self.transaction_cost = transaction_cost
+        self.target_days = target_days
         self.leverage = leverage
         
-        # State tracking
-        self.current_state = "NEUTRAL" # NEUTRAL, POSITIVE_ARB, NEGATIVE_ARB
+        self.current_state = "NEUTRAL" 
 
-    def generate_signals(self, data: pd.DataFrame) -> pd.DataFrame:
+    def _calculate_dynamic_threshold(self) -> float:
         """
-        Implementation of abstract method.
-        Wraps generate_signal to return a DataFrame of signals.
+        Calculate required funding rate to break even within target_days.
+        Formula: Required_Daily_Yield = Cost / Days
+                 Required_8h_Rate = Required_Daily_Yield / 3
         """
-        signals = pd.DataFrame(index=data.index)
-        signals['signal'] = 0.0
-        
-        # Funding rate might be in data or fetched separately
-        # For bulk processing, we iterate or use vector ops if column exists
-        if 'fundingRate' in data.columns:
-             # Vectorized logic for backtesting efficiently
-            signals['signal'] = 0.0
-            # Short Perp (Signal -1) if Rate > Positive Threshold
-            signals.loc[data['fundingRate'] > self.positive_threshold, 'signal'] = -1.0
-            # Long Perp (Signal 1) if Rate < Negative Threshold
-            signals.loc[data['fundingRate'] < self.negative_threshold, 'signal'] = 1.0
-        else:
-            # Fallback for single row/live loop if needed, though this method is mostly for backtest
-            pass
-            
-        return signals
-
-    def get_strategy_info(self) -> Dict[str, Any]:
-        """
-        Implementation of abstract method.
-        """
-        return {
-            "name": self.strategy_name,
-            "type": "Arbitrage",
-            "thresholds": {
-                "positive": self.positive_threshold,
-                "negative": self.negative_threshold,
-                "neutral": self.neutral_threshold
-            },
-            "current_state": self.current_state
-        }
+        required_daily_yield = self.transaction_cost / self.target_days
+        required_rate = required_daily_yield / 3.0
+        return required_rate
 
     def generate_signal(self, df: pd.DataFrame, symbol: str = "", funding_rate: Optional[float] = None) -> float:
-        """
-        Generate signal based on funding rate.
-        Returns:
-            1.0 (Open Long Perp Arbitrage / Close Short Perp Arbitrage)
-            -1.0 (Open Short Perp Arbitrage / Close Long Perp Arbitrage)
-            0.0 (Hold)
-        
-        Note: The return signal follows standard convention:
-            1.0 = Bullish on the instrument (Buy Perp) -> Implies Sell Spot if Arb
-            -1.0 = Bearish on the instrument (Sell Perp) -> Implies Buy Spot if Arb
-            
-            However, BaseStrategy usually handles simple Directional bets. 
-            For Arb, we need to handle the Dual-Leg execution in ExecutionHandler.
-            Here we just signal the 'Bias' of the Perp leg.
-        """
         if funding_rate is None:
-            # Try to get from last row if available as column
             if df is not None and 'fundingRate' in df.columns:
                 funding_rate = float(df['fundingRate'].iloc[-1])
             else:
                 self.logger.warning(f"[{symbol}] No funding rate data available for Arb.")
                 return 0.0
 
+        # Determine Effective Thresholds
+        if self.positive_threshold is not None:
+            eff_pos_thresh = self.positive_threshold
+            eff_neg_thresh = self.negative_threshold if self.negative_threshold else -self.positive_threshold
+        else:
+            # Dynamic Calculation
+            dynamic_min = self._calculate_dynamic_threshold()
+            eff_pos_thresh = dynamic_min
+            eff_neg_thresh = -dynamic_min
+            
         score = 0.0
         
-        # Logic Loop
-        # 1. Check Entry
-        if funding_rate > self.positive_threshold:
-            # Positive Funding: Longs pay Shorts. We want to be SHORT Perp.
-            # Signal -1.0
+        # Check Entry
+        if funding_rate > eff_pos_thresh:
             score = -1.0
             if self.current_state != "POSITIVE_ARB":
-                self.logger.info(f"[{symbol}] Funding Rate {funding_rate:.6f} > {self.positive_threshold}. Signal SHORT Perp (Arb).")
+                self.logger.info(f"[{symbol}] Rate {funding_rate:.6f} > DynThresh {eff_pos_thresh:.6f} (Cost:{self.transaction_cost*100:.1f}%, Days:{self.target_days}). Signal SHORT Perp.")
                 self.current_state = "POSITIVE_ARB"
                 
-        elif funding_rate < self.negative_threshold:
-            # Negative Funding: Shorts pay Longs. We want to be LONG Perp.
-            # Signal 1.0
+        elif funding_rate < eff_neg_thresh:
             score = 1.0
             if self.current_state != "NEGATIVE_ARB":
-                self.logger.info(f"[{symbol}] Funding Rate {funding_rate:.6f} < {self.negative_threshold}. Signal LONG Perp (Arb).")
+                self.logger.info(f"[{symbol}] Rate {funding_rate:.6f} < DynThresh {eff_neg_thresh:.6f}. Signal LONG Perp.")
                 self.current_state = "NEGATIVE_ARB"
                 
-        # 2. Check Exit (Regression to Mean)
+        # Check Exit (Neutral)
         elif abs(funding_rate) < self.neutral_threshold:
-            # Rate is normal. Close items.
-            # If we were SHORT Perp (Positive Arb), we now Buy to close -> 1.0 (to neutral)
-            # If we were LONG Perp (Negative Arb), we now Sell to close -> -1.0 (to neutral)
-            # Actually, standard logic: Signal 0 means 'Close/Neutral'? 
-            # Or PortfolioManager handles 'Hold if 0'?
-            # Let's align with PortfolioManager: 
-            # If Signal is 0, PM usually Holds. 
-            # To force close, we might need a specific 'Close' logic or rely on PM's "Time based exit" or manual "Exit" signal.
-            # For now, we return 0.0. The Arb Logic wrapper in PM needs to handle "Exit if condition lost".
             score = 0.0
             if self.current_state != "NEUTRAL":
-                self.logger.info(f"[{symbol}] Funding Rate {funding_rate:.6f} normalized. Signal NEUTRAL.")
+                self.logger.info(f"[{symbol}] Rate {funding_rate:.6f} normalized. Signal NEUTRAL.")
                 self.current_state = "NEUTRAL"
         
         return score
+

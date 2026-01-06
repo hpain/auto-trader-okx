@@ -44,8 +44,17 @@ class SimpleBot:
 
         # 3. Strategy
         if strategy_name == 'funding_arb':
-            # Use defaults from class (Entry=0.15%, Exit=0.05%)
-            self.strategy = FundingRateArbitrageStrategy()
+            # Use Dynamic Thresholds based on Cost Recovery
+            # Cost = 0.3% (Fee+Slip), Target = 5 Days (150 payouts)
+            # This triggers if Rate > ~0.02%
+            self.logger.info("Using DYNAMIC PROFIT CALCULATION (Cost: 0.3%, Target: 5 Days)")
+            self.strategy = FundingRateArbitrageStrategy(
+                positive_threshold=None, # Auto-calculate
+                negative_threshold=None,
+                neutral_threshold=0.0001,
+                transaction_cost=0.003,
+                target_days=5.0
+            )
         else:
             self.logger.error(f"Unknown strategy: {strategy_name}")
             sys.exit(1)
