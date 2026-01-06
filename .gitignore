@@ -55,3 +55,10 @@ data/
 *.tmp
 *.bak
 *.parquet
+
+#临时目录
+polymarket_scanner/
+research/new_alpha/
+scripts/test_risk_scaling.py
+scripts/verify_real_model.py
+.agent/  
