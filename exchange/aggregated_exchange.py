@@ -34,13 +34,27 @@ class AggregatedExchange(Exchange):
         
         all_exchange_ids = list(set([primary_exchange_id] + secondary_exchange_ids))
         
+        # Helper for safe creation
+        async def safe_create(ex_id, m_type):
+            try:
+                ex = await ExchangeFactory.create_exchange(ex_id, market_type=m_type, api_key=None, api_secret=None, passphrase=None, sandbox=sandbox, mock=mock)
+                return ex
+            except Exception as e:
+                # 显式打印错误详情，方便用户排查 (e.g. 502 Bad Gateway HTML body)
+                logger.warning(f"⚠️ Failed to initialize {ex_id} ({m_type}). Ignoring. Error details:\n{e}")
+                return None
+
         # Create coroutines for all exchange creations
-        spot_creation_tasks = [ExchangeFactory.create_exchange(ex_id, market_type='spot', api_key=None, api_secret=None, passphrase=None, sandbox=sandbox, mock=mock) for ex_id in all_exchange_ids]
-        swap_creation_tasks = [ExchangeFactory.create_exchange(ex_id, market_type='swap', api_key=None, api_secret=None, passphrase=None, sandbox=sandbox, mock=mock) for ex_id in all_exchange_ids]
+        spot_creation_tasks = [safe_create(ex_id, 'spot') for ex_id in all_exchange_ids]
+        swap_creation_tasks = [safe_create(ex_id, 'swap') for ex_id in all_exchange_ids]
 
         # Await them concurrently
-        spot_exchanges = await asyncio.gather(*spot_creation_tasks)
-        swap_exchanges = await asyncio.gather(*swap_creation_tasks)
+        spot_exchanges_raw = await asyncio.gather(*spot_creation_tasks)
+        swap_exchanges_raw = await asyncio.gather(*swap_creation_tasks)
+        
+        # Filter out failures
+        spot_exchanges = [ex for ex in spot_exchanges_raw if ex is not None]
+        swap_exchanges = [ex for ex in swap_exchanges_raw if ex is not None]
 
         # Asynchronously load markets for all created exchanges
         all_created_exchanges = spot_exchanges + swap_exchanges
