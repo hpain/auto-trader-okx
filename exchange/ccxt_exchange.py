@@ -2,7 +2,8 @@ import os
 from ccxt import async_support
 from ccxt.base.errors import (
     BaseError, ExchangeError, NetworkError, RequestTimeout,
-    InvalidOrder, OrderNotFound, InsufficientFunds, RateLimitExceeded
+    InvalidOrder, OrderNotFound, InsufficientFunds, RateLimitExceeded,
+    ExchangeNotAvailable
 )
 import pandas as pd
 from typing import List, Dict, Any, Optional
