@@ -11,6 +11,36 @@ from exchange.base import Exchange
 import logging
 import asyncio
 from datetime import datetime, timedelta, timezone
+from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type, before_sleep_log, RetryError
+
+# Define Retry Strategy for Network Operations
+def robust_exchange_retry(retry_count=3, default_return=None):
+    """
+    Decorator factory regarding "Graceful Degradation".
+    Retries on connectivity errors.
+    If all retries fail, logs a warning and returns `default_return`.
+    """
+    def return_default_on_failure(retry_state):
+        # logging logic to extract exchange_id if possible
+        ex_id = "unknown"
+        try:
+            if retry_state.args and hasattr(retry_state.args[0], 'exchange_id'):
+                 ex_id = retry_state.args[0].exchange_id
+        except:
+             pass
+        
+        logger.warning(f"🛑 All {retry_count} retries failed for {retry_state.fn.__name__} on {ex_id}. Returning default: {default_return}. Final Error: {retry_state.outcome.exception()}")
+        return default_return
+
+    return retry(
+        stop=stop_after_attempt(retry_count),
+        # Exponential backoff: 2s, 4s, 8s...
+        wait=wait_exponential(multiplier=1, min=2, max=10),
+        # Only retry on network/availability errors
+        retry=retry_if_exception_type((NetworkError, RequestTimeout, ExchangeNotAvailable, RateLimitExceeded)),
+        before_sleep=before_sleep_log(logger, logging.WARNING),
+        retry_error_callback=return_default_on_failure 
+    )
 
 logger = logging.getLogger(__name__)
 
@@ -150,26 +180,22 @@ class CcxtExchange(Exchange):
         else:
             return symbol.replace('-', '').replace('/', '')
 
+    @robust_exchange_retry(retry_count=3, default_return=pd.DataFrame())
     async def fetch_candles(self, symbol: str, timeframe: str, since: Optional[int] = None, limit: Optional[int] = 100) -> pd.DataFrame:
         ccxt_symbol = self._format_symbol(symbol)
         logger.debug(f"Fetching candles for {ccxt_symbol} with timeframe {timeframe}...")
-        try:
-            ohlcv = await self.exchange.fetch_ohlcv(ccxt_symbol, timeframe.lower(), since, limit)
-            if not ohlcv:
-                logger.warning(f"No candle data returned for {ccxt_symbol} with timeframe {timeframe}.")
-                return pd.DataFrame()
+        
+        # Core logic only (Happy Path)
+        # Tenacity handles the retries and exception catching
+        ohlcv = await self.exchange.fetch_ohlcv(ccxt_symbol, timeframe.lower(), since, limit)
+        if not ohlcv:
+            logger.warning(f"No candle data returned for {ccxt_symbol} with timeframe {timeframe}.")
+            return pd.DataFrame()
 
-            df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
-            df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
-            df.set_index('timestamp', inplace=True)
-            return df
-        except (NetworkError, RequestTimeout, ExchangeNotAvailable) as e:
-            # Downgrade network/availability errors to WARNING to avoid log noise on secondary exchanges
-            logger.warning(f"Could not fetch candles for {symbol} from {self.exchange.id}: {e}")
-            return pd.DataFrame()
-        except BaseError as e:
-            logger.error(f"Error fetching candles for {symbol}: {e}", exc_info=True)
-            return pd.DataFrame()
+        df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+        df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
+        df.set_index('timestamp', inplace=True)
+        return df
 
     async def fetch_historical_data(self, symbol: str, timeframe: str, years: float = None, since: int = None) -> pd.DataFrame:
         # from datetime import datetime, timedelta # Moved to top level
@@ -224,21 +250,15 @@ class CcxtExchange(Exchange):
         logger.info(f"Successfully fetched {len(df)} historical candles for {symbol} on {timeframe}.")
         return df[['open', 'high', 'low', 'close', 'volume']]
 
+    @robust_exchange_retry(retry_count=3, default_return=0.0)
     async def get_balance(self, currency: str) -> float:
-        try:
-            balance = await self.exchange.fetch_balance()
-            free_balance = balance.get('free')
-            if free_balance is not None:
-                return free_balance.get(currency, 0.0)
-            
-            logger.warning(f"Balance response for {self.exchange.id} is missing 'free' key. Response: {balance}")
-            return 0.0
-        except (NetworkError, RequestTimeout, ExchangeNotAvailable) as e:
-            logger.warning(f"Could not fetch balance from {self.exchange.id}: {e}")
-            return 0.0
-        except BaseError as e:
-            logger.error(f"Error fetching balance for {self.exchange.id}: {e}", exc_info=True)
-            return 0.0
+        balance = await self.exchange.fetch_balance()
+        free_balance = balance.get('free')
+        if free_balance is not None:
+            return free_balance.get(currency, 0.0)
+        
+        logger.warning(f"Balance response for {self.exchange.id} is missing 'free' key. Response: {balance}")
+        return 0.0
 
     async def create_order(self, symbol: str, order_type: str, side: str, amount: float, price: Optional[float] = None) -> Optional[Dict[str, Any]]:
         ccxt_symbol = self._format_symbol(symbol)
@@ -332,22 +352,16 @@ class CcxtExchange(Exchange):
             logger.error(f"Unhandled CCXT BaseError cancelling order '{order_id}' on {self.exchange.id}: {type(e).__name__}. Error: {e}", exc_info=True)
             return None
 
+    @robust_exchange_retry(retry_count=3, default_return=0.0)
     async def get_current_price(self, symbol: str) -> float:
         symbol = self._format_symbol(symbol)
-        try:
-            ticker = await self.exchange.fetch_ticker(symbol)
-            price = ticker.get('last')
-            if price is not None:
-                return price
-            
-            logger.warning(f"Ticker response for {symbol} is missing 'last' key. Response: {ticker}")
-            return 0.0
-        except (NetworkError, RequestTimeout, ExchangeNotAvailable) as e:
-            logger.warning(f"Could not fetch ticker for {symbol} from {self.exchange.id}: {e}")
-            return 0.0
-        except BaseError as e:
-            logger.error(f"Error fetching ticker for {symbol}: {e}", exc_info=True)
-            return 0.0
+        ticker = await self.exchange.fetch_ticker(symbol)
+        price = ticker.get('last')
+        if price is not None:
+            return price
+        
+        logger.warning(f"Ticker response for {symbol} is missing 'last' key. Response: {ticker}")
+        return 0.0
 
     async def place_oco_order(self, symbol: str, side: str, amount: float, take_profit_price: float, stop_loss_price: float) -> Dict[str, Any]:
         symbol = self._format_symbol(symbol)
