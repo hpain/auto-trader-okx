@@ -162,6 +162,10 @@ class CcxtExchange(Exchange):
             df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
             df.set_index('timestamp', inplace=True)
             return df
+        except (NetworkError, RequestTimeout, ExchangeNotAvailable) as e:
+            # Downgrade network/availability errors to WARNING to avoid log noise on secondary exchanges
+            logger.warning(f"Could not fetch candles for {symbol} from {self.exchange.id}: {e}")
+            return pd.DataFrame()
         except BaseError as e:
             logger.error(f"Error fetching candles for {symbol}: {e}", exc_info=True)
             return pd.DataFrame()
