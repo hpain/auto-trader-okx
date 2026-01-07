@@ -47,7 +47,7 @@ def robust_exchange_retry(retry_count=3, default_return=None):
     return retry(
         stop=stop_after_attempt(retry_count),
         # Exponential backoff: 2s, 4s, 8s...
-        wait=wait_exponential(multiplier=1, min=2, max=10),
+        wait=wait_exponential(multiplier=2, min=2, max=30),
         # Only retry on network/availability errors
         retry=retry_if_exception_type((NetworkError, RequestTimeout, ExchangeNotAvailable, RateLimitExceeded)),
         before_sleep=before_sleep_log(logger, logging.WARNING),
