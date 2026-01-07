@@ -232,6 +232,9 @@ class CcxtExchange(Exchange):
             
             logger.warning(f"Balance response for {self.exchange.id} is missing 'free' key. Response: {balance}")
             return 0.0
+        except (NetworkError, RequestTimeout, ExchangeNotAvailable) as e:
+            logger.warning(f"Could not fetch balance from {self.exchange.id}: {e}")
+            return 0.0
         except BaseError as e:
             logger.error(f"Error fetching balance for {self.exchange.id}: {e}", exc_info=True)
             return 0.0
@@ -337,6 +340,9 @@ class CcxtExchange(Exchange):
                 return price
             
             logger.warning(f"Ticker response for {symbol} is missing 'last' key. Response: {ticker}")
+            return 0.0
+        except (NetworkError, RequestTimeout, ExchangeNotAvailable) as e:
+            logger.warning(f"Could not fetch ticker for {symbol} from {self.exchange.id}: {e}")
             return 0.0
         except BaseError as e:
             logger.error(f"Error fetching ticker for {symbol}: {e}", exc_info=True)
