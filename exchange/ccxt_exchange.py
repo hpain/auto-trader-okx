@@ -29,7 +29,19 @@ def robust_exchange_retry(retry_count=3, default_return=None):
         except:
              pass
         
-        logger.warning(f"🛑 All {retry_count} retries failed for {retry_state.fn.__name__} on {ex_id}. Returning default: {default_return}. Final Error: {retry_state.outcome.exception()}")
+        exception = retry_state.outcome.exception()
+        exc_str = str(exception)
+        
+        # Sanitize huge HTML responses (common in 502/503 errors)
+        if "<html>" in exc_str.lower() or "<!doctype html>" in exc_str.lower():
+            # Extract just the first line or a summary
+            exc_lines = exc_str.splitlines()
+            if exc_lines:
+                exc_str = f"{exc_lines[0]} ... [HTML Body Truncated]"
+            else:
+                exc_str = "[HTML Response Truncated]"
+        
+        logger.warning(f"🛑 All {retry_count} retries failed for {retry_state.fn.__name__} on {ex_id}. Returning default: {default_return}. Final Error: {exc_str}")
         return default_return
 
     return retry(
