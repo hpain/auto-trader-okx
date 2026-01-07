@@ -444,7 +444,27 @@ class PortfolioManager:
             succeeded_strategies = [s for s in selected_strategies if s.strategy_name in strategy_signals]
             final_signal, fusion_details = self._fuse_signals_weighted(valid_signals_list, succeeded_strategies)
             
-            # --- Enhanced Consolidated Logging ---
+            # --- Enhanced Consolidated Logging (Price + Score) ---
+            current_price = df['close'].iloc[-1] if not df.empty else 0
+            
+            # Calculate Price Change
+            if not hasattr(self, "last_prices"): self.last_prices = {}
+            prev_price = self.last_prices.get(symbol)
+            
+            price_str = ""
+            if prev_price and prev_price > 0:
+                delta = current_price - prev_price
+                delta_pct = (delta / prev_price) * 100
+                sign = "+" if delta >= 0 else ""
+                # Keep color codes minimal or absent if log file doesn't support them well, 
+                # but user liked them. Let's include basic indicators.
+                price_str = f"Price:{current_price:.2f}({sign}{delta:.2f}/{sign}{delta_pct:.2f}%)"
+            else:
+                price_str = f"Price:{current_price:.2f}"
+            
+            # Update last price
+            self.last_prices[symbol] = current_price
+
             if cycle_logger:
                 score_str = f"{final_signal:+.1f}"
                 action_str = "BUY" if final_signal > 0.5 else ("SELL" if final_signal < -0.5 else "HOLD")
@@ -465,7 +485,8 @@ class PortfolioManager:
                         details_parts.append(f"{display_name}(ERR)")
                 
                 details_str = " ".join(details_parts)
-                cycle_logger.add_info(f"[{symbol}] Score: {score_str} ({action_str}) | {details_str}")
+                # Combine Price and Score
+                cycle_logger.add_info(f"[{symbol}] {price_str} | Score: {score_str} ({action_str}) | {details_str}")
             # -------------------------------------
             
             # 决定是否交易

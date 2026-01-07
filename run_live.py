@@ -246,30 +246,6 @@ async def main_loop(args):
                     trader_logger.warning(f"Warning: Failed to fetch market data for {symbol}, skipping...")
                     continue
 
-                # --- 4.1.1 Price Monitor (Inserted for User Visibility) ---
-                current_price = raw_data['close'].iloc[-1]
-                
-                # Initialize previous price tracker if not exists
-                if not hasattr(main_loop, "last_prices"):
-                     main_loop.last_prices = {}
-                
-                prev_price = main_loop.last_prices.get(symbol)
-                
-                if prev_price is not None:
-                    delta = current_price - prev_price
-                    delta_pct = (delta / prev_price) * 100
-                    sign = "+" if delta >= 0 else ""
-                    # Use color scaling for delta? Green up, Red down
-                    C_GREEN = "\033[32m"
-                    C_RED = "\033[31m"
-                    C_RESET = "\033[0m"
-                    color = C_GREEN if delta >= 0 else C_RED
-                    
-                    trader_logger.info(f"[{symbol}] Price: {current_price:.2f} | Change: {color}{sign}{delta:.2f} ({sign}{delta_pct:.2f}%){C_RESET}")
-                else:
-                    trader_logger.info(f"[{symbol}] Price: {current_price:.2f} (First Cycle)")
-                
-                main_loop.last_prices[symbol] = current_price
                 # ----------------------------------------------------------
 
                 # --- 4.1.2 获取衍生品数据 (Live Data Upgrade) ---
