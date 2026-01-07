@@ -128,8 +128,8 @@ strategy_management:
   transformer_strategy:
     enabled: true
     window_size: 120 # Updated after GPU Training (User specified --window 120)
-    buy_threshold: 0.60
-    sell_threshold: 0.40
+    buy_threshold: 0.55
+    sell_threshold: 0.45
     input_dim: 139 # Updated after GPU Training (139 features)
     model_path: models/transformer_v2.pth
     scaler_path: models/scaler.pkl
