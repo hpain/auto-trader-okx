@@ -290,6 +290,31 @@ class CcxtExchange(Exchange):
             return None
 
         except (InvalidOrder, InsufficientFunds) as e:
+            # 1. Auto-Healing for Precision Mismatches (InsufficientFunds)
+            if isinstance(e, InsufficientFunds) and side == 'sell':
+                try:
+                    logger.warning(f"Insufficient funds for SELL {amount} {symbol}. Attempting auto-adjust to max balance...")
+                    base_curr = ccxt_symbol.split('/')[0]
+                    balance = await self.get_balance(base_curr)
+                    
+                    # If we have *some* balance, but less than requested (or just different due to precision)
+                    # We accept a small margin of error (e.g. 99% of requested) or just sell ALL available.
+                    # Logic: If requested 1.0 but have 0.999, sell 0.999.
+                    if 0 < balance < amount:
+                        logger.info(f"Auto-Healing: Clamping SELL amount from {amount} to available {balance} {base_curr}.")
+                        return await self.exchange.create_order(ccxt_symbol, order_type, side, balance, price)
+                    elif balance >= amount:
+                         # Balance is actually sufficient? Then maybe it relies on 'locked' funds or margin. 
+                         # Retry exactly once just in case of race condition, otherwise fail.
+                         logger.warning(f"Balance {balance} seems sufficient for {amount} but exchange rejected. Retrying once...")
+                         return await self.exchange.create_order(ccxt_symbol, order_type, side, amount, price)
+                    else:
+                        logger.error(f"Auto-Healing failed: Available balance {balance} is zero or negligible.")
+
+                except Exception as retry_e:
+                     logger.error(f"Auto-Healing retry failed: {retry_e}")
+
+            # 2. If it wasn't InsufficientFunds OR Auto-Healing failed, log FATAL.
             logger.critical(
                 f"FATAL order logic error on {self.exchange.id}: {type(e).__name__}. "
                 f"This is likely a strategy bug and should NOT be retried. "
