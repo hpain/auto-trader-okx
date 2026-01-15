@@ -123,8 +123,8 @@ def train_main(args):
     strategy.train_model(train_df_scaled, target_col=target_col, epochs=args.epochs, batch_size=args.batch_size)
     
     # 7. Save Model
-    strategy.save_model('models/transformer_v2.pth')
-    logger.info("Model saved to models/transformer_v2.pth")
+    strategy.save_model('models/transformer_v3.pth')
+    logger.info("Model saved to models/transformer_v3.pth")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Train Transformer Model')
