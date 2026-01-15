@@ -45,6 +45,7 @@ config.yaml
 *.pem
 *.key
 *.crt
+*.bat
 .env
 
 # OKX 交易项目数据
