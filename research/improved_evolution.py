@@ -44,6 +44,7 @@ def main():
     parser.add_argument("--timeout", type=int, default=12, help="Triple Barrier timeout in bars")
     parser.add_argument("--mining-generations", type=int, default=0, help="Number of generations for genetic factor mining (0 to disable)")
     parser.add_argument("--local-csv", type=str, default=None, help="Path to local Full Dataset CSV (skips API fetch if provided)")
+    parser.add_argument("--gpu", action="store_true", help="Use GPU for LightGBM training")
 
     # Step 2: Parse arguments
     args = parser.parse_args()
@@ -224,7 +225,10 @@ def main():
         if dfp is None:
             return
 
-        # --- Fetch On-Chain Data ---
+    # --- Unified Feature Generation Logic ---
+    # If 'dfm' (Feature Matrix) is not loaded (e.g. from cache), we must generate it.
+    if 'dfm' not in locals():
+        # --- Fetch On-Chain Data (Optional) ---
         from data.onchain import get_onchain_client
         onchain_dfs = {}
         onchain_config = config.get("onchain_data", {})
@@ -269,8 +273,13 @@ def main():
             logging.info("Skipping on-chain data fetching as per configuration.") 
 
         # Generate features using all available data
+        # Ensure dfp exists (it should be loaded in local_csv or fetch block)
+        if 'dfp' not in locals():
+             logging.error("CRITICAL: dfp (Price Data) not found but needed to generate features.")
+             return
+
         dfm = generate_features(dfp, news_csv_path=news_csv_path, feature_dfs=feature_dfs, derivatives_dfs=derivatives_dfs, onchain_dfs=onchain_dfs, mined_features_path="config/mined_factors.json")
-        
+
 
 
     # --- Evolutionary Factor Mining (Optional) ---
@@ -431,7 +440,8 @@ def main():
         min_confidence=args.min_confidence,
         max_confidence=args.max_confidence,
         timeout=args.timeout,
-        years=args.years
+        years=args.years,
+        gpu_enabled=args.gpu
     )
 
     
@@ -458,7 +468,8 @@ def train_evolve(
     min_confidence: float = 0.55,
     max_confidence: float = 0.70,
     timeout: int = 12,
-    years: float = 0.5
+    years: float = 0.5,
+    gpu_enabled: bool = False
 ):
 
     X_train = train_data[feature_cols]
@@ -536,6 +547,11 @@ def train_evolve(
                 "colsample_bytree": trial.suggest_float("colsample_bytree", 0.6, 0.9), # Added colsample for regularization
             }
             params["n_estimators"] = params.pop("lgb_n_estimators")
+            
+            if gpu_enabled:
+                params["device"] = "gpu"
+                params["gpu_platform_id"] = 0
+                params["gpu_device_id"] = 0
             
             # Add random state for reproducibility
             model = lgb.LGBMClassifier(random_state=42, verbose=-1, **params)
