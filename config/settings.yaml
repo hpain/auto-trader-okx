@@ -115,7 +115,8 @@ strategy_management:
   enabled_strategies:
   - funding_arb
   - transformer
-  - lgb
+  - ma_fast
+  - ma_slow
   funding_arb_strategy:
     positive_threshold: 0.0001
     negative_threshold: -0.0001

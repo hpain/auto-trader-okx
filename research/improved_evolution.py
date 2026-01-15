@@ -39,8 +39,8 @@ def main():
     parser.add_argument("--take-profit-pct", type=float, default=0.05, help="止盈百分比 (例如 0.05 代表 5%%)")
     parser.add_argument("--max-drawdown", type=float, default=0.1, help="最大回撤限制 (例如 0.1 代表 10%%)")
     parser.add_argument("--success-rate-threshold", type=float, default=0.75, help="可接受的最低达标交易成功率")
-    parser.add_argument("--tp", type=float, default=0.015, help="Take Profit threshold (e.g., 0.015)")
-    parser.add_argument("--sl", type=float, default=0.01, help="Stop Loss threshold (e.g., 0.01)")
+    parser.add_argument("--tp", type=float, default=0.008, help="Take Profit threshold (e.g., 0.008)")
+    parser.add_argument("--sl", type=float, default=0.005, help="Stop Loss threshold (e.g., 0.005)")
     parser.add_argument("--timeout", type=int, default=12, help="Triple Barrier timeout in bars")
     parser.add_argument("--mining-generations", type=int, default=0, help="Number of generations for genetic factor mining (0 to disable)")
     parser.add_argument("--local-csv", type=str, default=None, help="Path to local Full Dataset CSV (skips API fetch if provided)")
@@ -354,11 +354,22 @@ def main():
     for col in feature_cols:
         if col not in data.columns:
             continue
+            
+        # Critical features whitelist: Don't drop these even if sparse (fill with 0)
+        critical_keywords = ['open_interest', 'funding', 'sent_', 'ratio']
+        is_critical = any(k in col for k in critical_keywords)
+
         nan_ratio = data[col].isna().mean()
-        if nan_ratio > nan_threshold:
+        
+        if nan_ratio > nan_threshold and not is_critical:
             dropped_sparse_cols.append(f"{col} ({nan_ratio:.1%})")
             data.drop(columns=[col], inplace=True)
         else:
+            if is_critical and nan_ratio > 0:
+                # Log only if significantly sparse to avoid spam
+                if nan_ratio > 0.05:
+                    logging.info(f"Filling sparse critical feature {col} ({nan_ratio:.1%} missing) with 0.0")
+                data[col].fillna(0.0, inplace=True)
             dense_feature_cols.append(col)
     
     if dropped_sparse_cols:
@@ -538,13 +549,13 @@ def train_evolve(
         if model_name == "lgb":
             # More conservative parameters to prevent overfitting
             params = {
-                "lgb_n_estimators": trial.suggest_int("lgb_n_estimators", 50, 300),  # Reduced max
-                "learning_rate": trial.suggest_float("learning_rate", 0.01, 0.10),   # Reduced max
-                "num_leaves": trial.suggest_int("num_leaves", 10, 80),               # Reduced max
-                "max_depth": trial.suggest_int("max_depth", 3, 8),                  # Added max depth for regularization
-                "min_child_samples": trial.suggest_int("min_child_samples", 10, 50), # Added min_child_samples for regularization
-                "subsample": trial.suggest_float("subsample", 0.7, 0.95),           # Added subsample for regularization
-                "colsample_bytree": trial.suggest_float("colsample_bytree", 0.6, 0.9), # Added colsample for regularization
+                "lgb_n_estimators": trial.suggest_int("lgb_n_estimators", 100, 1000), 
+                "learning_rate": trial.suggest_float("learning_rate", 0.005, 0.05),  # Lowered max LR to prevent overfitting
+                "num_leaves": trial.suggest_int("num_leaves", 20, 128),              
+                "max_depth": trial.suggest_int("max_depth", 5, 12),                  
+                "min_child_samples": trial.suggest_int("min_child_samples", 20, 100),
+                "subsample": trial.suggest_float("subsample", 0.6, 0.95),
+                "colsample_bytree": trial.suggest_float("colsample_bytree", 0.6, 0.95),
             }
             params["n_estimators"] = params.pop("lgb_n_estimators")
             

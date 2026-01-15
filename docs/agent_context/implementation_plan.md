@@ -72,3 +72,21 @@ Shift the bot's core logic from "Predicting Price Direction" (Low Alpha) to "Cap
 - **Logic**: Rate > Cost / (Cycles * RecoveryDays).
 - **Implementation**: `FundingRateArbitrageStrategy` auto-calculates threshold based on 0.3% cost and 5-day target.
 - **Goal**: "Never miss a profitable trade" (Entry ~0.02%).
+
+### P3-2: System Robustness
+- **Goal**: Zero Crashes on External Failures.
+- **Implementation**: 
+    - `tenacity` library for exponential backoff (2s, 4s, 8s).
+    - Graceful degradation (return 0/Empty instead of raising).
+    - Log sanitation (truncate huge HTML errors).
+    - Docker optimizations for faster iteration.
+    - Auto-Healing for InsufficientFunds (Precision mismatch fix).
+
+### P3-4: Retrain LGB with Full Data
+- **Goal**: Enable Bot to act on full market history (2020-2025).
+- **Implementation**:
+    - Use `BTCUSDT_FULL_2020_2025.csv` (Raw 1H + Metrics + Funding).
+    - Fix `research/improved_evolution.py` to support `local-csv` feature generation.
+    - Run evolution: 30 trials, 5 years data.
+    - Deploy `improved_best_model_1H_5.0y.pkl` to `models/`.
+    - Update `config/settings.yaml` to use new model/metadata.

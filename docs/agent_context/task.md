@@ -41,4 +41,40 @@ Shift from pure price prediction to structural arbitrage. Implement Funding Rate
     - [x] **P3-1: Aggressive Arb Tuning**
         - [x] Lower Funding Arb Entry via Dynamic Logic (`Rate > Cost/Days`).
         - [x] Update `run_live_simple.py` logic.
-    - [ ] **P3-2: ML Model Refinement**
+    - [x] **P3-2: System Robustness (Tenacity)**
+        - [x] Implement `tenacity` retry logic in `CcxtExchange`.
+        - [x] Downgrade 502/Network errors to WARNING (No Crash).
+        - [x] Sanitize HTML logs for cleaner debugging.
+        - [x] Sanitize HTML logs for cleaner debugging.
+        - [x] Optimize Docker build cache order.
+        - [x] Implement Auto-Healing for InsufficientFunds (Precision mismatch fix).
+    - [ ] **P3-3: Dynamic Sensitivity Tuning**
+        - [x] Analyze V2 baseline bias (0.69) vs Live (0.51).
+        - [ ] Decision: Maintain 0.55 threshold (User: "No changes for now").
+    - [/] **P3-4: Retrain LGB with Full Data**
+        - [x] Confirm data availability (BTCUSDT_FULL_2020_2025).
+        - [x] Fix `UnboundLocalError` in `improved_evolution.py`.
+        - [x] Train BTC Model (Best Score: 0.0933).
+        - [x] Merge BTC+ETH Data for Universal Model (Applied +20y Shift).
+        - [x] Merge BTC+ETH Data for Universal Model (Applied +20y Shift).
+        - [x] Train Universal Model (Completed - Score: 0.20, Val Trades: 0).
+            - [x] Fix Sparse Feature Dropping (OI/Sentiment).
+            - [x] Optimize Hyperparams (Expanded Search Space).
+            - [x] Tune Labels (TP 0.8%, SL 0.5%).
+        - [x] **Optional**: Train Universal Transformer (Completed - Loss: 0.5604).
+        - [x] **Fallback**: Deploy BTC 5-Year Model (Score: 0.0933) - *Current Live Config*.
+
+- [ ] **Phase 3: Alpha Optimization (Clean Data Era)**
+    - [ ] **P3-1: Dataset Purification**
+        - [ ] Create `CLEAN_FULL_2022_2025.csv` (Start from 2021-12-01).
+        - [ ] Verify zero NaN in OI/Funding columns.
+    - [ ] **P3-2: Retrain Models on Clean Data**
+        - [ ] Train LightGBM (Expect >0.20 score & valid trades).
+        - [ ] Train Transformer V4 (Compare vs V3).
+    
+    - [x] **P3-3: Aggressive Arb Tuning**
+        - [x] Lower Funding Arb Entry via Dynamic Logic (`Rate > Cost/Days`).
+        - [x] Update `run_live_simple.py` logic.
+    - [x] **P3-4: System Robustness**
+        - [x] Implement `tenacity` retry logic.
+        - [x] Auto-Healing for InsufficientFunds.

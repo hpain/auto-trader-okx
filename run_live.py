@@ -81,58 +81,64 @@ async def main_loop(args):
         return
 
     # 3.2 初始化策略
-    # 从配置中读取策略参数
+    # 3.2 Initialize Strategies
+    # Read enabled strategies from config
     strat_mgmt_config = config.get('strategy_management', {})
+    enabled_strategies = strat_mgmt_config.get('enabled_strategies', [])
+    trader_logger.info(f"Enabled strategies from config: {enabled_strategies}")
+
+    strategy_army = []
+
+    # --- MA Fast ---
+    if 'ma_fast' in enabled_strategies:
+        ma_fast_cfg = strat_mgmt_config.get('ma_fast_strategy', {'short_window': 10, 'long_window': 30})
+        strategy_army.append(MovingAverageStrategy(strategy_name="MA_Fast", config=ma_fast_cfg))
+
+    # --- MA Slow ---
+    if 'ma_slow' in enabled_strategies:
+        ma_slow_cfg = strat_mgmt_config.get('ma_slow_strategy', {'short_window': 20, 'long_window': 60})
+        strategy_army.append(MovingAverageStrategy(strategy_name="MA_Slow", config=ma_slow_cfg))
+
+    # --- LGB Strategy ---
+    if 'lgb' in enabled_strategies:
+        lgb_cfg = strat_mgmt_config.get('lgb_strategy', {
+            'model_dir': 'models',
+            'model_name': 'best_model.pkl',
+            'metadata_name': 'metadata.json'
+        })
+        strategy_army.append(LGBStrategy(strategy_name="LGB_Main", config=lgb_cfg))
     
-    # MA Fast
-    ma_fast_cfg = strat_mgmt_config.get('ma_fast_strategy', {'short_window': 10, 'long_window': 30})
-    ma_strategy_1 = MovingAverageStrategy(strategy_name="MA_Fast", config=ma_fast_cfg)
-    
-    # MA Slow
-    ma_slow_cfg = strat_mgmt_config.get('ma_slow_strategy', {'short_window': 20, 'long_window': 60})
-    ma_strategy_2 = MovingAverageStrategy(strategy_name="MA_Slow", config=ma_slow_cfg)
-    
-    # LGB Strategy
-    lgb_cfg = strat_mgmt_config.get('lgb_strategy', {
-        'model_dir': 'models',
-        'model_name': 'best_model.pkl',
-        'metadata_name': 'metadata.json'
-    })
-    lgb_strategy = LGBStrategy(strategy_name="LGB_Main", config=lgb_cfg)
-    
-    # Transformer Strategy (New)
+    # --- Transformer Strategy ---
+    # Transformer has extra 'enabled' flag inside its config, but we also respect the top-level list
     transformer_cfg = strat_mgmt_config.get('transformer_strategy')
-    transformer_strategy = None
-    if transformer_cfg and transformer_cfg.get('enabled', False):
+    if 'transformer' in enabled_strategies and transformer_cfg and transformer_cfg.get('enabled', False):
         print("Initializing Transformer Strategy...")
-        transformer_strategy = TransformerStrategy(
-            strategy_name="Transformer_Main",
-            window_size=transformer_cfg.get('window_size', 60),
-            features=None, # Will be auto-loaded/set during load_model or inference
-            buy_threshold=transformer_cfg.get('buy_threshold', 0.55),
-            sell_threshold=transformer_cfg.get('sell_threshold', 0.45)
-        )
-        # Load model weights if provided
-        model_path = transformer_cfg.get('model_path')
-        scaler_path = transformer_cfg.get('scaler_path') # We might need to pass this to strategy or handler
-        input_dim = transformer_cfg.get('input_dim', 108) # Default approx
-        
+        # ... (rest of transformer init logic kept mostly same but indented) ...
+        # Simplified for clarity in substitution:
         try:
-             # Just build/load. Note: input_dim might need dynamic check from scaler in real implementation
-             transformer_strategy.build_model(input_dim)
-             transformer_strategy.load_model(model_path, input_dim)
-             if scaler_path:
-                 transformer_strategy.load_scaler(scaler_path)
-             print(f"Transformer loaded from {model_path}")
+            ts = TransformerStrategy(
+                strategy_name="Transformer_Main",
+                window_size=transformer_cfg.get('window_size', 60),
+                features=None,
+                buy_threshold=transformer_cfg.get('buy_threshold', 0.55),
+                sell_threshold=transformer_cfg.get('sell_threshold', 0.45)
+            )
+            # Load model weights
+            model_path = transformer_cfg.get('model_path')
+            scaler_path = transformer_cfg.get('scaler_path')
+            input_dim = transformer_cfg.get('input_dim', 108)
+            
+            ts.build_model(input_dim)
+            ts.load_model(model_path, input_dim)
+            if scaler_path:
+                ts.load_scaler(scaler_path)
+            print(f"Transformer loaded from {model_path}")
+            strategy_army.insert(0, ts) # Priority
         except Exception as e:
-             print(f"Failed to load Transformer: {e}")
-    
-    strategy_army = [ma_strategy_1, ma_strategy_2, lgb_strategy]
-    trader_logger.info(f"DEBUG: Strategy Army Base: {[s.strategy_name for s in strategy_army]}")
-    
-    if transformer_strategy:
-        # Insert at 0 to make it the DEFAULT active strategy
-        strategy_army.insert(0, transformer_strategy)
+            trader_logger.error(f"Failed to load Transformer: {e}")
+            
+    # Note: 'funding_arb' is intentionally ignored here as it runs in a separate process.
+
         trader_logger.info(f"DEBUG: Added Transformer. Army now: {[s.strategy_name for s in strategy_army]}")
         
     trader_logger.info(f"Initialized {len(strategy_army)} strategies: {[s.strategy_name for s in strategy_army]}")
