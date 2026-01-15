@@ -840,7 +840,8 @@ def merge_price_and_sentiment(price_df: pd.DataFrame, daily_sent_df: pd.DataFram
         # Convert price times to UTC and floor to day (tz-aware)
         p_dates = p.index.tz_convert('UTC').floor('D')
     else:
-        p_dates = p.index.floor('D')
+        # If naive, assume UTC and localize
+        p_dates = p.index.floor('D').tz_localize('UTC')
     p = p.copy()
     p['date'] = p_dates
 
