@@ -121,8 +121,8 @@ strategy_management:
     negative_threshold: -0.0001
   lgb_strategy:
     model_dir: models
-    model_name: improved_best_model_1H_0.5y.pkl
-    metadata_name: improved_metadata_1H_0.5y.json
+    model_name: improved_best_model_1H_5.0y.pkl
+    metadata_name: improved_metadata_1H_5.0y.json
     buy_threshold: 0.55
     sell_threshold: 0.45
   transformer_strategy:

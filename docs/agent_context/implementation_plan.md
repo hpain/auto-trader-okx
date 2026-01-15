@@ -1,50 +1,74 @@
-# 深度因子挖掘实施计划
+# Implementation Plan: Strategic Pivot to Structural Alpha
 
-## 目标描述
-执行“深度因子挖掘计划”以提高模型性能（目标夏普比率 > -0.39）。这涉及处理4年的历史数据，使用遗传编程发现新的复杂特征，并将这些特征集成到LightGBM训练流程中。
+## Goal
+Shift the bot's core logic from "Predicting Price Direction" (Low Alpha) to "Capturing Structural Yield" (High Alpha), as recommended in the expert review.
 
-## 用户审查要求
+## User Review Required
 > [!IMPORTANT]
-> 此过程涉及计算密集型任务（特征挖掘和模型训练）。
-> - **特征挖掘**：将在4年数据上运行遗传编程（GP）。
-> - **重新训练**：将运行LightGBM优化（Optuna）。
+> This is a major change in strategy philosophy. We are moving away from "AI predicting the market" to "Math capturing market inefficiencies".
 
-## 建议变更
+## Proposed Changes
 
-### 研究与脚本
-#### [修改] [research/enhanced_feature_miner.py](file:///d:/pycode/auto-trader-okx-lt/research/enhanced_feature_miner.py)
-- 确保脚本正确处理带有现有特征的Parquet输入。
-- （已验证：脚本已支持Parquet和目标'y'列）。
-- 除非发现错误，否则不需要更改挖掘器脚本本身的代码。
+### P0: Paradigm Shift & Cognitive Refactor (Immediate)
+> *Ref: improve_plan.txt "Cognitive & Paradigm Refactor"*
+- **Rule**: All new strategies MUST start in `research/*.ipynb`. No direct coding in `src/`.
+- **Role Definition**:
+    - **Model != Decision Maker**.
+    - **Model == Risk Filter / State Gating**.
 
-#### [修改] [research/improved_evolution.py](file:///d:/pycode/auto-trader-okx-lt/research/improved_evolution.py)
-- 确保它拾取*最新*的挖掘特征JSON文件。
-- （已验证：脚本已查找`models/enhanced_mined_features_*.json`并按反向时间戳排序）。
-- 此处无需更改代码。
+### P1: Strategy Layer Refactor (The Life Line)
+> *Ref: improve_plan.txt "P1-1: Immediate Funding Rate Arbitrage"*
+- **Action**: Implement `FundingRateArbitrageStrategy`.
+    - **Goal**: 5-15% APY, Delta Neutral.
+    - **Logic**: 
+        - Monitor Funding Rates (via `run_live_simple.py`).
+        - **Entry**: Rate > 0.15% (Strict breakeven filter).
+        - **Exit**: Rate < 0.05% (Hysteresis profit maximization).
+    - **Execution**: Dual-Leg Hedging (Short Perp + Buy Spot) with State Reconciliation.
 
-### 执行工作流（[COMPLETED]）
-1.  **生成特征缓存（4年）**
-    - [x] 完成。生成了 `features_519a844655.parquet`。
-2.  **运行深度特征挖掘**
-    - [x] 完成。运行了两轮：
-        - 初始轮：低强度，发现特征无效。
-        - 高强度轮：发现 `enhanced_gp_feature_202512251331` (逻辑特征 `prob_bear - 9 * spread`)。
-3.  **重新训练模型**
-    - [x] 完成。使用5年数据重新训练。
-    - **结果**：稳定性得分从 **-0.77** 提升至 **-0.005** (模型不再亏损)。
+### P1-2: Execution Entry Point Refactor (The Isolator)
+> *Ref: verify_alpha_analysis.txt "Run Live Minimal Version"*
+- **Action**: Create `run_live_simple.py` (or refactor `run_live.py`).
+- **Goal**: Run **ONE** strategy, **ONE** symbol, **ZERO** assumption.
+- **Changes**:
+    - Remove hardcoded strategy weights/fusion.
+    - Remove automatic "Feature Engineering" pipeline (unless strategy demands it).
+    - Allow CLI arg: `--strategy funding_arb`.
 
-## 验证计划
+### P2: Research Layer (Alpha Boundaries)
+> *Ref: improve_plan.txt "P2: Standard Research Template"*
+- Define "Allowed Alpha": Funding Rates, Basis, Cross-Exchange Spreads.
+- Ban "Forbidden Alpha": Simple Technical Analysis Directional Prediction.
 
-### 自动化测试
-- 挖掘过程本身没有自动化测试，因为它是脚本执行。
-- 我们将验证输出文件是否存在：
-    - `data/cache/*.parquet` (已更新/创建)
-    - `models/enhanced_mined_features_*.json` (新创建)
-    - `models/improved_best_model.pkl` (已更新)
+### P3: Engineering & Structure (Mid Priority)
+> *Ref: improve_plan.txt "Module Decoupling & Cleanup"*
+- **Archive**: Move old experiments (`analysis/*`) to `archive/`.
+- **Refactor**: Split `strategies/` into `arbitrage/` and `trend/`.
 
-### 手动验证
-- 检查 `enhanced_feature_miner.py` 的控制台输出，查看“最佳个体”和性能指标。
-- 检查 `improved_evolution.py` 日志中的：
-    - "Found mined feature file: ..."（发现挖掘的特征文件）
-    - "Successfully added mined feature: ..."（成功添加挖掘的特征）
-    - 最终验证中的夏普比率有所提高。
+## Verification Plan (For P1)
+
+### Automated Tests
+- `tests/test_funding_arb.py`:
+    - Mock positive/negative funding rates.
+    - Verify correct Long/Short hedging orders are generated.
+    - Verify position sizing is equal (Delta Neutral).
+
+### Manual Verification
+- **Unit Logic**: Run a script to fetch current OKX funding rates and print potential yield.
+- **System Logic**: Deploy updates to Docker and verify logs show "Funding Arb" initialized.
+### P2: Predictive Alpha (Transformer v2)
+> *Ref: P2-Series in task.md*
+- **Architecture**: `TransformerStrategy` with 120-hour window.
+- **Input**: 139 Features (Price + Funding + Regime + Taker Flow).
+- **Execution**: Mock Mode (Simulation) running in parallel with Arb Bot.
+- **Infrastructure**: GPU Training -> Artifact Transfer -> Docker Deployment with 2G Limits.
+
+## Verification Plan (For P2)
+- **Dimensions**: `verify_real_model.py` checks 139/120 alignment.
+- **OOM Safety**: Enforce `deploy.resources.limits.memory: 2G` in Docker.
+- **Logic**: Inspect Logs for `Transformer Prediction Prob`.
+
+### P3: Dynamic Alpha Optimization
+- **Logic**: Rate > Cost / (Cycles * RecoveryDays).
+- **Implementation**: `FundingRateArbitrageStrategy` auto-calculates threshold based on 0.3% cost and 5-day target.
+- **Goal**: "Never miss a profitable trade" (Entry ~0.02%).

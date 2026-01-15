@@ -1,44 +1,58 @@
-# Deep Feature Mining Walkthrough
+# Dual-Process Architecture Walkthrough (2026-01-04)
 
-## Completed Work
-1.  **Feature Cache Generation**: Successfully generated a 4-year historical feature cache (`features_519a844655.parquet`).
-2.  **Genetic Programming Mining**:
-    - Ran `enhanced_feature_miner.py` on the cache.
-    - Discovered new feature: `neg(X104)` (Negative of feature index 104).
-    - Saved feature definition to `models/enhanced_mined_features_*.json`.
-    - **Technical Fixes**: Resolved `gplearn` compatibility issues (monkey-patching `_validate_data`) and JSON serialization errors.
-3.  **Model Retraining**:
-    - Updated `improved_evolution.py` to correctly load mined features even when using cached data (fixed indentation bug).
-    - Retrained LightGBM model with the new features.
+We successfully pivoted the trading bot's architecture from a single monolithic process to a **Dual-Process Architecture** to safely run conflicting strategies in parallel.
 
-## Results Analysis
-- **Training Timestamp**: 2025-12-25 21:04:56
-- **First Mined Feature**: `neg(volatility_120)` (Simple negation, low impact).
-- **High-Intensity Mined Feature**: `prob_bear - 9 * ema_spread_20_100` (Formula: `sub(...(X130, X44)...)`).
-    - **Interpretation**: This feature adjusts the Model's "Bearish Probability" by penalizing it based on the "20 vs 100 EMA Spread".
-    - If the trend is strongly bullish (EMA20 > EMA100, spread is positive), the "adjusted bear score" becomes smaller (or negative), effectively filtering out false bearish signals during strong pumps.
-    - If the trend is bearish (spread negative), it *adds* to the bear score, reinforcing the signal.
-    - This is a **Logical Interaction** that makes trading sense.
+## Architecture Overview
 
-- **Performance Metrics (4-Year Run)**:
-    - **Stability Score**: -0.77
-    - **Overall Sharpe**: -1.03
+| Bot Service | Image Name | Strategy | Symbol | Market Type | Goal |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| **auto-trader-ml** | `auto-trader-ml` | ML (Transformer/LGB) | **BTC/USDT** | Spot | **High Risk / Alpha**: Price prediction & momentum used for directional trades. |
+| **auto-trader-arb** | `auto-trader-arb` | FundingArb | **ETH/USDT** | Swap | **Low Risk / Structural**: Exploiting funding rate anomalies for yield. |
 
-- **Performance Metrics (5-Year Run w/ High-Intensity Feature)**:
-    - **Stability Score**: **-0.005** (Massive improvement, essentially break-even).
-    - **Overall Sharpe**: 0.0
-    - **Analysis**: The model has evolved from "Losing Money" (-1.03) to "Safe/Neutral" (0.0). The new feature likely acted as a powerful filter, blocking the bad trades that were causing losses in the previous version.
+## Implementation Details
 
-> [!TIP]
-> **Progress**: We have successfully stabilized the model (Defensive Feature). We also completed an **Offensive Feature Mining** run (Bull Precision Optimized) which found a high-precision momentum breakout feature: `min(sub(X2, X27), min(sub(X2, X19), sub(X101, X110)))`.
->
-> **Next Step (On New PC)**: Integrate this new offensive feature into `improved_evolution.py` and retrain LightGBM. The integration logic is already in place to pick up the latest JSON file.
+### 1. Isolated Execution Script (`run_live_simple.py`)
+A minimal, stateless runner designed for reliability.
+- **No Fusion**: Runs a single strategy class directly (e.g. `FundingRateArbitrageStrategy`).
+- **Targeted Market**: Modified to force `market_type='swap'` connection for Arb strategies to access Funding Rates properly.
+- **Robust Logging**: Independent log file `logs/simple_funding_arb.log` to avoid cluttering the ML logs.
 
-## PENDING: Migration to New Dev PC
-- [ ] Transfer code and `data/` directory.
-- [ ] Run `python research/improved_evolution.py --years 5 --trials 50` to integrate the new offensive feature.
+### 2. Docker Service Split (`docker-compose.yml`)
+- We split the original `auto-trader` service into two.
+- **Conflict Prevention**: 
+    - `auto-trader-ml` is configured (via Env Var) to trade **BTC only**.
+    - `auto-trader-arb` is configured (via CLI override) to trade **ETH only**.
+    - This ensures no cross-contamination of position management logic.
 
-## Next Steps
-- **Iterate on Mining**: Run the miner for more generations (e.g., 50+) and checking more complex function sets now that the pipeline works.
-- **Feature Selection**: The current pre-selection might be filtering out potential interactions.
-- **Hyperparameter Tuning**: The aggressive regularization added to prevent overfitting might be too strong for the current feature set.
+### 3. Strategy Verification
+- **FundingArb on Live**: Verified that `auto-trader-arb` correctly connects to OKX Swap API, fetches live Funding Rates (e.g. `0.003269`), and generates correct signals (`SHORT Perp` when rate is positive).
+
+### 4. Live Deployment Success (2026-01-05)
+- **Status**: **LIVE & ACTIVE**
+- **Architecture**: Dual-Leg Hedging (Spot Buy + Perp Sell).
+- **Key Separation**: Implemented `LIVE_OKX_...` env vars to isolate Real Money bot from Mock bot.
+- **Safety**:
+    - **Entry Threshold**: > 0.15% (Strict cost coverage).
+    - **Exit Threshold**: < 0.05% (Hysteresis for profit maximization).
+    - **Crash Recovery**: `reconcile_state()` ensures no zombie positions.
+- **Metrics**:
+    - **Capital**: ~$139 (0.02 ETH trade size).
+    - **Current State**: Monitoring for high funding rate opportunities (Neutral at <0.01%).
+
+### 5. Phase 2: Predictive Alpha Launch (ML Bot V2)
+- **Model Upgrade**: Deployed `TransformerStrategy V2` (139 Features, 120-Hour Window).
+    - **Training**: 100 Epochs on GPU, Val Loss `0.58` -> `0.48`.
+    - **Features**: Added Crypto Factors (Funding Z-Score, OI Regimes, Taker Ratio).
+- **Deployment**:
+    - **Service**: `auto-trader-ml` (Mock Mode).
+    - **Resource Mgmt**: Fixed OOM (Exit 137) on 4GB VPS by enforcing `limits: memory: 2G`.
+    - **Status**: Running parallel to Arb Bot, generating live predictions.
+
+### 6. Phase 3: Alpha Optimization (Jan 2026)
+**P3-1: Dynamic Funding Arbitrage**
+- **Logic Upgrade**: Replaced fixed thresholds (0.15%) with a dynamic "Breakeven" calculator.
+- **Formula**: `Entry_Threshold = (Transaction_Cost) / (3 * Target_Recovery_Days)`.
+- **Params**: Cost=0.3% (Taker Fees), Target=5 Days.
+- **Result**: Bot enters if Rate > ~0.02%. This ensures every trade is mathematically profitable within the target timeframe.
+- **Troubleshooting**: Resolved `TypeError` where abstract methods were missing on VPS by executing `git reset --hard HEAD && git pull` to force sync.
+- **Status**: Deployed and Verified.
