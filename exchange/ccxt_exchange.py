@@ -402,7 +402,7 @@ class CcxtExchange(Exchange):
 
     async def place_oco_order(self, symbol: str, side: str, amount: float, take_profit_price: float, stop_loss_price: float) -> Dict[str, Any]:
         symbol = self._format_symbol(symbol)
-        if not self.exchange.has['createOco']:
+        if not self.exchange.has.get('createOco'):
             raise NotImplementedError(f"{self.exchange.id} does not support OCO orders.")
         params = {'stopPrice': stop_loss_price, 'stopLimitPrice': stop_loss_price}
         return await self.exchange.create_order(symbol, 'oco', side, amount, take_profit_price, params=params)
