@@ -593,7 +593,7 @@ def train_evolve(
             _total_ret, _max_dd, success_rate, trade_count, returns_series = run_backtest(
                 predictions=predictions,
                 probabilities=probabilities,
-                test_data=train_data.loc[X_fold_test.index],
+                test_data=train_data.iloc[test_index],
                 confidence_threshold=confidence_thresh,
                 stop_loss_pct=stop_loss_pct,
                 take_profit_pct=take_profit_pct,
