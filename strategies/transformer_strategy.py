@@ -118,7 +118,7 @@ class TransformerStrategy:
         else:
             self.logger.warning("PyTorch not installed. Strategy disabled.")
 
-    def build_model(self, input_dim):
+    def build_model(self, input_dim, pos_weight=None):
         if not HAS_TORCH: return
         self.model = TimeSeriesTransformer(input_dim=input_dim).to(self.device).float()
         
@@ -128,15 +128,21 @@ class TransformerStrategy:
         # Scheduler to reduce LR when loss plateaus
         self.scheduler = optim.lr_scheduler.ReduceLROnPlateau(self.optimizer, mode='min', factor=0.5, patience=5)
         
-        # Binary Cross Entropy with Logits (Combined Sigmoid + BCELoss for stability)
-        # Using pos_weight to handle class imbalance if needed (future upgrade)
-        self.criterion = nn.BCEWithLogitsLoss() 
+        # Binary Cross Entropy with Logits
+        # Use pos_weight to handle class imbalance (makes model focus more on minority class)
+        if pos_weight is not None:
+            pos_weight_tensor = torch.tensor([pos_weight]).to(self.device)
+            self.criterion = nn.BCEWithLogitsLoss(pos_weight=pos_weight_tensor)
+            self.logger.info(f"Using pos_weight={pos_weight:.2f} for class imbalance")
+        else:
+            self.criterion = nn.BCEWithLogitsLoss()
         
         self.logger.info(f"Model built with Input Dim: {input_dim}")
 
-    def train_model(self, df: pd.DataFrame, target_col='target_up', epochs=10, batch_size=32):
+    def train_model(self, df: pd.DataFrame, target_col='target_up', epochs=10, batch_size=32, val_df=None):
         """
         Train the model on provided DataFrame using Lazy Loader.
+        Supports optional validation set for early stopping.
         """
         if not HAS_TORCH or self.model is None:
             self.logger.warning("Cannot train: Torch missing or model not built.")
@@ -157,6 +163,22 @@ class TransformerStrategy:
         if loader is None or len(loader) == 0:
             self.logger.warning("Not enough data to train.")
             return
+        
+        # Prepare validation loader if provided
+        val_loader = None
+        if val_df is not None:
+            try:
+                val_data = val_df[self.features]
+                val_target = val_df[target_col]
+                val_loader = create_lazy_loader(val_data, val_target, self.window_size, batch_size)
+            except Exception as e:
+                self.logger.warning(f"Could not create validation loader: {e}")
+        
+        # Early stopping setup
+        best_val_loss = float('inf')
+        patience = 10
+        patience_counter = 0
+        best_state = None
             
         self.model.train()
         for epoch in range(epochs):
@@ -182,12 +204,46 @@ class TransformerStrategy:
             
             if batch_count > 0:
                 avg_loss = total_loss / batch_count
+                
+                # Validation evaluation
+                val_loss_str = ""
+                if val_loader is not None and len(val_loader) > 0:
+                    self.model.eval()
+                    val_loss = 0
+                    val_count = 0
+                    with torch.no_grad():
+                        for batch_X, batch_y in val_loader:
+                            batch_X = batch_X.to(self.device).float()
+                            batch_y = batch_y.to(self.device).float().unsqueeze(1)
+                            outputs = self.model(batch_X)
+                            val_loss += self.criterion(outputs, batch_y).item()
+                            val_count += 1
+                    
+                    if val_count > 0:
+                        avg_val_loss = val_loss / val_count
+                        val_loss_str = f" - Val Loss: {avg_val_loss:.4f}"
+                        
+                        # Early stopping check
+                        if avg_val_loss < best_val_loss:
+                            best_val_loss = avg_val_loss
+                            patience_counter = 0
+                            best_state = self.model.state_dict().copy()
+                        else:
+                            patience_counter += 1
+                            if patience_counter >= patience:
+                                self.logger.info(f"Early stopping at epoch {epoch+1} (no improvement for {patience} epochs)")
+                                if best_state is not None:
+                                    self.model.load_state_dict(best_state)
+                                break
+                    
+                    self.model.train()
+                
                 # Step the scheduler
                 if hasattr(self, 'scheduler'):
                     self.scheduler.step(avg_loss)
                 
                 current_lr = self.optimizer.param_groups[0]['lr']
-                self.logger.info(f"Epoch {epoch+1}/{epochs} - Loss: {avg_loss:.4f} - LR: {current_lr:.6f}")
+                self.logger.info(f"Epoch {epoch+1}/{epochs} - Loss: {avg_loss:.4f}{val_loss_str} - LR: {current_lr:.6f}")
             
     def load_scaler(self, scaler_path: str):
         """Load the feature scaler from a pickle file."""

@@ -1,7 +1,7 @@
 import pandas as pd
 import numpy as np
 
-def calculate_funding_factors(df: pd.DataFrame, windows=[24, 72, 168], col_name='funding_rate') -> pd.DataFrame:
+def calculate_funding_factors(df: pd.DataFrame, windows=[8, 16, 24, 72, 168], col_name='funding_rate') -> pd.DataFrame:
     """
     Calculates statistical features for Funding Rates to detect overheating types.
     

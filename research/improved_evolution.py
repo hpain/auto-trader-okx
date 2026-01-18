@@ -39,9 +39,9 @@ def main():
     parser.add_argument("--take-profit-pct", type=float, default=0.05, help="止盈百分比 (例如 0.05 代表 5%%)")
     parser.add_argument("--max-drawdown", type=float, default=0.1, help="最大回撤限制 (例如 0.1 代表 10%%)")
     parser.add_argument("--success-rate-threshold", type=float, default=0.75, help="可接受的最低达标交易成功率")
-    parser.add_argument("--tp", type=float, default=0.008, help="Take Profit threshold (e.g., 0.008)")
-    parser.add_argument("--sl", type=float, default=0.005, help="Stop Loss threshold (e.g., 0.005)")
-    parser.add_argument("--timeout", type=int, default=12, help="Triple Barrier timeout in bars")
+    parser.add_argument("--tp", type=float, default=0.010, help="Take Profit threshold (e.g., 0.010 = 1%)")
+    parser.add_argument("--sl", type=float, default=0.007, help="Stop Loss threshold (e.g., 0.007 = 0.7%)")
+    parser.add_argument("--timeout", type=int, default=24, help="Triple Barrier timeout in bars (e.g., 24 = 1 day for 1H data)")
     parser.add_argument("--mining-generations", type=int, default=0, help="Number of generations for genetic factor mining (0 to disable)")
     parser.add_argument("--local-csv", type=str, default=None, help="Path to local Full Dataset CSV (skips API fetch if provided)")
     parser.add_argument("--gpu", action="store_true", help="Use GPU for LightGBM training")
@@ -278,7 +278,19 @@ def main():
              logging.error("CRITICAL: dfp (Price Data) not found but needed to generate features.")
              return
 
-        dfm = generate_features(dfp, news_csv_path=news_csv_path, feature_dfs=feature_dfs, derivatives_dfs=derivatives_dfs, onchain_dfs=onchain_dfs, mined_features_path="config/mined_factors.json")
+        # CRITICAL FIX: Ensure features are generated per symbol to avoid cross-symbol contamination
+        # The dataset contains interleaved BTC/ETH rows. TA-Lib indicators must be calculated on isolated series.
+        logging.info("Generating features with GroupBy('symbol')...")
+        dfm = dfp.groupby('symbol', group_keys=False).apply(
+            lambda x: generate_features(
+                x, 
+                news_csv_path=news_csv_path, 
+                feature_dfs=feature_dfs, 
+                derivatives_dfs=derivatives_dfs, 
+                onchain_dfs=onchain_dfs, 
+                mined_features_path="config/mined_factors.json"
+            )
+        )
 
 
 
@@ -292,29 +304,51 @@ def main():
             logging.info("Preparing data for factor mining...")
             mining_df = dfm.copy()
             # Predict next bar return
-            mining_df['target'] = mining_df['close'].shift(-1) / mining_df['close'] - 1
+            mining_df['target'] = mining_df.groupby('symbol')['close'].shift(-1) / mining_df['close'] - 1
             mining_df = mining_df.dropna()
             
+            # --- CRITICAL FIX: Only mine factors on TRAINING data to prevent data leakage ---
+            # Factors discovered on full data will have "seen" the validation/test set,
+            # causing implicit lookahead bias and overfit factors.
+            train_cutoff_ratio = 0.7
+            train_cutoff_idx = int(len(mining_df) * train_cutoff_ratio)
+            mining_train = mining_df.iloc[:train_cutoff_idx]
+            logging.info(f"Using first {train_cutoff_ratio*100:.0f}% of data ({len(mining_train)}/{len(mining_df)} rows) for factor mining to prevent data leakage.")
+            
             # Select features to evolve from (exclude non-feature columns)
-            exclude_cols = ['target', 'y', 'future_ret', 'future_high', 'future_low', 'future_close', 'date', 'open', 'high', 'low', 'close', 'volume', 'time', 'day']
-            feature_cols = [c for c in mining_df.columns if c not in exclude_cols and not c.startswith('onchain_')]
+            exclude_cols = ['target', 'y', 'future_ret', 'future_high', 'future_low', 'future_close', 'date', 'open', 'high', 'low', 'close', 'volume', 'time', 'day', 'symbol']
+            feature_cols = [c for c in mining_train.columns if c not in exclude_cols and not c.startswith('onchain_')]
             
             # Initial Run
-            logging.info(f"Mining on {len(mining_df)} rows with {len(feature_cols)} base features.")
+            logging.info(f"Mining on {len(mining_train)} rows with {len(feature_cols)} base features.")
             
             miner = FactorMiner(
                 generations=args.mining_generations, 
-                population_size=max(500, args.trials * 5), 
+                population_size=max(1000, args.trials * 10),  # Increased for better GP search
                 n_components=10,
                 random_state=42
             )
             
-            miner.fit(mining_df[feature_cols], mining_df['target'], feature_names=feature_cols)
-            miner.extract_best_factors(feature_names=feature_cols)
+            miner.fit(mining_train[feature_cols], mining_train['target'], feature_names=feature_cols)
+            # Extract factors with quality filtering (IC/IR evaluation + orthogonalization)
+            miner.extract_best_factors(
+                feature_names=feature_cols,
+                min_composite_score=0.15,  # Minimum quality score
+                max_factors=10             # Maximum number of factors to keep
+            )
             
             logging.info("Reloading features to include newly mined factors...")
             # Re-run generate_features to pick up the new JSON automatically
-            dfm = generate_features(dfp, news_csv_path=news_csv_path, feature_dfs=feature_dfs, derivatives_dfs=derivatives_dfs, onchain_dfs=onchain_dfs, mined_features_path="config/mined_factors.json")
+            dfm = dfp.groupby('symbol', group_keys=False).apply(
+                lambda x: generate_features(
+                    x, 
+                    news_csv_path=news_csv_path, 
+                    feature_dfs=feature_dfs, 
+                    derivatives_dfs=derivatives_dfs, 
+                    onchain_dfs=onchain_dfs, 
+                    mined_features_path="config/mined_factors.json"
+                )
+            )
             
         except ImportError:
             logging.error("Failed to import FactorMiner. Is 'gplearn' installed? Run 'pip install gplearn'.")
@@ -322,7 +356,6 @@ def main():
             logging.error(f"Factor Mining failed: {e}", exc_info=True)
 
     
-
 
     # Save cache
     dfm.to_parquet(feature_cache_path)
@@ -333,10 +366,26 @@ def main():
         dfm = dfm.set_index('timestamp')
 
     # Build supervised learning data using Triple Barrier Method
-    logging.info(f"Applying Triple Barrier Method: TP={args.tp}, SL={args.sl}, Timeout={args.timeout}")
-    data = apply_triple_barrier(dfm, tp=args.tp, sl=args.sl, timeout=args.timeout)
+    # CRITICAL FIX: GroupBy symbol for Labeling too!
+    logging.info(f"Applying Triple Barrier Method with GroupBy: TP={args.tp}, SL={args.sl}, Timeout={args.timeout}")
+    data = dfm.groupby('symbol', group_keys=False).apply(
+        lambda x: apply_triple_barrier(x, tp=args.tp, sl=args.sl, timeout=args.timeout)
+    )
     
-    non_feature_cols = ["ts", "dt", "y", "future_high", "future_low", "future_close", "future_ret", "date", "timestamp", "vol_ccy", "vol_ccy_quote", "confirm"]
+    # --- FIX: Use comprehensive exclusion list to prevent data leakage ---
+    # Blacklist includes: future-looking columns, raw OHLCV (use derived features), non-numeric identifiers
+    non_feature_cols = [
+        # Temporal and identifier columns (non-predictive)
+        "ts", "dt", "date", "timestamp", "time", "symbol",
+        # Target and future-looking columns (DATA LEAKAGE!)
+        "y", "future_high", "future_low", "future_close", "future_ret",
+        # Raw OHLCV - prefer derived features like returns, volatility, etc.
+        "open", "high", "low", "close", "volume",
+        # Exchange-specific metadata columns
+        "vol_ccy", "vol_ccy_quote", "confirm", "open_time", "close_time",
+        # Legacy columns that might slip through
+        "index", "level_0"
+    ]
     feature_cols = [c for c in data.columns if c not in non_feature_cols]
     
     # --- Data Cleaning ---
@@ -486,12 +535,20 @@ def train_evolve(
     X_train = train_data[feature_cols]
     y_train = train_data["y"] # y is a classification label (0 or 1)
     
-    trading_periods_per_year = {"1H": 252 * 24}.get(interval, 252)
+    # FIX: Use 365-day crypto calendar, not 252-day stock calendar
+    trading_periods_per_year = {
+        "1m": 365 * 24 * 60,
+        "5m": 365 * 24 * 12,
+        "15m": 365 * 24 * 4,
+        "1H": 365 * 24,
+        "4H": 365 * 6,
+        "1D": 365
+    }.get(interval, 365 * 24)  # Default to 1H if unknown
     annualization_factor = np.sqrt(trading_periods_per_year)
 
     # Final validation data
     X_val = val_data[feature_cols]
-    y_val = val_data["y"]
+    # Note: y_val removed as unused - run_backtest uses price data, not ground truth labels
 
     summary_log_path = os.path.join(out_dir, "improved_trials_summary.csv")
     if os.path.exists(summary_log_path):
@@ -564,23 +621,25 @@ def train_evolve(
                 params["gpu_platform_id"] = 0
                 params["gpu_device_id"] = 0
             
-            # Add random state for reproducibility
+            # FIX: Removed class_weight='balanced' as it caused over-prediction of class 1
+            # With balanced: 60% predictions were class 1, but only 34% success rate
+            # Without: 0.7% predictions are class 1, with 43% success rate (more conservative)
+            # The model should focus on HIGH PRECISION (few but accurate predictions)
             model = lgb.LGBMClassifier(random_state=42, verbose=-1, **params)
 
         # Use higher confidence threshold range
         confidence_thresh = trial.suggest_float("confidence_threshold", min_confidence, max_confidence)
 
-        # Use TimeSeriesSplit with fewer splits to reduce variance in CV scores
-        # Use TimeSeriesSplit with fewer splits to reduce variance in CV scores
-        # Use TimeSeriesSplit with fewer splits to reduce variance in CV scores
-        tscv = TimeSeriesSplit(n_splits=2)  # Reduced to 2 to focus on larger, more representative chunks
+        # FIX: Use 5 folds for statistically meaningful stability score calculation
+        # 2 folds had too high variance for std_sharpe to be reliable
+        tscv = TimeSeriesSplit(n_splits=5)
 
         all_returns_series = []
         all_success_rates = []
         all_trade_counts = []
         all_fold_sharpes = []
 
-        for train_index, test_index in tscv.split(X_train):
+        for fold_idx, (train_index, test_index) in enumerate(tscv.split(X_train)):
             X_fold_train, X_fold_test = X_train.iloc[train_index], X_train.iloc[test_index]
             y_fold_train, y_fold_test = y_train.iloc[train_index], y_train.iloc[test_index]
             
@@ -610,6 +669,15 @@ def train_evolve(
             all_trade_counts.append(trade_count)
             if trade_count > 0:
                 all_success_rates.append(success_rate)
+            
+            # --- FIX: Enable Optuna Pruner by reporting intermediate fold results ---
+            # Report running mean of fold sharpes to allow MedianPruner to prune bad trials early
+            if all_fold_sharpes:
+                intermediate_score = np.mean(all_fold_sharpes)
+                trial.report(intermediate_score, fold_idx)
+                
+                if trial.should_prune():
+                    raise optuna.TrialPruned()
 
         final_returns = pd.concat(all_returns_series) if all_returns_series else pd.Series(dtype=float)
 
@@ -690,7 +758,18 @@ def train_evolve(
         final_model = lgb.LGBMClassifier(random_state=42, verbose=-1, n_estimators=100)
 
     # Train on full training data
+    # Train on full training data
     final_model.fit(X_train, y_train.astype(int))
+    
+    # --- DEBUG: Feature Importance ---
+    try:
+        importances = final_model.feature_importances_
+        feature_names = X_train.columns
+        feature_imp = pd.DataFrame(sorted(zip(importances, feature_names)), columns=['Value','Feature'])
+        logging.info(f"Top 20 Features:\n{feature_imp.tail(20)}")
+    except Exception as e:
+        logging.error(f"Could not print feature importance: {e}")
+    # ---------------------------------
     
     # Validate on holdout data
     val_predictions = pd.Series(final_model.predict(X_val), index=X_val.index)
@@ -810,7 +889,6 @@ def train_evolve(
 
     if should_save_specific:
         from joblib import dump
-        import matplotlib.pyplot as plt
         os.makedirs(out_dir, exist_ok=True)
         
         dump(final_model, specific_model_path)

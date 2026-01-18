@@ -78,3 +78,71 @@ Shift from pure price prediction to structural arbitrage. Implement Funding Rate
     - [x] **P3-4: System Robustness**
         - [x] Implement `tenacity` retry logic.
         - [x] Auto-Healing for InsufficientFunds.
+
+- [x] **Phase 4: Code Quality & Bug Fixes (2026-01-16)**
+    - [x] **P4-1: Training Pipeline Audit (`improved_evolution.py`)**
+        - [x] Fix feature leakage risk (expand `non_feature_cols` blacklist).
+        - [x] Increase TimeSeriesSplit from 2 to 5 folds.
+        - [x] Correct annualization factor (252→365 days for crypto).
+        - [x] Enable Optuna Pruner with `trial.report()` calls.
+        - [x] Remove dead code (`y_val`, unused imports).
+    - [x] **P4-2: Order Execution Reliability (`ccxt_exchange.py`)**
+        - [x] Add retry logic for temporary errors (30s/60s/120s backoff).
+        - [x] Handle `ExchangeNotAvailable` (OKX 50001 maintenance).
+    - [x] **P4-3: Bot Entry Point Fixes (`run_live.py`)**
+        - [x] Fix indentation error in Transformer init block.
+        - [x] Prevent infinite loop in mock mode on data fetch failure.
+    - [x] **P4-4: Strategy Manager Fixes (`strategy_manager.py`)**
+        - [x] Fix `AttributeError` (active_strategy vs active_strategies).
+    - [x] **Documentation**
+        - [x] Create `bugfix_log_2026_01_16.md` (detailed fix record).
+        - [x] Update `walkthrough.md` (summary section).
+
+- [x] **Phase 5: Factor Mining Improvements (2026-01-16)**
+    - [x] **P5-1: Data Leakage Fix**
+        - [x] Factor mining now uses only first 70% of data (training portion).
+        - [x] Prevents implicit lookahead bias from discovered factors.
+    - [x] **P5-2: Security Hardening**
+        - [x] Added formula validation before `eval()` execution.
+        - [x] Whitelist pattern: `^[a-zA-Z0-9_\(\),\s\.\+\-\*\/]+$`.
+    - [x] **P5-3: Multi-Window Time Series Operators**
+        - [x] Added 24h and 72h windows alongside existing 10h.
+        - [x] Better capture of daily and multi-day patterns.
+    - [x] **P5-4: Funding Rate Windows**
+        - [x] Added 8h and 16h windows for crypto settlement cycles.
+    - [x] **P5-5: Factor Quality Evaluation (IC/IR)**
+        - [x] Implemented `evaluate_factor_quality()` with 4 metrics:
+            - IC (Information Coefficient): Spearman correlation with returns
+            - IC_IR: IC stability (mean/std of rolling IC)
+            - Turnover: Factor value change frequency
+            - Monotonicity: Quantile return ordering
+        - [x] Composite score = 0.3*IC + 0.3*IR + 0.2*(1-Turnover) + 0.2*Monotonicity.
+    - [x] **P5-6: Factor Orthogonalization**
+        - [x] Greedy correlation-based filtering (threshold 0.7).
+        - [x] Removes redundant factors expressing same information.
+    - [x] **P5-7: Crypto-Specific GP Operators (P1)**
+        - [x] Added `zscore_24`, `zscore_72` - Standardized deviation detection.
+        - [x] Added `momentum_8`, `momentum_24` - Rate of change.
+        - [x] Added `delta_1`, `delta_8` - Difference/acceleration.
+        - [x] Added `sign`, `clip`, `cross_above` - Utility operators.
+    - [x] **P5-8: Factor Decay Monitoring (P1)**
+        - [x] Implemented `FactorDecayMonitor` class.
+        - [x] Rolling IC computation and trend analysis.
+        - [x] Decay detection with configurable threshold (default 50%).
+        - [x] Batch checking for multiple factors.
+
+- [x] **Phase 6: Model Training Improvements (2026-01-16)**
+    - [x] **P6-1: Diagnostic Analysis**
+        - [x] Created `scripts/diagnose_model_performance.py`.
+        - [x] Found: Max feature correlation = 0.06 (very low).
+        - [x] Found: Model predicts class 1 only 2% of time.
+        - [x] Found: Recall = 2.5%, model biased toward majority class.
+    - [x] **P6-2: Class Imbalance Fix**
+        - [x] Added `class_weight='balanced'` to LGBMClassifier.
+        - [x] This compensates for 2:1 class imbalance (63% vs 37%).
+    - [ ] **P6-3: Confidence Threshold Adjustment** (Pending)
+        - [ ] Consider lowering max_confidence from 0.70 to 0.60.
+        - [ ] Model max probability is 0.69, most are around 0.31.
+
+
+

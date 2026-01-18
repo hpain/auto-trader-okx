@@ -1,36 +1,29 @@
 import pickle
-import os
+import pandas as pd
 import sys
 
-def inspect_scaler(path="models/scaler_long_term.pkl"):
-    print(f"Inspecting scaler at: {path}")
-    if not os.path.exists(path):
-        print("Error: File not found.")
-        return
-
+def inspect_scaler():
     try:
-        with open(path, "rb") as f:
+        with open('models/scaler.pkl', 'rb') as f:
             scaler = pickle.load(f)
         
-        print("\n--- Scaler Attributes ---")
-        print(f"Type: {type(scaler)}")
-        
-        if hasattr(scaler, 'feature_names_in_'):
-            print(f"✅ feature_names_in_ found! Count: {len(scaler.feature_names_in_)}")
-            print(f"First 5 features: {scaler.feature_names_in_[:5]}")
-        else:
-            print("❌ feature_names_in_ NOT found.")
-
+        print(f"Scaler Type: {type(scaler)}")
         if hasattr(scaler, 'n_features_in_'):
-            print(f"✅ n_features_in_ found: {scaler.n_features_in_}")
-        else:
-            print("❌ n_features_in_ NOT found.")
+            print(f"Num Features: {scaler.n_features_in_}")
             
-        print("-" * 30)
-
+        if hasattr(scaler, 'feature_names_in_'):
+            feats = scaler.feature_names_in_.tolist()
+            print("Feature Names (First 10):")
+            print(feats[:10])
+            print("\nFeature Names (Last 10):")
+            print(feats[-10:])
+            
+            # Save to file for easy reading
+            pd.DataFrame(feats, columns=['feature']).to_csv('model_features.csv', index=False)
+            print("\nSaved full feature list to model_features.csv")
+            
     except Exception as e:
-        print(f"Error loading scaler: {e}")
+        print(f"Error: {e}")
 
 if __name__ == "__main__":
-    path = sys.argv[1] if len(sys.argv) > 1 else "models/scaler_long_term.pkl"
-    inspect_scaler(path)
+    inspect_scaler()

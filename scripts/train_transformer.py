@@ -4,19 +4,19 @@ import pandas as pd
 import numpy as np
 import logging
 import pickle
+import argparse
 
 # Add project root to path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from strategies.transformer_strategy import TransformerStrategy
-from features.feature_engineering import generate_features, make_supervised
+from features.feature_engineering import generate_features, apply_triple_barrier
 from sklearn.preprocessing import StandardScaler
 
 # Setup Logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger("Trainer")
 
-import argparse
 
 def train_main(args):
     # 1. Load Data
@@ -25,9 +25,9 @@ def train_main(args):
     # Priority check if no path provided
     if not data_path:
         potential_files = [
-            'data/history/BTCUSDT_FULL_2020_2025.csv',       # Default GPU
+            'data/history/CLEAN_UNIVERSAL_2022_2026.csv',     # Multi-asset dataset
+            'data/history/BTCUSDT_FULL_2020_2025.csv',        # Default GPU
             'data/history/binance_BTCUSDT_1h_4y.csv',         # VPS Fallback
-            'data/history/BTCUSDT_FULL_2024_2025.csv',        # Short VPS Fallback
         ]
         for p in potential_files:
             if os.path.exists(p):
@@ -56,6 +56,7 @@ def train_main(args):
     }
     df.rename(columns=rename_map, inplace=True)
 
+    # Handle timestamp
     if 'timestamp' in df.columns:
         if df['timestamp'].dtype == object: 
              df['datetime'] = pd.to_datetime(df['timestamp'])
@@ -67,24 +68,45 @@ def train_main(args):
     
     logger.info(f"Loaded {len(df)} rows.")
 
-    # 2. Generate Features (P2-1 Logic)
+    # Handle multi-symbol data (e.g., CLEAN_UNIVERSAL with BTC+ETH)
+    if 'symbol' in df.columns:
+        symbols = df['symbol'].unique()
+        logger.info(f"Multi-symbol data detected: {symbols.tolist()}")
+        # Use only the first symbol for training (typically BTC)
+        primary_symbol = symbols[0]
+        df = df[df['symbol'] == primary_symbol].copy()
+        logger.info(f"Using {primary_symbol} for training: {len(df)} rows")
+
+    # 2. Generate Features
     logger.info("Generating features (including logical derivatives)...")
     df_features = generate_features(df)
     
-    # 3. Labeling (Target)
-    horizon = 1
-    threshold = 0.002 
-    
-    df_labeled = make_supervised(df_features, horizon=horizon, threshold=threshold)
+    # 3. Labeling using Triple Barrier (IMPROVED from simple threshold)
+    # Triple Barrier is superior because it considers:
+    # - Take Profit (upside)
+    # - Stop Loss (downside)  
+    # - Timeout (time decay)
+    logger.info(f"Applying Triple Barrier labeling (TP={args.tp}, SL={args.sl}, Timeout={args.timeout})...")
+    df_labeled = apply_triple_barrier(df_features, tp=args.tp, sl=args.sl, timeout=args.timeout)
     target_col = 'y'
     
     # Drop NaNs
     df_labeled.dropna(inplace=True)
     logger.info(f"Data after labeling & dropping NaNs: {len(df_labeled)}")
+    
+    # Log label distribution
+    label_counts = df_labeled[target_col].value_counts()
+    logger.info(f"Label distribution: {label_counts.to_dict()}")
 
-    # 4. Splitting & Scaling
-    split_idx = int(len(df_labeled) * 0.8)
-    train_df = df_labeled.iloc[:split_idx]
+    # 4. Splitting & Scaling (70% train, 10% val, 20% test)
+    train_end_idx = int(len(df_labeled) * 0.7)
+    val_end_idx = int(len(df_labeled) * 0.8)
+    
+    train_df = df_labeled.iloc[:train_end_idx]
+    val_df = df_labeled.iloc[train_end_idx:val_end_idx]
+    test_df = df_labeled.iloc[val_end_idx:]  # Reserved for final evaluation
+    
+    logger.info(f"Split: Train={len(train_df)}, Val={len(val_df)}, Test={len(test_df)}")
     
     # Select feature columns
     exclude = ['y'] + [c for c in df_labeled.columns if 'future' in c]
@@ -111,7 +133,13 @@ def train_main(args):
         sell_threshold=0.4
     )
     
-    strategy.build_model(input_dim=len(feature_cols))
+    # Calculate class weight for imbalance handling
+    pos_count = (train_df[target_col] == 1).sum()
+    neg_count = (train_df[target_col] == 0).sum()
+    pos_weight = neg_count / pos_count if pos_count > 0 else 1.0
+    logger.info(f"Class weight (neg/pos ratio): {pos_weight:.2f}")
+    
+    strategy.build_model(input_dim=len(feature_cols), pos_weight=pos_weight)
     strategy.scaler = scaler
     
     # 6. Train
@@ -120,24 +148,45 @@ def train_main(args):
     train_df_scaled = train_df.copy()
     train_df_scaled[feature_cols] = scaler.transform(train_df[feature_cols])
     
-    strategy.train_model(train_df_scaled, target_col=target_col, epochs=args.epochs, batch_size=args.batch_size)
+    # Prepare validation data if available
+    val_df_scaled = None
+    if len(val_df) > 0:
+        val_df_scaled = val_df.copy()
+        val_df_scaled[feature_cols] = scaler.transform(val_df[feature_cols])
+    
+    strategy.train_model(
+        train_df_scaled, 
+        target_col=target_col, 
+        epochs=args.epochs, 
+        batch_size=args.batch_size,
+        val_df=val_df_scaled
+    )
     
     # 7. Save Model
-    strategy.save_model('models/transformer_v3.pth')
-    logger.info("Model saved to models/transformer_v3.pth")
+    model_path = f'models/transformer_v4_tb{int(args.tp*1000)}_{int(args.sl*1000)}.pth'
+    strategy.save_model(model_path)
+    logger.info(f"Model saved to {model_path}")
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description='Train Transformer Model')
-    parser.add_argument('--epochs', type=int, default=30, help='Number of training epochs')
+    parser = argparse.ArgumentParser(description='Train Transformer Model with Triple Barrier Labeling')
+    
+    # Training parameters
+    parser.add_argument('--epochs', type=int, default=50, help='Number of training epochs')
     parser.add_argument('--batch_size', type=int, default=64, help='Batch size')
     parser.add_argument('--window', type=int, default=60, help='Lookback window size')
     parser.add_argument('--data', type=str, help='Path to CSV data file')
+    
+    # Triple Barrier parameters
+    parser.add_argument('--tp', type=float, default=0.008, help='Take Profit threshold')
+    parser.add_argument('--sl', type=float, default=0.005, help='Stop Loss threshold')
+    parser.add_argument('--timeout', type=int, default=12, help='Timeout in bars')
     
     args = parser.parse_args()
     
     try:
         train_main(args)
     except KeyboardInterrupt:
-        pass
+        logger.info("Training interrupted by user.")
     except Exception as e:
         logger.error(f"Training failed: {e}", exc_info=True)
+

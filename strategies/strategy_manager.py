@@ -233,7 +233,8 @@ class StrategyManager:
         
         # Fallback to current active or first available
         if not best_match:
-            best_match = self.active_strategy if self.active_strategy else (list(self.strategies.keys())[0] if self.strategies else None)
+            fallback = self.active_strategies[0] if self.active_strategies else (list(self.strategies.keys())[0] if self.strategies else None)
+            best_match = fallback
             reason += " (Recommended strategy not found, using fallback)"
 
         if logger and hasattr(logger, 'add_decision_info'):
@@ -334,12 +335,13 @@ class StrategyManager:
         :param lookback_days: 回看天数
         :return: 是否需要切换策略
         """
-        if not self.active_strategy:
+        if not self.active_strategies:
             return False
-            
+        
+        current_strategy = self.active_strategies[0]  # Use first active for comparison
         current_sharpe = 0
         # 获取当前策略最近的性能
-        current_perf_records = self.strategy_performance.get(self.active_strategy, [])
+        current_perf_records = self.strategy_performance.get(current_strategy, [])
         if current_perf_records:
             recent_records = [
                 record for record in current_perf_records 
@@ -351,7 +353,7 @@ class StrategyManager:
         
         best_strategy = self.get_best_performing_strategy(lookback_days)
         
-        if best_strategy and best_strategy != self.active_strategy:
+        if best_strategy and best_strategy != current_strategy:
             best_perf_records = self.strategy_performance.get(best_strategy, [])
             if best_perf_records:
                 recent_records = [
@@ -366,7 +368,7 @@ class StrategyManager:
                     if best_sharpe > current_sharpe + 0.5:
                         self.logger.info(
                             f"Strategy switch recommended: {best_strategy} "
-                            f"(Sharpe: {best_sharpe:.4f}) vs {self.active_strategy} "
+                            f"(Sharpe: {best_sharpe:.4f}) vs {current_strategy} "
                             f"(Sharpe: {current_sharpe:.4f})"
                         )
                         return True

@@ -1,96 +1,75 @@
 {
     "all_time_best": {
-        "timestamp": "2025-12-27 16:39:17",
-        "total_trials_in_run": 150,
-        "trial_number": 84,
-        "stability_score": 7.745499367384429,
-        "overall_sharpe": 14.364186350552039,
-        "avg_success_rate": 0.7346938775510204,
+        "timestamp": "2026-01-16 15:51:18",
+        "total_trials_in_run": 1,
+        "trial_number": 0,
+        "stability_score": 34.14138801169216,
+        "overall_sharpe": 34.77898090088456,
+        "avg_success_rate": 0.91426348534816,
         "fold_sharpes": [
-            0.0,
-            20.6547
+            38.1178,
+            31.7555
         ],
-        "val_return": -0.08648344175258293,
-        "val_sharpe": -16.800730200579274,
-        "val_success_rate": 0.24,
-        "val_trade_count": 25,
+        "val_return": 8593.807704920875,
+        "val_sharpe": 35.5405700774291,
+        "val_success_rate": 0.9276572064552031,
+        "val_trade_count": 1797,
         "params": {
             "model": "lgb",
-            "lgb_n_estimators": 64,
-            "learning_rate": 0.011693942089054922,
-            "num_leaves": 37,
+            "lgb_n_estimators": 387,
+            "learning_rate": 0.04001616906458573,
+            "num_leaves": 30,
             "max_depth": 8,
-            "min_child_samples": 19,
-            "subsample": 0.755981233159518,
-            "colsample_bytree": 0.6150717176535645,
-            "confidence_threshold": 0.26922962814949714
+            "min_child_samples": 40,
+            "subsample": 0.8489462705710857,
+            "colsample_bytree": 0.9478328598475989,
+            "confidence_threshold": 0.35492346628932164
         }
     },
     "recent_trials": [
         {
-            "timestamp": "2025-12-27 22:47:16",
-            "total_trials_in_run": 1,
-            "trial_number": 0,
-            "stability_score": -0.4770525068524111,
-            "overall_sharpe": -0.4375191391360208,
-            "avg_success_rate": 0.4595055413469736,
+            "timestamp": "2026-01-18 21:31:54",
+            "total_trials_in_run": 50,
+            "trial_number": 27,
+            "stability_score": 0.22113696814850287,
+            "overall_sharpe": 0.41353225729763826,
+            "avg_success_rate": 0.5907425907425907,
             "fold_sharpes": [
-                -2.2972,
-                2.5565
+                -1.1326,
+                3.0398,
+                -0.1372,
+                1.3959,
+                -0.2224
             ],
-            "val_return": -0.041660853724684976,
+            "val_return": 0.006919424000000118,
             "val_sharpe": 0.0,
-            "val_success_rate": 0.0,
-            "val_trade_count": 7,
+            "val_success_rate": 0.6666666666666666,
+            "val_trade_count": 3,
             "params": {
                 "model": "lgb",
-                "lgb_n_estimators": 194,
-                "learning_rate": 0.043297432500673264,
-                "num_leaves": 24,
+                "lgb_n_estimators": 107,
+                "learning_rate": 0.021502064701685877,
+                "num_leaves": 84,
                 "max_depth": 7,
-                "min_child_samples": 39,
-                "subsample": 0.7973127052480208,
-                "colsample_bytree": 0.6361738004372441,
-                "confidence_threshold": 0.3556259740440644
+                "min_child_samples": 67,
+                "subsample": 0.8189505291217086,
+                "colsample_bytree": 0.6015465541809838,
+                "confidence_threshold": 0.62052214708764
             }
         },
         {
-            "timestamp": "2025-12-27 20:33:46",
-            "total_trials_in_run": 1,
-            "trial_number": 0,
-            "stability_score": -4.366376179100571,
-            "overall_sharpe": -2.398720707163966,
-            "avg_success_rate": 0.38598475827577994,
+            "timestamp": "2026-01-18 19:49:29",
+            "total_trials_in_run": 50,
+            "trial_number": 37,
+            "stability_score": -0.3364154915796941,
+            "overall_sharpe": -0.5574801159070711,
+            "avg_success_rate": 0.1414141414141414,
             "fold_sharpes": [
-                0.6527,
-                -7.3778
-            ],
-            "val_return": -0.006315776164982245,
-            "val_sharpe": 0.0,
-            "val_success_rate": 0.0,
-            "val_trade_count": 4,
-            "params": {
-                "model": "lgb",
-                "lgb_n_estimators": 275,
-                "learning_rate": 0.07314027622807498,
-                "num_leaves": 53,
-                "max_depth": 3,
-                "min_child_samples": 26,
-                "subsample": 0.7917560272200423,
-                "colsample_bytree": 0.8582459455321606,
-                "confidence_threshold": 0.3094104686091321
-            }
-        },
-        {
-            "timestamp": "2025-12-27 17:06:32",
-            "total_trials_in_run": 150,
-            "trial_number": 113,
-            "stability_score": 4.10738712888312,
-            "overall_sharpe": 4.052262331721299,
-            "avg_success_rate": 0.6049127640036731,
-            "fold_sharpes": [
-                3.9406,
-                4.3853
+                -1.1214,
+                0.0,
+                0.0,
+                0.0,
+                0.0
             ],
             "val_return": 0.0,
             "val_sharpe": 0.0,
@@ -98,41 +77,74 @@
             "val_trade_count": 0,
             "params": {
                 "model": "lgb",
-                "lgb_n_estimators": 78,
-                "learning_rate": 0.02680254116130166,
-                "num_leaves": 30,
-                "max_depth": 7,
-                "min_child_samples": 11,
-                "subsample": 0.870485136411334,
-                "colsample_bytree": 0.7812722730800771,
-                "confidence_threshold": 0.26283141361556817
+                "lgb_n_estimators": 171,
+                "learning_rate": 0.023286527022740835,
+                "num_leaves": 41,
+                "max_depth": 9,
+                "min_child_samples": 57,
+                "subsample": 0.8200064904868428,
+                "colsample_bytree": 0.6293411273463694,
+                "confidence_threshold": 0.6226203494328261
             }
         },
         {
-            "timestamp": "2025-12-27 16:59:58",
-            "total_trials_in_run": 150,
-            "trial_number": 140,
-            "stability_score": 1.370886539922852,
-            "overall_sharpe": 2.583792591351899,
-            "avg_success_rate": 0.7647058823529411,
+            "timestamp": "2026-01-17 01:31:17",
+            "total_trials_in_run": 50,
+            "trial_number": 31,
+            "stability_score": -8.610498872730501,
+            "overall_sharpe": -8.229535963527105,
+            "avg_success_rate": 0.3874738276004487,
             "fold_sharpes": [
-                0.0,
-                3.6557
+                -7.0261,
+                -7.2007,
+                -10.7661,
+                -8.8789,
+                -7.4102
             ],
-            "val_return": -0.022207573585487972,
-            "val_sharpe": 0.0,
-            "val_success_rate": 0.3333333333333333,
-            "val_trade_count": 6,
+            "val_return": -0.022573976922610872,
+            "val_sharpe": -0.6778638644046207,
+            "val_success_rate": 0.4375,
+            "val_trade_count": 32,
             "params": {
                 "model": "lgb",
-                "lgb_n_estimators": 64,
-                "learning_rate": 0.06219960135389989,
-                "num_leaves": 22,
+                "lgb_n_estimators": 477,
+                "learning_rate": 0.012491060777411687,
+                "num_leaves": 91,
+                "max_depth": 10,
+                "min_child_samples": 22,
+                "subsample": 0.8700153421795682,
+                "colsample_bytree": 0.6305228342559168,
+                "confidence_threshold": 0.5865741281941687
+            }
+        },
+        {
+            "timestamp": "2026-01-16 19:11:09",
+            "total_trials_in_run": 100,
+            "trial_number": 32,
+            "stability_score": 0.06167482765440331,
+            "overall_sharpe": 0.0982445267716479,
+            "avg_success_rate": 0.5,
+            "fold_sharpes": [
+                0.0,
+                0.6167,
+                0.0,
+                0.0,
+                0.0
+            ],
+            "val_return": 0.0,
+            "val_sharpe": 0.0,
+            "val_success_rate": 0.0,
+            "val_trade_count": 0,
+            "params": {
+                "model": "lgb",
+                "lgb_n_estimators": 218,
+                "learning_rate": 0.015866601834966867,
+                "num_leaves": 34,
                 "max_depth": 5,
-                "min_child_samples": 28,
-                "subsample": 0.761741368187852,
-                "colsample_bytree": 0.6121035752455947,
-                "confidence_threshold": 0.5659620415665368
+                "min_child_samples": 100,
+                "subsample": 0.6215831721981502,
+                "colsample_bytree": 0.6589918110282025,
+                "confidence_threshold": 0.5636532543588159
             }
         }
     ]

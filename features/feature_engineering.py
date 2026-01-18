@@ -43,12 +43,32 @@ def _ts_std_dev(data, window=10):
 def _ts_min(data, window=10):
     """Rolling Min."""
     s = pd.Series(data)
-    return s.rolling(window=window).min().fillna(method='bfill').values
+    return s.rolling(window=window).min().bfill().values
 
 def _ts_max(data, window=10):
     """Rolling Max."""
     s = pd.Series(data)
-    return s.rolling(window=window).max().fillna(method='bfill').values
+    return s.rolling(window=window).max().bfill().values
+
+# --- Crypto-Specific Operators for executing mined factors ---
+
+def _zscore(data, window=24):
+    """Z-Score: Standardized deviation from rolling mean."""
+    s = pd.Series(data)
+    roll_mean = s.rolling(window=window).mean()
+    roll_std = s.rolling(window=window).std().replace(0, 1e-9)
+    return ((s - roll_mean) / roll_std).fillna(0).values
+
+def _momentum(data, window=8):
+    """Momentum: Rate of change over window."""
+    s = pd.Series(data)
+    mom = s.pct_change(periods=window).fillna(0)
+    return np.clip(mom.values, -1, 1)
+
+def _delta(data, window=1):
+    """Delta: Simple difference."""
+    s = pd.Series(data)
+    return s.diff(periods=window).fillna(0).values
 
 def check_data_length(df: pd.DataFrame, min_length: int = 200) -> bool:
     """
@@ -681,7 +701,16 @@ def generate_features(df: pd.DataFrame, news_csv_path: str = None, mined_feature
         print(f"Found {len(mined_file_paths)} mined feature files. Attempting to load with dependency resolution...")
         import re
         
-        # Safe evaluation environment
+        # --- SECURITY: Formula validation pattern ---
+        # Only allow safe characters: alphanumerics, underscores, parentheses, commas, spaces, operators
+        SAFE_FORMULA_PATTERN = re.compile(r'^[a-zA-Z0-9_\(\),\s\.\+\-\*\/]+$')
+        
+        def validate_formula(formula_str: str) -> bool:
+            """Validate that a formula only contains safe characters."""
+            if not formula_str:
+                return False
+            return bool(SAFE_FORMULA_PATTERN.match(formula_str))
+        
         # Safe evaluation environment
         safe_dict = {
             'add': np.add, 'sub': np.subtract, 'mul': np.multiply,
@@ -692,13 +721,30 @@ def generate_features(df: pd.DataFrame, news_csv_path: str = None, mined_feature
             'inv': lambda a: 1 / np.where(a == 0, 1e-9, a),
             'sin': np.sin, 'cos': np.cos, 'tan': np.tan,
             'max': np.maximum, 'min': np.minimum, 'abs': np.abs,
-            # Custom Operators
+            # Time Series Operators
             'ts_rank_10': lambda x: _ts_rank(x, 10),
+            'ts_rank_24': lambda x: _ts_rank(x, 24),
+            'ts_rank_72': lambda x: _ts_rank(x, 72),
             'ts_corr_10': lambda x, y: _ts_corr(x, y, 10),
+            'ts_corr_24': lambda x, y: _ts_corr(x, y, 24),
             'ts_decay_10': lambda x: _ts_decay_linear(x, 10),
+            'ts_decay_24': lambda x: _ts_decay_linear(x, 24),
             'ts_std_10': lambda x: _ts_std_dev(x, 10),
+            'ts_std_24': lambda x: _ts_std_dev(x, 24),
             'ts_min_10': lambda x: _ts_min(x, 10),
-            'ts_max_10': lambda x: _ts_max(x, 10)
+            'ts_min_24': lambda x: _ts_min(x, 24),
+            'ts_max_10': lambda x: _ts_max(x, 10),
+            'ts_max_24': lambda x: _ts_max(x, 24),
+            # Crypto-Specific Operators  
+            'zscore_24': lambda x: _zscore(x, 24),
+            'zscore_72': lambda x: _zscore(x, 72),
+            'momentum_8': lambda x: _momentum(x, 8),
+            'momentum_24': lambda x: _momentum(x, 24),
+            'delta_1': lambda x: _delta(x, 1),
+            'delta_8': lambda x: _delta(x, 8),
+            'sign': np.sign,
+            'clip': lambda x: np.clip(x, np.mean(x) - 3*np.std(x), np.mean(x) + 3*np.std(x)),
+            'cross_above': lambda x, y: ((np.roll(x, 1) <= np.roll(y, 1)) & (x > y)).astype(float)
         }
         
         # Multi-pass loading to handle dependencies (up to 3 passes should be plenty)
@@ -714,6 +760,11 @@ def generate_features(df: pd.DataFrame, news_csv_path: str = None, mined_feature
                     formula_str = mined_data.get("formula")
                     base_features = mined_data.get("base_features", [])
                     new_feature_name = mined_data.get("name")
+                    
+                    # --- SECURITY: Validate formula before eval ---
+                    if not validate_formula(formula_str):
+                        print(f"SECURITY: Skipping {new_feature_name} - formula contains unsafe characters: {formula_str[:50]}...")
+                        continue
                     
                     if new_feature_name in context_df.columns or new_feature_name in mined_features_df.columns:
                         continue # Already loaded
@@ -856,6 +907,11 @@ def merge_price_and_sentiment(price_df: pd.DataFrame, daily_sent_df: pd.DataFram
             sent.index = pd.to_datetime(sent.index).tz_localize('UTC')
     else:
         sent.index = sent.index.tz_convert('UTC')
+    
+    # CRITICAL FIX: Shift Sentiment +1 Day to avoid Lookahead Bias
+    # Daily Sentiment aggregates news from 00:00 to 23:59.
+    # It should only be available for decision making on the NEXT Day.
+    sent.index = sent.index + pd.Timedelta(days=1)
 
     # Now merge on the date key (left_on is tz-aware if p had tz)
     m = p.merge(sent, how='left', left_on='date', right_index=True)

@@ -137,9 +137,10 @@ async def main_loop(args):
         except Exception as e:
             trader_logger.error(f"Failed to load Transformer: {e}")
             
-    # Note: 'funding_arb' is intentionally ignored here as it runs in a separate process.
+        # Note: 'funding_arb' is intentionally ignored here as it runs in a separate process.
 
-        trader_logger.info(f"DEBUG: Added Transformer. Army now: {[s.strategy_name for s in strategy_army]}")
+    # --- Moved outside of Transformer block ---
+    trader_logger.info(f"DEBUG: Added Transformer (if enabled). Army now: {[s.strategy_name for s in strategy_army]}")
         
     trader_logger.info(f"Initialized {len(strategy_army)} strategies: {[s.strategy_name for s in strategy_army]}")
 
@@ -295,9 +296,8 @@ async def main_loop(args):
 
             if not data_for_pm:
                 trader_logger.warning("Failed to fetch market data for any symbol. Retrying in 60 seconds...")
-                # Skip sleep if in mock mode to speed up debugging, unless explicitly waiting
-                if not args.mock:
-                    await asyncio.sleep(60)
+                # FIX: Add small delay even in mock mode to prevent infinite fast loop
+                await asyncio.sleep(1 if args.mock else 60)
                 continue
 
             # 4.2 (后续逻辑与之前相同...)

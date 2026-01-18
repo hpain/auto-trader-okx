@@ -280,13 +280,40 @@ class CcxtExchange(Exchange):
             logger.info(f"Attempting to create order on {self.exchange.id}: {order_details_for_logging}")
             return await self.exchange.create_order(ccxt_symbol, order_type, side, amount, price)
 
-        except (RateLimitExceeded, RequestTimeout, NetworkError) as e:
-            logger.warning(
-                f"Temporary, retryable error creating order on {self.exchange.id}: {type(e).__name__}. "
-                f"{order_details_for_logging}. Error: {e}"
-            )
+        except (RateLimitExceeded, RequestTimeout, NetworkError, ExchangeNotAvailable) as e:
+            # --- FIX: Immediate retry for temporary errors (including maintenance) ---
+            # For hourly bots, waiting 1 hour for a 5-minute maintenance is wasteful.
+            # Use conservative intervals to avoid rate limiting: 30s, 60s, 120s (~3.5 min total)
+            retry_intervals = [30, 60, 120]  # seconds
+            max_retries = len(retry_intervals)
+            for attempt, wait_time in enumerate(retry_intervals, 1):
+                logger.warning(
+                    f"Temporary error creating order on {self.exchange.id}: {type(e).__name__}. "
+                    f"{order_details_for_logging}. Retry {attempt}/{max_retries} in {wait_time}s. Error: {e}"
+                )
+                await asyncio.sleep(wait_time)
+                
+                try:
+                    result = await self.exchange.create_order(ccxt_symbol, order_type, side, amount, price)
+                    logger.info(f"Order succeeded on retry {attempt} for {order_details_for_logging}")
+                    return result
+                except (RateLimitExceeded, RequestTimeout, NetworkError, ExchangeNotAvailable) as retry_e:
+                    e = retry_e  # Update for next iteration logging
+                    if attempt == max_retries:
+                        logger.error(
+                            f"All {max_retries} retries exhausted for order on {self.exchange.id}. "
+                            f"{order_details_for_logging}. Final error: {e}"
+                        )
+                        self._record_error()
+                        return None
+                except Exception as fatal_e:
+                    # Non-retryable error on retry - break immediately
+                    logger.error(f"Non-retryable error on retry: {fatal_e}")
+                    self._record_error()
+                    return None
+            
+            # Should not reach here, but safety fallback
             self._record_error()
-            # In a full implementation, this might raise a custom RetryableError
             return None
 
         except (InvalidOrder, InsufficientFunds) as e:

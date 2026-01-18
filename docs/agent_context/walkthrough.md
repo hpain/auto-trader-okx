@@ -56,3 +56,34 @@ A minimal, stateless runner designed for reliability.
 - **Result**: Bot enters if Rate > ~0.02%. This ensures every trade is mathematically profitable within the target timeframe.
 - **Troubleshooting**: Resolved `TypeError` where abstract methods were missing on VPS by executing `git reset --hard HEAD && git pull` to force sync.
 - **Status**: Deployed and Verified.
+
+---
+
+### 7. Comprehensive Code Review & Bug Fixes (2026-01-16)
+
+**Scope**: Full review of `improved_evolution.py`, `run_live.py`, `ccxt_exchange.py`, and `strategy_manager.py`.
+
+#### Critical Fixes (P0)
+| File | Issue | Impact |
+|------|-------|--------|
+| `improved_evolution.py` | Feature leakage risk (missing `symbol`, raw OHLCV in exclusion list) | Model could memorize non-generalizable patterns |
+| `improved_evolution.py` | Only 2 CV folds → statistically meaningless stability score | Optuna selecting overfit parameters |
+| `strategy_manager.py` | `AttributeError` - referenced `active_strategy` but defined `active_strategies` | Bot crash on strategy switch |
+| `run_live.py` | Indentation error causing debug log in wrong scope | Misleading logs |
+
+#### Important Fixes (P1)
+| File | Issue | Impact |
+|------|-------|--------|
+| `ccxt_exchange.py` | No retry for maintenance errors (OKX 50001) | Lost trading opportunities during 5-min maintenance |
+| `improved_evolution.py` | Wrong annualization factor (252 days instead of 365) | Sharpe underestimated by ~17% |
+| `improved_evolution.py` | Dead Optuna Pruner (no `trial.report()` calls) | Wasted compute on bad trials |
+| `run_live.py` | Mock mode infinite loop on data fetch failure | CPU spin |
+
+#### Key Changes
+1. **TimeSeriesSplit**: 2 → 5 folds
+2. **Order Retry**: Added 30s/60s/120s backoff for temporary errors
+3. **Feature Exclusion**: Now excludes `symbol`, raw OHLCV, legacy columns
+4. **Crypto Calendar**: 365 days × 24 hours for 1H Sharpe calculation
+
+**See**: [`bugfix_log_2026_01_16.md`](./bugfix_log_2026_01_16.md) for full details.
+
