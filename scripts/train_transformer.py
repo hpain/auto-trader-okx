@@ -102,14 +102,22 @@ def train_main(args):
     train_end_idx = int(len(df_labeled) * 0.7)
     val_end_idx = int(len(df_labeled) * 0.8)
     
+    # Fix: Overlap validation and test sets by window_size to prevent cold start data loss
+    # The first prediction in validation needs 'window_size' prior data points.
+    window_overlap = args.window
+    
     train_df = df_labeled.iloc[:train_end_idx]
-    val_df = df_labeled.iloc[train_end_idx:val_end_idx]
-    test_df = df_labeled.iloc[val_end_idx:]  # Reserved for final evaluation
+    
+    val_df = df_labeled.iloc[max(0, train_end_idx - window_overlap) : val_end_idx]
+    test_df = df_labeled.iloc[max(0, val_end_idx - window_overlap) :]  # Reserved for final evaluation
     
     logger.info(f"Split: Train={len(train_df)}, Val={len(val_df)}, Test={len(test_df)}")
     
     # Select feature columns
-    exclude = ['y'] + [c for c in df_labeled.columns if 'future' in c]
+    # CRITICAL FIX: Exclude raw price columns to prevent non-stationarity overfitting.
+    # The model should learn from rates of change (RSI, PCT_CHANGE), not absolute price levels (BTC=60k).
+    raw_prices = ['open', 'high', 'low', 'close', 'volume', 'open_interest', 'symbol']
+    exclude = ['y'] + raw_prices + [c for c in df_labeled.columns if 'future' in c]
     feature_cols = [c for c in df_labeled.columns if c not in exclude and np.issubdtype(df_labeled[c].dtype, np.number)]
     
     logger.info(f"Training with {len(feature_cols)} features.")
@@ -186,4 +194,3 @@ if __name__ == "__main__":
         logger.info("Training interrupted by user.")
     except Exception as e:
         logger.error(f"Training failed: {e}", exc_info=True)
-

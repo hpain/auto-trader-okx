@@ -56,6 +56,7 @@ class TimeSeriesTransformer(nn.Module if HAS_TORCH else object):
     def __init__(self, input_dim, d_model=64, nhead=4, num_layers=2, dropout=0.4):
         super(TimeSeriesTransformer, self).__init__()
         
+        self.d_model = d_model
         # 1. Input Projection
         self.embedding = nn.Linear(input_dim, d_model)
         
@@ -80,15 +81,18 @@ class TimeSeriesTransformer(nn.Module if HAS_TORCH else object):
         # src: [Batch, Seq_Len, Features]
         
         # Embed inputs
-        x = self.embedding(src) # [Batch, Seq_Len, d_model]
+        # CRITICAL FIX: Scale embeddings by sqrt(d_model)
+        # Without this, Positional Encodings dominate the signal
+        x = self.embedding(src) * math.sqrt(self.d_model)
         x = self.pos_encoder(x) # Add position info
         
         # Transformer output: [Batch, Seq_Len, d_model]
         output = self.transformer_encoder(x)
         
-        # Global Average Pooling (better than taking just the last step)
-        # Allows the model to aggregate signals from the entire window
-        x = torch.mean(output, dim=1) 
+        # CRITICAL FIX: Use Last Token instead of Mean Pooling
+        # In Time Series, the latest state (t) is the decision point.
+        # Averaging dilutes the most recent signal with history from t-60.
+        x = output[:, -1, :] 
         
         # Project to target
         prediction = self.decoder(x)
