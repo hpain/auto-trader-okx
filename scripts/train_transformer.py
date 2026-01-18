@@ -69,31 +69,45 @@ def train_main(args):
     
     logger.info(f"Loaded {len(df)} rows.")
 
-    # Handle multi-symbol data (e.g., CLEAN_UNIVERSAL with BTC+ETH)
-    if 'symbol' in df.columns:
-        symbols = df['symbol'].unique()
-        logger.info(f"Multi-symbol data detected: {symbols.tolist()}")
-        # Use only the first symbol for training (typically BTC)
-        primary_symbol = symbols[0]
-        df = df[df['symbol'] == primary_symbol].copy()
-        logger.info(f"Using {primary_symbol} for training: {len(df)} rows")
-
-    # 2. Generate Features
-    logger.info("Generating features (including logical derivatives)...")
-    df_features = generate_features(df)
+    # 2. Generate Features & Labeling (Per Symbol to avoid data bleeding)
+    logger.info("Generating features and labels per symbol...")
     
-    # 3. Labeling using Triple Barrier (IMPROVED from simple threshold)
-    # Triple Barrier is superior because it considers:
-    # - Take Profit (upside)
-    # - Stop Loss (downside)  
-    # - Timeout (time decay)
-    logger.info(f"Applying Triple Barrier labeling (TP={args.tp}, SL={args.sl}, Timeout={args.timeout})...")
-    df_labeled = apply_triple_barrier(df_features, tp=args.tp, sl=args.sl, timeout=args.timeout)
+    if 'symbol' not in df.columns:
+        df['symbol'] = 'default'
+        
+    symbols = df['symbol'].unique()
+    logger.info(f"Processing symbols: {symbols.tolist()}")
+    
+    processed_chunks = []
+    for sym in symbols:
+        # Filter & Sort
+        sub_df = df[df['symbol'] == sym].copy()
+        if sub_df.empty: continue
+        sub_df.sort_index(inplace=True)
+        
+        # Features
+        sub_df = generate_features(sub_df)
+        
+        # Labeling
+        sub_df = apply_triple_barrier(sub_df, tp=args.tp, sl=args.sl, timeout=args.timeout)
+        
+        # Drop NaNs per chunk
+        sub_df.dropna(inplace=True)
+        
+        processed_chunks.append(sub_df)
+        logger.info(f"  -> {sym}: {len(sub_df)} rows ready.")
+        
+    if not processed_chunks:
+        logger.error("No data remaining after processing.")
+        return
+
+    df_labeled = pd.concat(processed_chunks)
+    # Sort by index to maintain temporal order (crucial for Universal dataset with shifted timestamps)
+    df_labeled.sort_index(inplace=True)
+    
     target_col = 'y'
     
-    # Drop NaNs
-    df_labeled.dropna(inplace=True)
-    logger.info(f"Data after labeling & dropping NaNs: {len(df_labeled)}")
+    logger.info(f"Total Data after labeling & merging: {len(df_labeled)}")
     
     # Log label distribution
     label_counts = df_labeled[target_col].value_counts()

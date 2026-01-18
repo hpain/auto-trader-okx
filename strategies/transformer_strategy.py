@@ -19,92 +19,64 @@ except ImportError:
     
 from features.tensor_loader import create_lazy_loader
 
-class PositionalEncoding(nn.Module if HAS_TORCH else object):
+class TimeSeriesGRU(nn.Module if HAS_TORCH else object):
     """
-    Injects some information about the relative or absolute position of the tokens in the sequence.
-    The positional encodings have the same dimension as the embeddings, so that the two can be summed.
+    Switching to GRU (Gated Recurrent Unit) which is more robust for smaller datasets (<100k samples).
+    Transformer was overfitting/underfitting (Val Loss > Baseline).
     """
-    def __init__(self, d_model, dropout=0.1, max_len=5000):
-        super(PositionalEncoding, self).__init__()
-        self.dropout = nn.Dropout(p=dropout)
-
-        pe = torch.zeros(max_len, d_model)
-        position = torch.arange(0, max_len, dtype=torch.float).unsqueeze(1)
-        div_term = torch.exp(torch.arange(0, d_model, 2).float() * (-math.log(10000.0) / d_model))
+    def __init__(self, input_dim, d_model=64, num_layers=2, dropout=0.2):
+        super(TimeSeriesGRU, self).__init__()
         
-        pe[:, 0::2] = torch.sin(position * div_term)
-        pe[:, 1::2] = torch.cos(position * div_term)
-        
-        pe = pe.unsqueeze(0) # [1, max_len, d_model]
-        self.register_buffer('pe', pe)
-
-    def forward(self, x):
-        # x: [Batch, Seq_Len, d_model]
-        x = x + self.pe[:, :x.size(1), :]
-        return self.dropout(x)
-
-class TimeSeriesTransformer(nn.Module if HAS_TORCH else object):
-    """
-    Advanced Transformer for Time Series Forecasting.
-    Input: (Batch, Seq_Len, Features)
-    Output: (Batch, 1) -> Binary Classification (Up/Down) via Logits
-    
-    Note: Reduced complexity after observing overfitting with 24k training samples.
-    Original: d_model=128, num_layers=3, dropout=0.2
-    New: d_model=64, num_layers=2, dropout=0.4
-    """
-    def __init__(self, input_dim, d_model=64, nhead=4, num_layers=2, dropout=0.4):
-        super(TimeSeriesTransformer, self).__init__()
-        
-        self.d_model = d_model
-        # 1. Input Projection
-        self.embedding = nn.Linear(input_dim, d_model)
-        
-        # 2. Positional Encoding (Crucial for Sequence Data)
-        self.pos_encoder = PositionalEncoding(d_model, dropout)
-        
-        # 3. Transformer Encoder (simplified for regularization)
-        # batch_first=True is important!
-        self.encoder_layer = nn.TransformerEncoderLayer(d_model=d_model, nhead=nhead, batch_first=True, dropout=dropout)
-        self.transformer_encoder = nn.TransformerEncoder(self.encoder_layer, num_layers=num_layers)
-        
-        # 4. Output Head (simplified MLP - less prone to overfitting)
-        self.decoder = nn.Sequential(
-            nn.Dropout(dropout),  # Extra dropout before final layer
-            nn.Linear(d_model, 1) # Direct projection to output
+        # 1. Input Projection (Optional, but helps to map features to hidden dim)
+        self.input_proj = nn.Sequential(
+            nn.Linear(input_dim, d_model),
+            nn.ReLU(),
+            nn.Dropout(dropout)
         )
         
-        self.input_dim = input_dim
+        # 2. GRU Layer
+        # batch_first=True: Input is (Batch, Seq, Feature)
+        self.rnn = nn.GRU(
+            input_size=d_model, 
+            hidden_size=d_model, 
+            num_layers=num_layers, 
+            batch_first=True, 
+            dropout=dropout if num_layers > 1 else 0
+        )
+        
+        # 3. Output Head
+        self.decoder = nn.Sequential(
+            nn.Linear(d_model, d_model // 2),
+            nn.ReLU(),
+            nn.Dropout(dropout),
+            nn.Linear(d_model // 2, 1)
+        )
 
 
     def forward(self, src):
         # src: [Batch, Seq_Len, Features]
         
-        # Embed inputs
-        # CRITICAL FIX: Scale embeddings by sqrt(d_model)
-        # Without this, Positional Encodings dominate the signal
-        x = self.embedding(src) * math.sqrt(self.d_model)
-        x = self.pos_encoder(x) # Add position info
+        # Project Input
+        x = self.input_proj(src)
         
-        # Transformer output: [Batch, Seq_Len, d_model]
-        output = self.transformer_encoder(x)
+        # RNN Forward
+        # out: (Batch, Seq, Hidden), hn: (Layers, Batch, Hidden)
+        out, _ = self.rnn(x)
         
-        # CRITICAL FIX: Use Last Token instead of Mean Pooling
-        # In Time Series, the latest state (t) is the decision point.
-        # Averaging dilutes the most recent signal with history from t-60.
-        x = output[:, -1, :] 
+        # Take the last time step
+        last_step = out[:, -1, :]
         
         # Project to target
-        prediction = self.decoder(x)
+        prediction = self.decoder(last_step)
         return prediction # Return raw logits
 
 class TransformerStrategy:
     """
-    Transformer-based Trading Strategy (Phase 2 Upgrade).
+    Deep Learning Strategy (Currently using GRU for stability on small datasets).
     Hardware Agnostic: Runs on CPU or CUDA.
     Memory Optimized: Uses Lazy Loading for low RAM environments.
     """
-    def __init__(self, strategy_name="Transformer_v2", window_size=60, features=None, buy_threshold=0.60, sell_threshold=0.40):
+    def __init__(self, strategy_name="Transformer_v2", window_size=60, features=None, buy_threshold=0.60, sell_threshold=0.40, dropout=0.2):
         self.logger = logging.getLogger(__name__)
         self.strategy_name = strategy_name
         self.window_size = window_size
@@ -114,6 +86,7 @@ class TransformerStrategy:
         self.buy_threshold = buy_threshold
         self.sell_threshold = sell_threshold
         self.logger.info(f"Thresholds -> Buy: {self.buy_threshold}, Sell: {self.sell_threshold}")
+        self.dropout = dropout
         
         self.device = 'cpu'
         self.model = None
@@ -127,11 +100,11 @@ class TransformerStrategy:
 
     def build_model(self, input_dim, pos_weight=None):
         if not HAS_TORCH: return
-        self.model = TimeSeriesTransformer(input_dim=input_dim).to(self.device).float()
+        # Use the new GRU model (renamed class or swapped implementation)
+        self.model = TimeSeriesGRU(input_dim=input_dim, dropout=self.dropout).to(self.device).float()
         
-        # Use AdamW with lower LR and higher weight decay for regularization
-        # Original: lr=0.0003, weight_decay=1e-3 caused overfitting
-        self.optimizer = optim.AdamW(self.model.parameters(), lr=0.0001, weight_decay=1e-2)
+        # Increased LR to 0.001 to help model escape baseline
+        self.optimizer = optim.AdamW(self.model.parameters(), lr=0.001, weight_decay=1e-3)
         
         # Scheduler to reduce LR when loss plateaus
         self.scheduler = optim.lr_scheduler.ReduceLROnPlateau(self.optimizer, mode='min', factor=0.5, patience=5)
@@ -333,9 +306,9 @@ class TransformerStrategy:
             # Fallback for un-normalized raw data (Not recommended for Transformer)
             self.logger.warning("No scaler loaded! Models trained on scaled data will fail with raw input.")
             try:
-                # Ensure we only pick numeric columns
-                numeric_df = df.select_dtypes(include=[np.number])
-                # Limit to input dim
+                # Ensure we only pick numeric columns (simple heuristic)
+                numeric_df = df.select_dtypes(include=[np.number]) 
+                # Try to match input dim blindly if features not set
                 if self.model.input_dim <= len(numeric_df.columns):
                      target_cols = numeric_df.columns.tolist()[:self.model.input_dim]
                 else:
