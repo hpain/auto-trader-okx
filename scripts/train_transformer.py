@@ -97,6 +97,14 @@ def train_main(args):
     # Log label distribution
     label_counts = df_labeled[target_col].value_counts()
     logger.info(f"Label distribution: {label_counts.to_dict()}")
+    
+    # Calculate Baseline Loss (Random Guessing based on Class Prior)
+    # If model loss is near this value, it's not learning features, just the bias.
+    p_up = label_counts.get(1, 0) / len(df_labeled)
+    p_down = 1 - p_up
+    # Binary Cross Entropy of the mean
+    baseline_loss = - (p_up * np.log(p_up + 1e-9) + p_down * np.log(p_down + 1e-9))
+    logger.info(f"BASELINE LOSS (Predicting Mean): {baseline_loss:.4f}. If Val Loss is near this, model is not learning.")
 
     # 4. Splitting & Scaling (70% train, 10% val, 20% test)
     train_end_idx = int(len(df_labeled) * 0.7)

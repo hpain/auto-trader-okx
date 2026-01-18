@@ -53,7 +53,7 @@ class TimeSeriesTransformer(nn.Module if HAS_TORCH else object):
     Original: d_model=128, num_layers=3, dropout=0.2
     New: d_model=64, num_layers=2, dropout=0.4
     """
-    def __init__(self, input_dim, d_model=64, nhead=4, num_layers=2, dropout=0.4):
+    def __init__(self, input_dim, d_model=64, nhead=4, num_layers=2, dropout=0.2):
         super(TimeSeriesTransformer, self).__init__()
         
         self.d_model = d_model
@@ -131,7 +131,7 @@ class TransformerStrategy:
         
         # Use AdamW with lower LR and higher weight decay for regularization
         # Original: lr=0.0003, weight_decay=1e-3 caused overfitting
-        self.optimizer = optim.AdamW(self.model.parameters(), lr=0.0001, weight_decay=1e-2)
+        self.optimizer = optim.AdamW(self.model.parameters(), lr=0.001, weight_decay=1e-2)
         
         # Scheduler to reduce LR when loss plateaus
         self.scheduler = optim.lr_scheduler.ReduceLROnPlateau(self.optimizer, mode='min', factor=0.5, patience=5)
@@ -215,6 +215,7 @@ class TransformerStrategy:
                 
                 # Validation evaluation
                 val_loss_str = ""
+                avg_val_loss = None
                 if val_loader is not None and len(val_loader) > 0:
                     self.model.eval()
                     val_loss = 0
@@ -248,7 +249,10 @@ class TransformerStrategy:
                 
                 # Step the scheduler
                 if hasattr(self, 'scheduler'):
-                    self.scheduler.step(avg_loss)
+                    if avg_val_loss is not None:
+                        self.scheduler.step(avg_val_loss)
+                    else:
+                        self.scheduler.step(avg_loss)
                 
                 current_lr = self.optimizer.param_groups[0]['lr']
                 self.logger.info(f"Epoch {epoch+1}/{epochs} - Loss: {avg_loss:.4f}{val_loss_str} - LR: {current_lr:.6f}")
