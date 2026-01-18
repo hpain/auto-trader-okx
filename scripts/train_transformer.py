@@ -12,6 +12,7 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from strategies.transformer_strategy import TransformerStrategy
 from features.feature_engineering import generate_features, apply_triple_barrier
 from sklearn.preprocessing import StandardScaler
+from sklearn.ensemble import RandomForestClassifier
 
 # Setup Logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -129,6 +130,21 @@ def train_main(args):
     feature_cols = [c for c in df_labeled.columns if c not in exclude and np.issubdtype(df_labeled[c].dtype, np.number)]
     
     logger.info(f"Training with {len(feature_cols)} features.")
+    
+    # --- FEATURE SELECTION STEP ---
+    # Use Random Forest to pick top features. Transformer hates noise.
+    logger.info("Running Feature Selection via RandomForest...")
+    rf = RandomForestClassifier(n_estimators=100, max_depth=5, random_state=42, n_jobs=-1)
+    rf.fit(train_df[feature_cols], train_df[target_col])
+    
+    importances = pd.Series(rf.feature_importances_, index=feature_cols).sort_values(ascending=False)
+    # Keep top 30 features or those with importance > 0.01
+    top_n = 30
+    selected_features = importances.head(top_n).index.tolist()
+    logger.info(f"Selected Top {len(selected_features)} Features: {selected_features}")
+    
+    feature_cols = selected_features
+    # ------------------------------
 
     # Fit Scaler
     scaler = StandardScaler()

@@ -53,7 +53,7 @@ class TimeSeriesTransformer(nn.Module if HAS_TORCH else object):
     Original: d_model=128, num_layers=3, dropout=0.2
     New: d_model=64, num_layers=2, dropout=0.4
     """
-    def __init__(self, input_dim, d_model=64, nhead=4, num_layers=2, dropout=0.2):
+    def __init__(self, input_dim, d_model=64, nhead=4, num_layers=2, dropout=0.4):
         super(TimeSeriesTransformer, self).__init__()
         
         self.d_model = d_model
@@ -131,7 +131,7 @@ class TransformerStrategy:
         
         # Use AdamW with lower LR and higher weight decay for regularization
         # Original: lr=0.0003, weight_decay=1e-3 caused overfitting
-        self.optimizer = optim.AdamW(self.model.parameters(), lr=0.001, weight_decay=1e-2)
+        self.optimizer = optim.AdamW(self.model.parameters(), lr=0.0001, weight_decay=1e-2)
         
         # Scheduler to reduce LR when loss plateaus
         self.scheduler = optim.lr_scheduler.ReduceLROnPlateau(self.optimizer, mode='min', factor=0.5, patience=5)
