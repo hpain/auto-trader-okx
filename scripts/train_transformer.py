@@ -133,13 +133,10 @@ def train_main(args):
         sell_threshold=0.4
     )
     
-    # Calculate class weight for imbalance handling
-    pos_count = (train_df[target_col] == 1).sum()
-    neg_count = (train_df[target_col] == 0).sum()
-    pos_weight = neg_count / pos_count if pos_count > 0 else 1.0
-    logger.info(f"Class weight (neg/pos ratio): {pos_weight:.2f}")
-    
-    strategy.build_model(input_dim=len(feature_cols), pos_weight=pos_weight)
+    # Note: NOT using pos_weight for Transformer as it causes overfitting
+    # LGB also works better without it - the model should focus on precision
+    # rather than trying to predict more class 1s
+    strategy.build_model(input_dim=len(feature_cols))
     strategy.scaler = scaler
     
     # 6. Train
