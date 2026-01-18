@@ -48,8 +48,12 @@ class TimeSeriesTransformer(nn.Module if HAS_TORCH else object):
     Advanced Transformer for Time Series Forecasting.
     Input: (Batch, Seq_Len, Features)
     Output: (Batch, 1) -> Binary Classification (Up/Down) via Logits
+    
+    Note: Reduced complexity after observing overfitting with 24k training samples.
+    Original: d_model=128, num_layers=3, dropout=0.2
+    New: d_model=64, num_layers=2, dropout=0.4
     """
-    def __init__(self, input_dim, d_model=128, nhead=4, num_layers=3, dropout=0.2):
+    def __init__(self, input_dim, d_model=64, nhead=4, num_layers=2, dropout=0.4):
         super(TimeSeriesTransformer, self).__init__()
         
         # 1. Input Projection
@@ -58,20 +62,19 @@ class TimeSeriesTransformer(nn.Module if HAS_TORCH else object):
         # 2. Positional Encoding (Crucial for Sequence Data)
         self.pos_encoder = PositionalEncoding(d_model, dropout)
         
-        # 3. Transformer Encoder
+        # 3. Transformer Encoder (simplified for regularization)
         # batch_first=True is important!
         self.encoder_layer = nn.TransformerEncoderLayer(d_model=d_model, nhead=nhead, batch_first=True, dropout=dropout)
         self.transformer_encoder = nn.TransformerEncoder(self.encoder_layer, num_layers=num_layers)
         
-        # 4. Output Head (MLP)
+        # 4. Output Head (simplified MLP - less prone to overfitting)
         self.decoder = nn.Sequential(
-            nn.Linear(d_model, 64),
-            nn.ReLU(),
-            nn.Dropout(dropout),
-            nn.Linear(64, 1) # Output Logits
+            nn.Dropout(dropout),  # Extra dropout before final layer
+            nn.Linear(d_model, 1) # Direct projection to output
         )
         
         self.input_dim = input_dim
+
 
     def forward(self, src):
         # src: [Batch, Seq_Len, Features]
@@ -122,8 +125,9 @@ class TransformerStrategy:
         if not HAS_TORCH: return
         self.model = TimeSeriesTransformer(input_dim=input_dim).to(self.device).float()
         
-        # Use AdamW for better regularization
-        self.optimizer = optim.AdamW(self.model.parameters(), lr=0.0003, weight_decay=1e-3)
+        # Use AdamW with lower LR and higher weight decay for regularization
+        # Original: lr=0.0003, weight_decay=1e-3 caused overfitting
+        self.optimizer = optim.AdamW(self.model.parameters(), lr=0.0001, weight_decay=1e-2)
         
         # Scheduler to reduce LR when loss plateaus
         self.scheduler = optim.lr_scheduler.ReduceLROnPlateau(self.optimizer, mode='min', factor=0.5, patience=5)
