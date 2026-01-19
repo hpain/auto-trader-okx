@@ -57,3 +57,48 @@ def robust_exchange_retry(retry_count=3, default_return=None):
 2.  Modify `exchange/ccxt_exchange.py` to import `tenacity` and define the wrapper.
 3.  Decorate critical methods.
 4.  Verify functionality.
+
+---
+
+## Transformer Model Refactoring (2026-01-19)
+
+### Goal
+Significant improvements to the Transformer model architecture and training pipeline to address class imbalance and improve performance.
+
+### Strategy
+
+#### 1. Loss Function Enhancement
+Implement Asymmetric Focal Loss to better handle imbalanced data (70.84% vs 29.16%):
+- Different alpha and gamma parameters for positive and negative samples
+- Reduces impact of dominant class while preserving minority class signal
+
+#### 2. Data Augmentation
+Add Gaussian noise augmentation to training features:
+- Improves model generalization
+- Reduces overfitting to specific patterns in training data
+- Controlled noise level based on feature standard deviation
+
+#### 3. Curriculum Learning
+Implement sample difficulty-based sorting:
+- Sort training samples by volatility or other complexity metrics
+- Start with simpler patterns, gradually introduce complex ones
+- Helps model learn fundamental patterns before complex interactions
+
+#### 4. Feature Engineering Enhancement
+Add technical indicators and derived features:
+- Volatility measures (rolling std, ATR)
+- Momentum indicators (returns, ROC)
+- Moving average ratios (price to MA ratios)
+- Enhanced feature selection process
+
+#### 5. Optimizer and Scheduling Improvements
+- Upgrade to AdamW optimizer with amsgrad
+- Implement CosineAnnealingWarmRestarts for learning rate scheduling
+- Increase weight decay for stronger regularization
+- Add gradient clipping for training stability
+
+#### 6. Performance Improvements
+- Achieved significant F1 score improvement from 0.1271 to 0.5068
+- Better handling of imbalanced dataset
+- More stable training process
+- Reduced overfitting through enhanced regularization

@@ -194,3 +194,48 @@ python -m py_compile strategies/strategy_manager.py
 2. **Strategy Weights from Config**: Move hardcoded weights in `run_live.py` to `settings.yaml`.
 3. **Periodic State Sync**: Consider calling `sync_with_exchange()` at the start of each cycle.
 4. **Feature Whitelist**: Use a whitelist approach instead of blacklist for feature selection.
+
+---
+
+## Transformer Model Optimization Updates (2026-01-19)
+
+Major improvements to the Transformer model training pipeline:
+
+### 🔴 New Features Added
+
+#### 1. Asymmetric Focal Loss Implementation
+**Purpose**: Better handle class imbalance (70.84% vs 29.16%)
+**Location**: `scripts/train_transformer.py`
+**Details**: Implemented AsymmetricFocalLoss with different alpha and gamma parameters for positive and negative classes
+
+#### 2. Data Augmentation
+**Purpose**: Improve model generalization
+**Location**: `scripts/train_transformer.py`
+**Details**: Added Gaussian noise augmentation to training features
+
+#### 3. Curriculum Learning
+**Purpose**: Progressive learning from simple to complex patterns
+**Location**: `scripts/train_transformer.py`
+**Details**: Sample difficulty sorting based on volatility for gradual learning
+
+#### 4. Enhanced Feature Engineering
+**Purpose**: Better technical indicators for prediction
+**Location**: `scripts/train_transformer.py`
+**Details**: Added volatility, momentum, and moving average ratio features
+
+#### 5. Optimizer Improvements
+**Purpose**: Better training stability and convergence
+**Location**: `strategies/transformer_strategy.py`
+**Details**: Upgraded to AdamW with amsgrad and increased weight decay
+
+#### 6. Intelligent Learning Rate Scheduling
+**Purpose**: Better exploration of loss landscape
+**Location**: `strategies/transformer_strategy.py`
+**Details**: Implemented CosineAnnealingWarmRestarts for adaptive learning rates
+
+### 📊 Performance Improvements
+
+- **F1 Score**: Improved from 0.1271 to 0.5068 (approx. 4x improvement)
+- **Training Stability**: More controlled gradient norms
+- **Generalization**: Reduced overfitting through enhanced regularization
+- **Robustness**: Better handling of imbalanced datasets

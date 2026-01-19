@@ -296,7 +296,6 @@ def train_main(args):
 
     # 9.5 Data Augmentation for Time Series
     # Apply Gaussian noise augmentation to training data to improve generalization
-    import numpy as np
     augmentation_factor = 0.1  # 10% of the standard deviation
     noise_factor = 0.05  # Additional noise factor
 

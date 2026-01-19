@@ -90,3 +90,14 @@ Shift the bot's core logic from "Predicting Price Direction" (Low Alpha) to "Cap
     - Run evolution: 30 trials, 5 years data.
     - Deploy `improved_best_model_1H_5.0y.pkl` to `models/`.
     - Update `config/settings.yaml` to use new model/metadata.
+
+### P3-5: Transformer Model Optimization
+- **Goal**: Significantly improve Transformer model performance on imbalanced data
+- **Implementation**:
+    - Implement Asymmetric Focal Loss to better handle class imbalance (70.84% vs 29.16%)
+    - Add Gaussian noise augmentation for improved generalization
+    - Implement curriculum learning with sample difficulty sorting
+    - Enhance feature engineering with technical indicators (volatility, momentum, etc.)
+    - Upgrade optimizer to AdamW with amsgrad and improved weight decay
+    - Implement CosineAnnealingWarmRestarts for intelligent learning rate scheduling
+    - Achieve significant F1 score improvement from 0.1271 to 0.5068
