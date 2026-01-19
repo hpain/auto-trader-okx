@@ -67,21 +67,20 @@ class TimeSeriesTransformer(nn.Module if HAS_TORCH else object):
         self.pos_encoder = PositionalEncoding(d_model, dropout)
 
         # 3. Transformer Encoder Layers with enhanced architecture
-        encoder_layers = nn.ModuleList()
-        for _ in range(num_layers):
-            encoder_layer = nn.TransformerEncoderLayer(
-                d_model=d_model,
-                nhead=nhead,
-                dim_feedforward=d_model * 4,  # Larger FF layer for more capacity
-                batch_first=True,
-                dropout=dropout,
-                activation='gelu',  # Use GELU activation for better performance
-                layer_norm_eps=1e-5  # Smaller epsilon for numerical stability
-            )
-            encoder_layers.append(encoder_layer)
+        # Create a single encoder layer template
+        encoder_layer = nn.TransformerEncoderLayer(
+            d_model=d_model,
+            nhead=nhead,
+            dim_feedforward=d_model * 4,  # Larger FF layer for more capacity
+            batch_first=True,
+            dropout=dropout,
+            activation='gelu',  # Use GELU activation for better performance
+            layer_norm_eps=1e-5  # Smaller epsilon for numerical stability
+        )
 
         self.transformer_encoder = nn.TransformerEncoder(
-            encoder_layers
+            encoder_layer,
+            num_layers=num_layers
         )
 
         # 4. Enhanced Output Head with multiple layers for better representation
