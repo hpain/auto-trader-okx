@@ -135,7 +135,7 @@ class TransformerStrategy:
         else:
             self.logger.warning("PyTorch not installed. Strategy disabled.")
 
-    def build_model(self, input_dim, d_model=64, nhead=4, num_layers=2, dropout=0.3):
+    def build_model(self, input_dim, d_model=64, nhead=4, num_layers=2, dropout=0.3, lr=0.0001):
         if not HAS_TORCH: return
         self.model = TimeSeriesTransformer(
             input_dim=input_dim,
@@ -146,7 +146,7 @@ class TransformerStrategy:
         ).to(self.device).float()
 
         # Use AdamW for better regularization with configurable learning rate
-        self.optimizer = optim.AdamW(self.model.parameters(), lr=0.0001, weight_decay=1e-3)
+        self.optimizer = optim.AdamW(self.model.parameters(), lr=lr, weight_decay=1e-3)
 
         # Scheduler to reduce LR when loss plateaus
         self.scheduler = optim.lr_scheduler.ReduceLROnPlateau(self.optimizer, mode='min', factor=0.5, patience=5)
@@ -155,7 +155,7 @@ class TransformerStrategy:
         # Using pos_weight to handle class imbalance if needed (future upgrade)
         self.criterion = nn.BCEWithLogitsLoss()
 
-        self.logger.info(f"Model built with Input Dim: {input_dim}, d_model: {d_model}, nhead: {nhead}, num_layers: {num_layers}, dropout: {dropout}")
+        self.logger.info(f"Model built with Input Dim: {input_dim}, d_model: {d_model}, nhead: {nhead}, num_layers: {num_layers}, dropout: {dropout}, lr: {lr}")
 
     def train_model(self, df: pd.DataFrame, target_col='target_up', epochs=10, batch_size=32):
         """
