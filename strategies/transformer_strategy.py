@@ -174,7 +174,8 @@ class TransformerStrategy:
         self.model.apply(init_weights)
 
         # Use AdamW for better regularization with configurable learning rate
-        self.optimizer = optim.AdamW(self.model.parameters(), lr=lr, weight_decay=1e-3)
+        # Increase weight decay for stronger regularization
+        self.optimizer = optim.AdamW(self.model.parameters(), lr=lr, weight_decay=5e-3)
 
         # Scheduler to reduce LR when loss plateaus
         self.scheduler = optim.lr_scheduler.ReduceLROnPlateau(self.optimizer, mode='min', factor=0.5, patience=5)

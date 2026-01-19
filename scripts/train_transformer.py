@@ -211,26 +211,39 @@ def train_main(args):
     # Use balanced loss function with calculated pos_weight
     import torch
     import torch.nn as nn
-    # Use Focal Loss to better handle imbalanced dataset
+    # Use Asymmetric Focal Loss to better handle imbalanced dataset
     from torch.nn import functional as F
 
-    class FocalLoss(nn.Module):
-        def __init__(self, alpha=1, gamma=2, reduction='mean'):
-            super(FocalLoss, self).__init__()
-            self.alpha = alpha
-            self.gamma = gamma
+    class AsymmetricFocalLoss(nn.Module):
+        def __init__(self, alpha_pos=1, alpha_neg=1, gamma_pos=1, gamma_neg=2, reduction='mean'):
+            super(AsymmetricFocalLoss, self).__init__()
+            self.alpha_pos = alpha_pos  # Weight for positive samples
+            self.alpha_neg = alpha_neg  # Weight for negative samples
+            self.gamma_pos = gamma_pos  # Focusing parameter for positive samples
+            self.gamma_neg = gamma_neg  # Focusing parameter for negative samples
             self.reduction = reduction
 
         def forward(self, inputs, targets):
             # Compute sigmoid of inputs
             p = torch.sigmoid(inputs)
-            # When target is 1, probability of correct classification is p
-            # When target is 0, probability of correct classification is (1-p)
-            pt = torch.where(targets == 1, p, 1 - p)
+            # For positive targets (1), we use p as probability of correct classification
+            # For negative targets (0), we use (1-p) as probability of correct classification
+            p_t = torch.where(targets == 1, p, 1 - p)
+
             # Compute cross entropy loss
             ce_loss = F.binary_cross_entropy_with_logits(inputs, targets, reduction='none')
-            # Compute focal weight - use more conservative approach to prevent over-confidence
-            focal_weight = self.alpha * (1 - pt) ** self.gamma
+
+            # Compute asymmetric focal weights
+            # For positive samples (targets == 1): apply alpha_pos and gamma_pos
+            # For negative samples (targets == 0): apply alpha_neg and gamma_neg
+            alpha_t = torch.where(targets == 1, torch.tensor(self.alpha_pos, device=inputs.device),
+                                  torch.tensor(self.alpha_neg, device=inputs.device))
+            gamma_t = torch.where(targets == 1, torch.tensor(self.gamma_pos, device=inputs.device),
+                                  torch.tensor(self.gamma_neg, device=inputs.device))
+
+            # Compute focal weight
+            focal_weight = alpha_t * torch.pow((1 - p_t), gamma_t)
+
             # Apply focal weight to cross entropy loss
             focal_loss = focal_weight * ce_loss
 
@@ -241,9 +254,14 @@ def train_main(args):
             else:
                 return focal_loss
 
-    # Use Focal Loss with more conservative gamma to prevent overfitting
-    # Reduce alpha to prevent over-emphasis on minority class
-    strategy.criterion = FocalLoss(alpha=min(pos_weight, 1.5), gamma=1.5)
+    # Use Asymmetric Focal Loss with different parameters for positive and negative classes
+    # This allows us to differently tune the focus on each class
+    strategy.criterion = AsymmetricFocalLoss(
+        alpha_pos=min(pos_weight, 2.0),  # Higher weight for positive (minority) class
+        alpha_neg=1.0,                   # Standard weight for negative (majority) class
+        gamma_pos=1.0,                   # Less aggressive focusing for positive class
+        gamma_neg=2.0                    # More aggressive focusing for negative class
+    )
 
     strategy.scaler = scaler
 
@@ -398,13 +416,31 @@ def train_main(args):
             for param_group in strategy.optimizer.param_groups:
                 param_group['lr'] = max(param_group['lr'] * 0.8, 1e-6)
 
+        # Additional LR adjustment based on F1 score improvement
+        if epoch > 5 and val_f1 < best_val_f1 * 0.95:  # If F1 score is significantly behind best
+            # Reduce learning rate to allow for fine-tuning
+            for param_group in strategy.optimizer.param_groups:
+                param_group['lr'] = max(param_group['lr'] * 0.9, 1e-6)
+
         logger.info(f"Epoch {epoch+1}/{args.epochs} - Train: {avg_train_loss:.4f} (Acc: {train_acc:.4f}, F1: {train_f1:.4f}) - Val: {avg_val_loss:.4f} (Acc: {val_acc:.4f}, F1: {val_f1:.4f}) - Grad: {avg_grad_norm:.2f} - LR: {current_lr:.6f}")
 
         # Early stopping based on validation F1 score (more appropriate for imbalanced data)
         # Also consider improvement in loss to avoid stopping too early on F1 fluctuations
         # Additionally, track the trend of metrics to avoid stopping prematurely
         # Also check for signs of overfitting (loss going too low)
-        if val_f1 > best_val_f1 or (val_f1 >= best_val_f1 * 0.99 and avg_val_loss < best_val_loss):
+
+        # Calculate improvement in F1 score compared to best
+        f1_improvement = val_f1 - best_val_f1
+        loss_improvement = best_val_loss - avg_val_loss  # Positive if loss decreased
+
+        # Check if current epoch is better than best
+        is_better = (
+            val_f1 > best_val_f1 or  # Better F1 score
+            (val_f1 >= best_val_f1 * 0.99 and avg_val_loss < best_val_loss) or  # Similar F1 but better loss
+            (f1_improvement > 0.01 and loss_improvement > 0)  # Both metrics improved
+        )
+
+        if is_better:
             best_val_loss = avg_val_loss
             best_val_acc = val_acc
             best_val_f1 = val_f1
@@ -414,12 +450,16 @@ def train_main(args):
         else:
             patience_counter += 1
             # Additional check: if the model is significantly worse than the best, stop early
-            if val_f1 < best_val_f1 * 0.90 and avg_val_loss > best_val_loss * 1.1:
+            if val_f1 < best_val_f1 * 0.85 and avg_val_loss > best_val_loss * 1.1:
                 logger.info(f"Performance degradation detected. Stopping early at epoch {epoch+1}. Best epoch: {best_epoch}, Best Val Loss: {best_val_loss:.4f}, Best Val Acc: {best_val_acc:.4f}, Best Val F1: {best_val_f1:.4f}")
                 break
             # Additional check: if loss is too low (possible overfitting), consider stopping
             if avg_val_loss < 0.01 and epoch > 5:  # If validation loss is extremely low after a few epochs
                 logger.info(f"Extremely low validation loss detected (possible overfitting). Stopping early at epoch {epoch+1}. Best epoch: {best_epoch}, Best Val Loss: {best_val_loss:.4f}, Best Val Acc: {best_val_acc:.4f}, Best Val F1: {best_val_f1:.4f}")
+                break
+            # Additional check: if F1 score is consistently declining
+            if epoch > best_epoch + 10 and val_f1 < best_val_f1 * 0.95:
+                logger.info(f"F1 score consistently declining. Stopping early at epoch {epoch+1}. Best epoch: {best_epoch}, Best Val Loss: {best_val_loss:.4f}, Best Val Acc: {best_val_acc:.4f}, Best Val F1: {best_val_f1:.4f}")
                 break
             if patience_counter >= patience:
                 logger.info(f"Early stopping at epoch {epoch+1}. Best epoch: {best_epoch}, Best Val Loss: {best_val_loss:.4f}, Best Val Acc: {best_val_acc:.4f}, Best Val F1: {best_val_f1:.4f}")
