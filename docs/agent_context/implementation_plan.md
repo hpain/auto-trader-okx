@@ -101,3 +101,15 @@ Shift the bot's core logic from "Predicting Price Direction" (Low Alpha) to "Cap
     - Upgrade optimizer to AdamW with amsgrad and improved weight decay
     - Implement CosineAnnealingWarmRestarts for intelligent learning rate scheduling
     - Achieve significant F1 score improvement from 0.1271 to 0.5068
+
+### P3-6: Multi-class Transformer Enhancement
+- **Goal**: Convert model from binary to 3-class classification for better market outcome prediction
+- **Implementation**:
+    - Update model architecture from 1 output to 3 outputs (timeout, stop_loss, take_profit)
+    - Replace BCEWithLogitsLoss with CrossEntropyLoss for proper multi-class handling
+    - Implement class-weighted loss function to handle imbalanced 3-class problem
+    - Update training/validation loops to handle integer class labels
+    - Enhance data preprocessing for multi-class label generation
+    - Add smart data augmentation with different noise levels for training/validation
+    - Improve early stopping with multi-metric monitoring and performance degradation detection
+    - Maintain high F1 score while expanding to 3-class problem

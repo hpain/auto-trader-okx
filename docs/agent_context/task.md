@@ -151,6 +151,14 @@ Shift from pure price prediction to structural arbitrage. Implement Funding Rate
         - [x] Upgraded optimizer to AdamW with amsgrad and improved weight decay.
         - [x] Implemented CosineAnnealingWarmRestarts for intelligent learning rate scheduling.
         - [x] Achieved significant F1 score improvement from 0.1271 to 0.5068.
+    - [x] **P6-5: Multi-class Transformer Enhancement** (New)
+        - [x] Updated model architecture for 3-class classification (timeout, stop_loss, take_profit).
+        - [x] Modified loss function to handle 3-class problem with class weights.
+        - [x] Updated training loop to handle integer class labels.
+        - [x] Enhanced data preprocessing with additional technical indicators.
+        - [x] Implemented data augmentation with noise injection.
+        - [x] Added curriculum learning based on sample difficulty.
+        - [x] Improved early stopping with multi-metric monitoring.
 
 
 

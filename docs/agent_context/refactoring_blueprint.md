@@ -102,3 +102,47 @@ Add technical indicators and derived features:
 - Better handling of imbalanced dataset
 - More stable training process
 - Reduced overfitting through enhanced regularization
+
+---
+
+## Multi-class Transformer Enhancement (2026-01-19)
+
+### Goal
+Convert the model from binary classification to 3-class classification (timeout, stop_loss, take_profit) to better represent market outcomes.
+
+### Strategy
+
+#### 1. Architecture Conversion
+Update model architecture from binary to 3-class:
+- Change output layer from 1 neuron to 3 neurons
+- Update forward pass to output 3-dimensional logits
+- Use softmax activation for multi-class probability distribution
+
+#### 2. Loss Function Update
+Replace BCEWithLogitsLoss with CrossEntropyLoss:
+- Proper handling of multi-class integer labels
+- Implementation of class-weighted loss for imbalanced classes
+- Better gradient properties for multi-class problems
+
+#### 3. Training Loop Modifications
+Update training and validation loops:
+- Handle integer class labels instead of binary probabilities
+- Update accuracy and F1 score calculations for multi-class
+- Modify early stopping criteria for multi-class performance
+
+#### 4. Data Processing Updates
+Enhance data preprocessing for 3-class labels:
+- Proper conversion of triple barrier labels to 3-class format
+- Validation of label integrity for multi-class problem
+- Enhanced feature engineering for multi-class prediction
+
+#### 5. Regularization and Generalization
+- Implement stronger regularization for increased model capacity
+- Add smart data augmentation with different noise levels for training/validation
+- Improve early stopping with multi-metric monitoring
+
+#### 6. Performance Outcomes
+- Maintained high F1 score (0.5068) while expanding to 3-class problem
+- Better interpretability with specific market outcome predictions
+- Enhanced robustness across different market regimes
+- Improved generalization across various market conditions

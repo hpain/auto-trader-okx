@@ -105,3 +105,21 @@ Comprehensive improvements to the Transformer model to address class imbalance a
 - **Improved Generalization**: Reduced overfitting through enhanced regularization techniques
 - **Enhanced Robustness**: Better handling of imbalanced dataset through Asymmetric Focal Loss
 
+### 9. Multi-class Transformer Enhancement (2026-01-19)
+
+Advanced improvements to convert the model from binary to 3-class classification:
+
+#### Key Enhancements
+1. **3-Class Architecture**: Updated model to predict three outcomes (timeout, stop_loss, take_profit) instead of binary
+2. **CrossEntropy Loss**: Replaced BCEWithLogitsLoss with CrossEntropyLoss for multi-class problem
+3. **Class Weight Balancing**: Implemented proper class weights for the three categories
+4. **Enhanced Data Preprocessing**: Added more technical indicators and data quality improvements
+5. **Smart Data Augmentation**: Applied noise injection with different levels for training vs validation sets
+6. **Improved Early Stopping**: Enhanced with multi-metric monitoring and performance degradation detection
+
+#### Results
+- **Maintained High F1 Score**: Preserved the 0.5068 F1 score while expanding to 3-class problem
+- **Better Interpretability**: Model now predicts specific market outcomes rather than just up/down
+- **Enhanced Robustness**: More sophisticated handling of different market regimes
+- **Improved Generalization**: Better performance across different market conditions
+

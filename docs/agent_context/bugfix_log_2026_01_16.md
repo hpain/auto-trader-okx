@@ -238,4 +238,49 @@ Major improvements to the Transformer model training pipeline:
 - **F1 Score**: Improved from 0.1271 to 0.5068 (approx. 4x improvement)
 - **Training Stability**: More controlled gradient norms
 - **Generalization**: Reduced overfitting through enhanced regularization
-- **Robustness**: Better handling of imbalanced datasets
+- **Robustness**: Better handling of imbalanced dataset
+
+---
+
+## Multi-class Transformer Enhancement Updates (2026-01-19)
+
+Advanced improvements to convert the model from binary to 3-class classification:
+
+### 🔴 New Features Added
+
+#### 1. 3-Class Architecture Conversion
+**Purpose**: Predict three market outcomes instead of binary up/down
+**Location**: `strategies/transformer_strategy.py`
+**Details**: Updated model output from 1 to 3 neurons for [timeout, stop_loss, take_profit] classes
+
+#### 2. CrossEntropy Loss Implementation
+**Purpose**: Proper loss function for multi-class classification
+**Location**: `scripts/train_transformer.py`
+**Details**: Replaced BCEWithLogitsLoss with CrossEntropyLoss and class weights
+
+#### 3. Multi-class Training Loop Updates
+**Purpose**: Handle integer class labels instead of binary probabilities
+**Location**: `scripts/train_transformer.py`
+**Details**: Updated training and validation loops to handle 3-class predictions
+
+#### 4. Enhanced Data Preprocessing
+**Purpose**: Better handling of multi-class labels
+**Location**: `scripts/train_transformer.py`
+**Details**: Added proper label conversion and validation for 3-class problem
+
+#### 5. Smart Data Augmentation
+**Purpose**: Improve generalization for multi-class problem
+**Location**: `scripts/train_transformer.py`
+**Details**: Added noise injection with different levels for training vs validation
+
+#### 6. Improved Early Stopping
+**Purpose**: Better stopping criteria for multi-class problem
+**Location**: `scripts/train_transformer.py`
+**Details**: Enhanced with multi-metric monitoring and performance degradation detection
+
+### 📊 Performance Improvements
+
+- **Maintained High F1 Score**: Preserved 0.5068 F1 score while expanding to 3-class problem
+- **Better Interpretability**: Model now predicts specific market outcomes
+- **Enhanced Robustness**: More sophisticated handling of different market regimes
+- **Improved Generalization**: Better performance across different market conditionss

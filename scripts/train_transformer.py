@@ -10,7 +10,8 @@ import argparse
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from strategies.transformer_strategy import TransformerStrategy, TimeSeriesTransformer
-from features.feature_engineering import generate_features, apply_triple_barrier
+from features.feature_engineering import generate_features
+from features.proper_triple_barrier import apply_proper_triple_barrier_vectorized
 from sklearn.preprocessing import StandardScaler
 from sklearn.feature_selection import SelectKBest, f_classif
 
@@ -22,6 +23,7 @@ logger = logging.getLogger("Trainer")
 def select_features(df, feature_cols, target_col, max_features=80):
     """
     Select the most informative features using statistical tests
+    For multiclass problems, use f_classif which works with integer targets
     """
     if len(feature_cols) <= max_features:
         return feature_cols
@@ -36,10 +38,11 @@ def select_features(df, feature_cols, target_col, max_features=80):
         return valid_features
 
     # Use SelectKBest to select top features based on ANOVA F-test
+    # f_classif works with multiclass targets (integer labels)
     selector = SelectKBest(score_func=f_classif, k=min(max_features, len(valid_features)))
 
     X = df[valid_features]
-    y = df[target_col]
+    y = df[target_col].astype(int)  # Ensure target is integer for multiclass
 
     # Handle any remaining NaN values
     X = X.fillna(X.mean())  # Fill with mean to avoid issues with SelectKBest
@@ -155,9 +158,9 @@ def train_main(args):
     logger.info("Generating features...")
     df_features = generate_features(df)
 
-    # 4. Triple Barrier Labeling (same as LGB for fair comparison)
-    logger.info(f"Applying Triple Barrier: TP={args.tp}, SL={args.sl}, Timeout={args.timeout}")
-    df_labeled = apply_triple_barrier(df_features, tp=args.tp, sl=args.sl, timeout=args.timeout)
+    # 4. Proper Triple Barrier Labeling (without look-ahead bias)
+    logger.info(f"Applying Proper Triple Barrier: TP={args.tp}, SL={args.sl}, Timeout={args.timeout}")
+    df_labeled = apply_proper_triple_barrier_vectorized(df_features, tp=args.tp, sl=args.sl, timeout=args.timeout)
     target_col = 'y'
 
     df_labeled.dropna(inplace=True)
@@ -167,19 +170,27 @@ def train_main(args):
     label_counts = df_labeled[target_col].value_counts()
     logger.info(f"Labels: {label_counts.to_dict()}")
 
-    # Calculate positive/negative class counts for balancing
-    pos_count = label_counts.get(1, 0)
-    neg_count = label_counts.get(0, 0)
+    # Calculate class counts for balancing
+    pos_count = label_counts.get(1, 0)  # Take profit cases
+    neg_count = label_counts.get(0, 0)  # Stop loss cases
+    neu_count = label_counts.get(-1, 0)  # Timeout cases
     total_count = len(df_labeled)
 
-    # Calculate pos_weight for balanced loss
-    pos_weight = neg_count / pos_count if pos_count > 0 else 1.0
-    logger.info(f"Label distribution - Pos: {pos_count} ({pos_count/total_count:.2%}), Neg: {neg_count} ({neg_count/total_count:.2%})")
-    logger.info(f"Calculated pos_weight for loss: {pos_weight:.4f}")
+    # Calculate pos_weight and neg_weight for balanced loss
+    pos_weight = (neg_count + neu_count) / pos_count if pos_count > 0 else 1.0
+    neg_weight = (pos_count + neu_count) / neg_count if neg_count > 0 else 1.0
+    neu_weight = (pos_count + neg_count) / neu_count if neu_count > 0 else 1.0
 
-    # Calculate baseline loss
-    p_up = pos_count / total_count
-    baseline = - (p_up * np.log(p_up + 1e-9) + (1-p_up) * np.log(1-p_up + 1e-9))
+    logger.info(f"Label distribution - TP(Hit): {pos_count} ({pos_count/total_count:.2%}), SL(Hit): {neg_count} ({neg_count/total_count:.2%}), Timeout: {neu_count} ({neu_count/total_count:.2%})")
+    logger.info(f"Calculated weights - Pos: {pos_weight:.4f}, Neg: {neg_weight:.4f}, Neu: {neu_weight:.4f}")
+
+    # Calculate baseline loss for 3-class problem using CrossEntropy
+    p_tp = pos_count / total_count
+    p_sl = neg_count / total_count
+    p_timeout = neu_count / total_count
+    # For CrossEntropy loss, baseline is the negative log-likelihood of always predicting the most frequent class
+    max_class_prob = max(p_tp, p_sl, p_timeout)
+    baseline = -np.log(max_class_prob + 1e-9)  # CrossEntropy baseline
     logger.info(f"Baseline Loss: {baseline:.4f}")
 
     # 5. Split: 70% train, 10% val, 20% test
@@ -191,6 +202,11 @@ def train_main(args):
     test_df = df_labeled.iloc[val_end:]
 
     logger.info(f"Split: Train={len(train_df)}, Val={len(val_df)}, Test={len(test_df)}")
+
+    # Ensure target column is integer type for CrossEntropyLoss
+    train_df[target_col] = train_df[target_col].astype(int)
+    val_df[target_col] = val_df[target_col].astype(int)
+    test_df[target_col] = test_df[target_col].astype(int)
 
     # 7. Feature Selection with correlation analysis
     exclude = ['y', 'open', 'high', 'low', 'close', 'symbol'] + [c for c in df_labeled.columns if 'future' in c]
@@ -230,60 +246,14 @@ def train_main(args):
         lr=args.lr  # Use configurable learning rate
     )
 
-    # Use balanced loss function with calculated pos_weight
+    # Use balanced loss function for 3-class problem
     import torch
     import torch.nn as nn
-    # Use Asymmetric Focal Loss to better handle imbalanced dataset
-    from torch.nn import functional as F
 
-    class AsymmetricFocalLoss(nn.Module):
-        def __init__(self, alpha_pos=1, alpha_neg=1, gamma_pos=1, gamma_neg=2, reduction='mean'):
-            super(AsymmetricFocalLoss, self).__init__()
-            self.alpha_pos = alpha_pos  # Weight for positive samples
-            self.alpha_neg = alpha_neg  # Weight for negative samples
-            self.gamma_pos = gamma_pos  # Focusing parameter for positive samples
-            self.gamma_neg = gamma_neg  # Focusing parameter for negative samples
-            self.reduction = reduction
-
-        def forward(self, inputs, targets):
-            # Compute sigmoid of inputs
-            p = torch.sigmoid(inputs)
-            # For positive targets (1), we use p as probability of correct classification
-            # For negative targets (0), we use (1-p) as probability of correct classification
-            p_t = torch.where(targets == 1, p, 1 - p)
-
-            # Compute cross entropy loss
-            ce_loss = F.binary_cross_entropy_with_logits(inputs, targets, reduction='none')
-
-            # Compute asymmetric focal weights
-            # For positive samples (targets == 1): apply alpha_pos and gamma_pos
-            # For negative samples (targets == 0): apply alpha_neg and gamma_neg
-            alpha_t = torch.where(targets == 1, torch.tensor(self.alpha_pos, device=inputs.device),
-                                  torch.tensor(self.alpha_neg, device=inputs.device))
-            gamma_t = torch.where(targets == 1, torch.tensor(self.gamma_pos, device=inputs.device),
-                                  torch.tensor(self.gamma_neg, device=inputs.device))
-
-            # Compute focal weight
-            focal_weight = alpha_t * torch.pow((1 - p_t), gamma_t)
-
-            # Apply focal weight to cross entropy loss
-            focal_loss = focal_weight * ce_loss
-
-            if self.reduction == 'mean':
-                return focal_loss.mean()
-            elif self.reduction == 'sum':
-                return focal_loss.sum()
-            else:
-                return focal_loss
-
-    # Use Asymmetric Focal Loss with different parameters for positive and negative classes
-    # This allows us to differently tune the focus on each class
-    strategy.criterion = AsymmetricFocalLoss(
-        alpha_pos=min(pos_weight, 2.0),  # Higher weight for positive (minority) class
-        alpha_neg=1.0,                   # Standard weight for negative (majority) class
-        gamma_pos=1.0,                   # Less aggressive focusing for positive class
-        gamma_neg=2.0                    # More aggressive focusing for negative class
-    )
+    # For 3-class classification (take profit, stop loss, timeout), use CrossEntropyLoss
+    # with class weights to handle imbalanced dataset
+    class_weights = torch.tensor([neu_weight, neg_weight, pos_weight])  # [timeout, stop_loss, take_profit]
+    strategy.criterion = nn.CrossEntropyLoss(weight=class_weights)
 
     strategy.scaler = scaler
 
@@ -307,6 +277,15 @@ def train_main(args):
             if not np.isnan(feature_std) and feature_std > 0:
                 noise = np.random.normal(0, noise_factor * feature_std, size=train_scaled[col].shape)
                 train_scaled[col] += noise
+
+    # Also add noise to validation set to prevent overfitting to clean validation data
+    for col in feature_cols:
+        if col in val_scaled.columns:
+            feature_std = val_scaled[col].std()
+            if not np.isnan(feature_std) and feature_std > 0:
+                # Use smaller noise for validation to maintain more realistic validation metrics
+                noise = np.random.normal(0, noise_factor * 0.3 * feature_std, size=val_scaled[col].shape)  # 30% of training noise
+                val_scaled[col] += noise
 
     # 10. Curriculum Learning and Training Setup
     logger.info(f"Training for {args.epochs} epochs with Curriculum Learning...")
@@ -394,15 +373,20 @@ def train_main(args):
             train_loss += loss.item()
             train_batches += 1
 
-            # Calculate accuracy and other metrics
-            preds = (torch.sigmoid(outputs) > 0.5).float()
-            train_correct += (preds == batch_y).sum().item()
+            # Calculate accuracy and other metrics for multiclass
+            # Get predicted class (highest probability)
+            _, predicted_classes = torch.max(outputs, 1)  # Get class with highest probability
+            train_correct += (predicted_classes == batch_y.squeeze(1)).sum().item()
             train_total += batch_y.size(0)
 
-            # Calculate TP, FP, FN for F1 score
-            train_tp += ((preds == 1) & (batch_y == 1)).sum().item()
-            train_fp += ((preds == 1) & (batch_y == 0)).sum().item()
-            train_fn += ((preds == 0) & (batch_y == 1)).sum().item()
+            # Calculate TP, FP, FN for F1 score (focus on positive class - take profit = class 2)
+            actual_take_profit = (batch_y.squeeze(1) == 2).float()
+            pred_take_profit = (predicted_classes == 2).float()
+
+            # Calculate TP, FP, FN for F1 score (for take profit class)
+            train_tp += ((pred_take_profit == 1) & (actual_take_profit == 1)).sum().item()
+            train_fp += ((pred_take_profit == 1) & (actual_take_profit == 0)).sum().item()
+            train_fn += ((pred_take_profit == 0) & (actual_take_profit == 1)).sum().item()
 
         avg_train_loss = train_loss / train_batches if train_batches > 0 else 0
         avg_grad_norm = total_grad_norm / train_batches if train_batches > 0 else 0
@@ -426,23 +410,29 @@ def train_main(args):
         with torch.no_grad():
             for batch_X, batch_y in val_loader:
                 batch_X = batch_X.to(strategy.device).float()
-                batch_y = batch_y.to(strategy.device).float().unsqueeze(1)
+                # Convert targets to long for CrossEntropyLoss (expects class indices)
+                batch_y = batch_y.to(strategy.device).long().squeeze(1)
                 outputs = strategy.model(batch_X)
 
-                # Calculate loss
+                # Calculate loss - CrossEntropyLoss expects raw logits and class indices
                 loss = strategy.criterion(outputs, batch_y)
                 val_loss += loss.item()
                 val_batches += 1
 
-                # Calculate accuracy and other metrics
-                preds = (torch.sigmoid(outputs) > 0.5).float()
-                val_correct += (preds == batch_y).sum().item()
+                # Calculate accuracy and other metrics for multiclass
+                # Get predicted class (highest probability)
+                _, predicted_classes = torch.max(outputs, 1)  # Get class with highest probability
+                val_correct += (predicted_classes == batch_y).sum().item()
                 val_total += batch_y.size(0)
 
-                # Calculate TP, FP, FN for F1 score
-                val_tp += ((preds == 1) & (batch_y == 1)).sum().item()
-                val_fp += ((preds == 1) & (batch_y == 0)).sum().item()
-                val_fn += ((preds == 0) & (batch_y == 1)).sum().item()
+                # Calculate TP, FP, FN for F1 score (focus on positive class - take profit = class 2)
+                actual_take_profit = (batch_y == 2).float()
+                pred_take_profit = (predicted_classes == 2).float()
+
+                # Calculate TP, FP, FN for F1 score (for take profit class)
+                val_tp += ((pred_take_profit == 1) & (actual_take_profit == 1)).sum().item()
+                val_fp += ((pred_take_profit == 1) & (actual_take_profit == 0)).sum().item()
+                val_fn += ((pred_take_profit == 0) & (actual_take_profit == 1)).sum().item()
 
         avg_val_loss = val_loss / val_batches if val_batches > 0 else 0
         val_acc = val_correct / val_total if val_total > 0 else 0
@@ -508,7 +498,8 @@ def train_main(args):
                 logger.info(f"Performance degradation detected. Stopping early at epoch {epoch+1}. Best epoch: {best_epoch}, Best Val Loss: {best_val_loss:.4f}, Best Val Acc: {best_val_acc:.4f}, Best Val F1: {best_val_f1:.4f}")
                 break
             # Additional check: if loss is too low (possible overfitting), consider stopping
-            if avg_val_loss < 0.01 and epoch > 5:  # If validation loss is extremely low after a few epochs
+            # For multiclass CrossEntropy, very low loss might indicate overfitting
+            if avg_val_loss < 0.05 and epoch > 3:  # If validation loss is extremely low after a few epochs
                 logger.info(f"Extremely low validation loss detected (possible overfitting). Stopping early at epoch {epoch+1}. Best epoch: {best_epoch}, Best Val Loss: {best_val_loss:.4f}, Best Val Acc: {best_val_acc:.4f}, Best Val F1: {best_val_f1:.4f}")
                 break
             # Additional check: if F1 score is consistently declining
@@ -532,6 +523,30 @@ def train_main(args):
     logger.info(f"Best Val Accuracy: {best_val_acc:.4f}")
     logger.info(f"Best Val F1 Score: {best_val_f1:.4f}")
 
+    # Save metadata for the model
+    import json
+    metadata = {
+        'model_type': 'Transformer_Optimized_3Class',
+        'input_dim': len(feature_cols),
+        'd_model': args.d_model,
+        'nhead': args.nhead,
+        'num_layers': args.num_layers,
+        'dropout': args.dropout,
+        'features': feature_cols,
+        'best_val_f1': best_val_f1,
+        'best_val_loss': best_val_loss,
+        'baseline_loss': baseline,
+        'training_date': pd.Timestamp.now().isoformat(),
+        'pos_weight': pos_weight,
+        'neg_weight': neg_weight,
+        'neu_weight': neu_weight
+    }
+
+    metadata_path = f'models/transformer_optimized_tb{int(args.tp*1000)}_{int(args.sl*1000)}_metadata.json'
+    with open(metadata_path, 'w') as f:
+        json.dump(metadata, f, indent=2)
+    logger.info(f"Metadata saved to {metadata_path}")
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Train Optimized Transformer with Triple Barrier')
@@ -543,12 +558,12 @@ if __name__ == "__main__":
     parser.add_argument('--sl', type=float, default=0.007, help='Stop Loss (0.7%)')
     parser.add_argument('--timeout', type=int, default=24, help='Timeout in bars')
 
-    # New optimization parameters
-    parser.add_argument('--d_model', type=int, default=72, help='Transformer model dimension')
+    # New optimization parameters for 3-class problem
+    parser.add_argument('--d_model', type=int, default=96, help='Transformer model dimension')
     parser.add_argument('--nhead', type=int, default=6, help='Number of attention heads')
-    parser.add_argument('--num_layers', type=int, default=2, help='Number of transformer layers')
-    parser.add_argument('--dropout', type=float, default=0.25, help='Dropout rate')
-    parser.add_argument('--patience', type=int, default=20, help='Patience for early stopping')
+    parser.add_argument('--num_layers', type=int, default=3, help='Number of transformer layers')
+    parser.add_argument('--dropout', type=float, default=0.2, help='Dropout rate')
+    parser.add_argument('--patience', type=int, default=15, help='Patience for early stopping')
     parser.add_argument('--lr', type=float, default=0.0001, help='Learning rate')
 
     args = parser.parse_args()

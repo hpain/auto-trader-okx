@@ -83,13 +83,14 @@ class TimeSeriesTransformer(nn.Module if HAS_TORCH else object):
             num_layers=num_layers
         )
 
-        # 4. Enhanced Output Head with multiple layers for better representation
+        # 4. Output Head for 3-class classification
         self.norm1 = nn.LayerNorm(d_model)
         self.intermediate = nn.Linear(d_model, d_model // 2)
         self.norm2 = nn.LayerNorm(d_model // 2)
         self.activation = nn.GELU()
         self.output_dropout = nn.Dropout(dropout)
-        self.decoder = nn.Linear(d_model // 2, 1)
+        # Change output dimension from 1 (binary) to 3 (multiclass) for [timeout, stop_loss, take_profit]
+        self.decoder = nn.Linear(d_model // 2, 3)
 
         self.input_dim = input_dim
         self.d_model = d_model
@@ -345,24 +346,40 @@ class TransformerStrategy:
             with torch.no_grad():
                 input_tensor = torch.tensor(scaled_window, dtype=torch.float32).unsqueeze(0).to(self.device)
                 logits = self.model(input_tensor)
-                prob = torch.sigmoid(logits).item() 
-            
-            if np.isnan(prob):
-                 self.logger.error("Model predicted NaN! Defaulting to 0.5")
-                 prob = 0.5
 
-            symbol_tag = f" ({symbol})" if symbol else ""
-            self.logger.info(f"Transformer Prediction Prob{symbol_tag}: {prob:.4f}")
+                # For 3-class classification, get probabilities for each class
+                # logits shape: [1, 3] -> [timeout, stop_loss, take_profit]
+                probs = torch.softmax(logits, dim=1).squeeze(0)  # Shape: [3]
+
+                # Get the predicted class (0=timeout, 1=stop_loss, 2=take_profit)
+                predicted_class = torch.argmax(probs).item()
+
+                # Convert to trading signal:
+                # Class 2 (take_profit) -> Buy signal (1)
+                # Class 1 (stop_loss) -> Sell signal (-1)
+                # Class 0 (timeout) -> Hold signal (0)
+                if predicted_class == 2:  # take_profit
+                    signal = 1  # Buy
+                elif predicted_class == 1:  # stop_loss
+                    signal = -1  # Sell
+                else:  # timeout
+                    signal = 0  # Hold
+
+                # Log probabilities for each class
+                timeout_prob, stop_loss_prob, take_profit_prob = probs[0].item(), probs[1].item(), probs[2].item()
+
+                if np.isnan(timeout_prob) or np.isnan(stop_loss_prob) or np.isnan(take_profit_prob):
+                    self.logger.error("Model predicted NaN! Defaulting to Hold (0)")
+                    return 0
+
+                symbol_tag = f" ({symbol})" if symbol else ""
+                self.logger.info(f"Transformer Prediction - Timeout: {timeout_prob:.4f}, Stop Loss: {stop_loss_prob:.4f}, Take Profit: {take_profit_prob:.4f} -> Signal: {signal} {symbol_tag}")
+
         except Exception as e:
             self.logger.error(f"Inference error: {e}")
-            prob = 0.5
-        
-        if prob > self.buy_threshold:
-            return 1 # Buy
-        elif prob < self.sell_threshold:
-            return -1 # Sell
-        else:
             return 0
+
+        return signal
 
     def save_model(self, path: str):
         """Save model state dict to path."""
