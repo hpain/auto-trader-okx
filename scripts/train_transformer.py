@@ -5,6 +5,7 @@ import numpy as np
 import logging
 import pickle
 import argparse
+import time
 
 # Add project root to path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
@@ -18,6 +19,42 @@ from sklearn.feature_selection import SelectKBest, f_classif
 # Setup Logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger("Trainer")
+
+
+# Focal Loss Implementation
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+class FocalLoss(nn.Module):
+    def __init__(self, alpha=None, gamma=2.0, reduction='mean'):
+        super(FocalLoss, self).__init__()
+        self.alpha = alpha
+        self.gamma = gamma
+        self.reduction = reduction
+
+    def forward(self, inputs, targets):
+        # inputs: [N, C] logits
+        # targets: [N] class indices
+        
+        ce_loss = F.cross_entropy(inputs, targets, reduction='none')
+        pt = torch.exp(-ce_loss)
+        
+        if self.alpha is not None:
+            # Alpha weighting
+            if self.alpha.device != inputs.device:
+                self.alpha = self.alpha.to(inputs.device)
+            at = self.alpha.gather(0, targets)
+            loss = at * (1 - pt) ** self.gamma * ce_loss
+        else:
+            loss = (1 - pt) ** self.gamma * ce_loss
+
+        if self.reduction == 'mean':
+            return loss.mean()
+        elif self.reduction == 'sum':
+            return loss.sum()
+        else:
+            return loss
 
 
 def select_features(df, feature_cols, target_col, max_features=80):
@@ -139,8 +176,12 @@ def train_main(args):
     if 'close' in df.columns:
         # Add returns and volatility features
         df['returns'] = df['close'].pct_change()
-        df['volatility'] = df['returns'].rolling(window=10).std()
-
+        # Calculate daily volatility for dynamic labeling
+        # Use a rolling window (e.g., 24 hours * 60 mins = 1440 bars if 1min, or custom window)
+        # Assuming 5m bars, 1 day = 288 bars
+        vol_window = 288
+        df['volatility'] = df['returns'].rolling(window=vol_window).std()
+        
         # Add rolling statistics
         df['close_ma_ratio'] = df['close'] / df['close'].rolling(window=20).mean()
         df['volume_ma_ratio'] = df['volume'] / df['volume'].rolling(window=20).mean()
@@ -158,9 +199,28 @@ def train_main(args):
     logger.info("Generating features...")
     df_features = generate_features(df)
 
-    # 4. Proper Triple Barrier Labeling (without look-ahead bias)
-    logger.info(f"Applying Proper Triple Barrier: TP={args.tp}, SL={args.sl}, Timeout={args.timeout}")
-    df_labeled = apply_proper_triple_barrier_vectorized(df_features, tp=args.tp, sl=args.sl, timeout=args.timeout)
+    # 4. Dynamic Triple Barrier Labeling
+    logger.info(f"Applying Dynamic Proper Triple Barrier: TP={args.tp}x Vol, SL={args.sl}x Vol, Timeout={args.timeout}")
+    
+    # Calculate dynamic barriers based on volatility
+    # Use a minimum floor for volatility to avoid zero barriers
+    min_vol = 0.001 
+    dynamic_vol = df_features['volatility'].clip(lower=min_vol).values
+    
+    # Calculate TP and SL arrays
+    # Pass arrays to the vectorized function
+    dynamic_tp = dynamic_vol * args.tp  # e.g., 1.5 * volatility
+    dynamic_sl = dynamic_vol * args.sl  # e.g., 1.5 * volatility
+    
+    # Check max/min barrier size
+    logger.info(f"Dynamic TP Stats: Mean={dynamic_tp.mean():.4f}, Max={dynamic_tp.max():.4f}, Min={dynamic_tp.min():.4f}")
+    
+    df_labeled = apply_proper_triple_barrier_vectorized(
+        df_features, 
+        tp=dynamic_tp, 
+        sl=dynamic_sl, 
+        timeout=args.timeout
+    )
     target_col = 'y'
 
     df_labeled.dropna(inplace=True)
@@ -176,13 +236,7 @@ def train_main(args):
     neu_count = label_counts.get(-1, 0)  # Timeout cases
     total_count = len(df_labeled)
 
-    # Calculate pos_weight and neg_weight for balanced loss
-    pos_weight = (neg_count + neu_count) / pos_count if pos_count > 0 else 1.0
-    neg_weight = (pos_count + neu_count) / neg_count if neg_count > 0 else 1.0
-    neu_weight = (pos_count + neg_count) / neu_count if neu_count > 0 else 1.0
-
     logger.info(f"Label distribution - TP(Hit): {pos_count} ({pos_count/total_count:.2%}), SL(Hit): {neg_count} ({neg_count/total_count:.2%}), Timeout: {neu_count} ({neu_count/total_count:.2%})")
-    logger.info(f"Calculated weights - Pos: {pos_weight:.4f}, Neg: {neg_weight:.4f}, Neu: {neu_weight:.4f}")
 
     # For CrossEntropyLoss, we need to map labels from {-1, 0, 1} to {0, 1, 2}
     # Update the labels in the dataset
@@ -194,6 +248,16 @@ def train_main(args):
     pos_count = mapped_label_counts.get(2, 0)  # take_profit class
     neg_count = mapped_label_counts.get(1, 0)  # stop_loss class
     neu_count = mapped_label_counts.get(0, 0)  # timeout class
+    
+    # Calculate inverse frequency weights for Focal Loss alpha
+    # Make weights sum to number of classes (3) for scale consistency
+    weights = torch.tensor([
+        total_count / (neu_count * 3) if neu_count > 0 else 1.0,
+        total_count / (neg_count * 3) if neg_count > 0 else 1.0,
+        total_count / (pos_count * 3) if pos_count > 0 else 1.0
+    ], dtype=torch.float32)
+    
+    logger.info(f"Class Weights for Focal Loss: Timeout={weights[0]:.4f}, SL={weights[1]:.4f}, TP={weights[2]:.4f}")
 
     # Calculate baseline loss for 3-class problem using CrossEntropy
     p_tp = pos_count / total_count
@@ -217,28 +281,14 @@ def train_main(args):
     # Verify that the mapped labels are correct (should be 0, 1, 2)
     logger.info(f"Target column after mapping: {target_col}")
     logger.info(f"Train labels range: {train_df[target_col].min()} to {train_df[target_col].max()}")
-    logger.info(f"Val labels range: {val_df[target_col].min()} to {val_df[target_col].max()}")
-    logger.info(f"Test labels range: {test_df[target_col].min()} to {test_df[target_col].max()}")
-
+    
     # Ensure target column is integer type for CrossEntropyLoss
     train_df[target_col] = train_df[target_col].astype(int)
     val_df[target_col] = val_df[target_col].astype(int)
     test_df[target_col] = test_df[target_col].astype(int)
 
-    # Double-check that all values are in the correct range [0, 1, 2]
-    # If not, apply mapping again to ensure correctness
-    if train_df[target_col].min() < 0 or train_df[target_col].max() > 2:
-        logger.warning(f"Target values out of range [0,1,2]. Remapping: {train_df[target_col].unique()}")
-        train_df[target_col] = train_df[target_col].map({-1: 0, 0: 1, 1: 2}).fillna(0).astype(int)
-    if val_df[target_col].min() < 0 or val_df[target_col].max() > 2:
-        logger.warning(f"Target values out of range [0,1,2]. Remapping: {val_df[target_col].unique()}")
-        val_df[target_col] = val_df[target_col].map({-1: 0, 0: 1, 1: 2}).fillna(0).astype(int)
-    if test_df[target_col].min() < 0 or test_df[target_col].max() > 2:
-        logger.warning(f"Target values out of range [0,1,2]. Remapping: {test_df[target_col].unique()}")
-        test_df[target_col] = test_df[target_col].map({-1: 0, 0: 1, 1: 2}).fillna(0).astype(int)
-
     # 7. Feature Selection with correlation analysis
-    exclude = ['y', 'open', 'high', 'low', 'close', 'symbol'] + [c for c in df_labeled.columns if 'future' in c]
+    exclude = ['y', 'y_mapped', 'open', 'high', 'low', 'close', 'symbol'] + [c for c in df_labeled.columns if 'future' in c]
     feature_cols = [c for c in df_labeled.columns if c not in exclude and np.issubdtype(df_labeled[c].dtype, np.number)]
     logger.info(f"Initial features: {len(feature_cols)}")
 
@@ -275,17 +325,13 @@ def train_main(args):
         lr=args.lr  # Use configurable learning rate
     )
 
-    # Use balanced loss function for 3-class problem
-    import torch
-    import torch.nn as nn
-
-    # For 3-class classification (take profit, stop loss, timeout), use CrossEntropyLoss
-    # with class weights to handle imbalanced dataset
-    # Ensure weights are on the same device as model and use float32 to match model outputs
-    class_weights = torch.tensor([neu_weight, neg_weight, pos_weight], dtype=torch.float32)  # [timeout, stop_loss, take_profit]
+    # Use Focal Loss for 3-class imbalance
     # Move weights to the same device as the model
-    class_weights = class_weights.to(strategy.device)
-    strategy.criterion = nn.CrossEntropyLoss(weight=class_weights)
+    class_weights = weights.to(strategy.device)
+    
+    # Use Focal Loss instead of standard CrossEntropy
+    strategy.criterion = FocalLoss(alpha=class_weights, gamma=2.0)
+    logger.info("Using Focal Loss with gamma=2.0")
 
     strategy.scaler = scaler
 
@@ -296,49 +342,15 @@ def train_main(args):
     val_scaled = val_df.copy()
     val_scaled[feature_cols] = scaler.transform(val_df[feature_cols])
 
-    # 9.5 Data Augmentation for Time Series
-    # Apply Gaussian noise augmentation to training data to improve generalization
-    augmentation_factor = 0.1  # 10% of the standard deviation
-    noise_factor = 0.05  # Additional noise factor
-
-    # Add small Gaussian noise to training features to improve robustness
-    for col in feature_cols:
-        if col in train_scaled.columns:
-            # Calculate the std of the feature to scale the noise appropriately
-            feature_std = train_scaled[col].std()
-            if not np.isnan(feature_std) and feature_std > 0:
-                noise = np.random.normal(0, noise_factor * feature_std, size=train_scaled[col].shape)
-                train_scaled[col] += noise
-
-    # Also add noise to validation set to prevent overfitting to clean validation data
-    for col in feature_cols:
-        if col in val_scaled.columns:
-            feature_std = val_scaled[col].std()
-            if not np.isnan(feature_std) and feature_std > 0:
-                # Use smaller noise for validation to maintain more realistic validation metrics
-                noise = np.random.normal(0, noise_factor * 0.3 * feature_std, size=val_scaled[col].shape)  # 30% of training noise
-                val_scaled[col] += noise
-
-    # 10. Curriculum Learning and Training Setup
-    logger.info(f"Training for {args.epochs} epochs with Curriculum Learning...")
+    # 10. Training Setup
+    logger.info(f"Training for {args.epochs} epochs [Dynamic Labeling]...")
 
     from features.tensor_loader import create_lazy_loader
-    import torch
+    # import torch  <-- Removed redundant import
 
-    # Curriculum Learning: Start with easier examples and gradually increase difficulty
-    # Sort training data by volatility (easier examples first)
+    # No sorting/curriculum learning - standard shuffle is better for stability
     train_scaled_enhanced = train_scaled.copy()
-
-    # Calculate sample difficulty based on volatility or other metrics
-    if 'volatility' in train_scaled_enhanced.columns:
-        # Sort by lowest volatility first (easier patterns)
-        train_scaled_enhanced = train_scaled_enhanced.sort_values('volatility')
-    else:
-        # If no volatility column, sort by absolute return magnitude (easier patterns first)
-        if 'returns' in train_scaled_enhanced.columns:
-            train_scaled_enhanced['abs_returns'] = train_scaled_enhanced['returns'].abs()
-            train_scaled_enhanced = train_scaled_enhanced.sort_values('abs_returns')
-
+    
     # Convert target to long type for CrossEntropyLoss
     train_targets = train_scaled_enhanced[target_col].astype(int)
     val_targets = val_scaled[target_col].astype(int)
@@ -357,7 +369,7 @@ def train_main(args):
     )
 
     best_val_loss = float('inf')
-    patience = args.patience  # Make patience configurable
+    patience = args.patience
     patience_counter = 0
     best_state = None
 
@@ -485,44 +497,19 @@ def train_main(args):
         if epoch < int(args.epochs * 0.1):  # Only apply warmup in first 10% of epochs
             warmup_scheduler.step()
 
-        # LR Scheduler - use CosineAnnealingWarmRestarts for more sophisticated scheduling
-        # This allows the model to explore different regions of the loss landscape
+        # LR Scheduler
         strategy.scheduler.step(epoch)  # Pass epoch for cosine annealing
         current_lr = strategy.optimizer.param_groups[0]['lr']
 
-        # Additional check: if loss is decreasing too rapidly, consider reducing learning rate
-        if epoch > 1 and avg_train_loss < 0.1 and current_lr > 1e-5:
-            # Reduce learning rate if loss is already very low to prevent overshooting
-            for param_group in strategy.optimizer.param_groups:
-                param_group['lr'] = max(param_group['lr'] * 0.8, 1e-6)
-
-        # Additional LR adjustment based on F1 score improvement
-        if epoch > 5 and val_f1 < best_val_f1 * 0.95:  # If F1 score is significantly behind best
-            # Reduce learning rate to allow for fine-tuning
-            for param_group in strategy.optimizer.param_groups:
-                param_group['lr'] = max(param_group['lr'] * 0.9, 1e-6)
-
-        # Cyclical learning rate for better exploration of the loss landscape
-        # Note: This is now handled by CosineAnnealingWarmRestarts, so we can remove manual cycling
-
         logger.info(f"Epoch {epoch+1}/{args.epochs} - Train: {avg_train_loss:.4f} (Acc: {train_acc:.4f}, F1: {train_f1:.4f}) - Val: {avg_val_loss:.4f} (Acc: {val_acc:.4f}, F1: {val_f1:.4f}) - Grad: {avg_grad_norm:.2f} - LR: {current_lr:.6f}")
 
-        # Early stopping based on validation F1 score (more appropriate for imbalanced data)
-        # Also consider improvement in loss to avoid stopping too early on F1 fluctuations
-        # Additionally, track the trend of metrics to avoid stopping prematurely
-        # Also check for signs of overfitting (loss going too low)
-
-        # Calculate improvement in F1 score compared to best
-        f1_improvement = val_f1 - best_val_f1
-        loss_improvement = best_val_loss - avg_val_loss  # Positive if loss decreased
-
-        # Check if current epoch is better than best
-        is_better = (
-            val_f1 > best_val_f1 or  # Better F1 score
-            (val_f1 >= best_val_f1 * 0.99 and avg_val_loss < best_val_loss) or  # Similar F1 but better loss
-            (f1_improvement > 0.01 and loss_improvement > 0)  # Both metrics improved
-        )
-
+        # Early stopping logic (More Robust)
+        
+        # Check for new best
+        is_better = False
+        if avg_val_loss < best_val_loss:
+            is_better = True
+        
         if is_better:
             best_val_loss = avg_val_loss
             best_val_acc = val_acc
@@ -532,19 +519,7 @@ def train_main(args):
             best_state = {k: v.cpu().clone() for k, v in strategy.model.state_dict().items()}
         else:
             patience_counter += 1
-            # Additional check: if the model is significantly worse than the best, stop early
-            if val_f1 < best_val_f1 * 0.85 and avg_val_loss > best_val_loss * 1.1:
-                logger.info(f"Performance degradation detected. Stopping early at epoch {epoch+1}. Best epoch: {best_epoch}, Best Val Loss: {best_val_loss:.4f}, Best Val Acc: {best_val_acc:.4f}, Best Val F1: {best_val_f1:.4f}")
-                break
-            # Additional check: if loss is too low (possible overfitting), consider stopping
-            # For multiclass CrossEntropy, very low loss might indicate overfitting
-            if avg_val_loss < 0.05 and epoch > 3:  # If validation loss is extremely low after a few epochs
-                logger.info(f"Extremely low validation loss detected (possible overfitting). Stopping early at epoch {epoch+1}. Best epoch: {best_epoch}, Best Val Loss: {best_val_loss:.4f}, Best Val Acc: {best_val_acc:.4f}, Best Val F1: {best_val_f1:.4f}")
-                break
-            # Additional check: if F1 score is consistently declining
-            if epoch > best_epoch + 10 and val_f1 < best_val_f1 * 0.95:
-                logger.info(f"F1 score consistently declining. Stopping early at epoch {epoch+1}. Best epoch: {best_epoch}, Best Val Loss: {best_val_loss:.4f}, Best Val Acc: {best_val_acc:.4f}, Best Val F1: {best_val_f1:.4f}")
-                break
+            
             if patience_counter >= patience:
                 logger.info(f"Early stopping at epoch {epoch+1}. Best epoch: {best_epoch}, Best Val Loss: {best_val_loss:.4f}, Best Val Acc: {best_val_acc:.4f}, Best Val F1: {best_val_f1:.4f}")
                 break
@@ -555,7 +530,7 @@ def train_main(args):
         strategy.model.to(strategy.device)
 
     # 11. Save
-    model_path = f'models/transformer_optimized_tb{int(args.tp*1000)}_{int(args.sl*1000)}.pth'
+    model_path = f'models/transformer_optimized_dynamic.pth'
     strategy.save_model(model_path)
     logger.info(f"Model saved to {model_path}")
     logger.info(f"Best Val Loss: {best_val_loss:.4f} (Baseline: {baseline:.4f}) at epoch {best_epoch}")
@@ -565,7 +540,7 @@ def train_main(args):
     # Save metadata for the model
     import json
     metadata = {
-        'model_type': 'Transformer_Optimized_3Class',
+        'model_type': 'Transformer_Optimized_Dynamic',
         'input_dim': len(feature_cols),
         'd_model': args.d_model,
         'nhead': args.nhead,
@@ -576,25 +551,24 @@ def train_main(args):
         'best_val_loss': best_val_loss,
         'baseline_loss': baseline,
         'training_date': pd.Timestamp.now().isoformat(),
-        'pos_weight': pos_weight,
-        'neg_weight': neg_weight,
-        'neu_weight': neu_weight
+        'parameters': vars(args)
     }
 
-    metadata_path = f'models/transformer_optimized_tb{int(args.tp*1000)}_{int(args.sl*1000)}_metadata.json'
+    metadata_path = f'models/transformer_optimized_dynamic_metadata.json'
     with open(metadata_path, 'w') as f:
         json.dump(metadata, f, indent=2)
     logger.info(f"Metadata saved to {metadata_path}")
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description='Train Optimized Transformer with Triple Barrier')
+    parser = argparse.ArgumentParser(description='Train Optimized Transformer with Dynamic Triple Barrier')
     parser.add_argument('--epochs', type=int, default=100, help='Training epochs')
     parser.add_argument('--batch_size', type=int, default=256, help='Batch size')
     parser.add_argument('--window', type=int, default=60, help='Lookback window')
     parser.add_argument('--data', type=str, help='Path to CSV')
-    parser.add_argument('--tp', type=float, default=0.010, help='Take Profit (1%)')
-    parser.add_argument('--sl', type=float, default=0.007, help='Stop Loss (0.7%)')
+    # These are now MULTIPLIERS for volatility
+    parser.add_argument('--tp', type=float, default=1.5, help='Take Profit (Multiplier of Volatility)')
+    parser.add_argument('--sl', type=float, default=1.5, help='Stop Loss (Multiplier of Volatility)')
     parser.add_argument('--timeout', type=int, default=24, help='Timeout in bars')
 
     # New optimization parameters for 3-class problem

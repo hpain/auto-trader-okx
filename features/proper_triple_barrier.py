@@ -61,14 +61,15 @@ def apply_proper_triple_barrier(df: pd.DataFrame, tp: float = 0.015, sl: float =
     return df
 
 
-def apply_proper_triple_barrier_vectorized(df: pd.DataFrame, tp: float = 0.015, sl: float = 0.01, timeout: int = 12) -> pd.DataFrame:
+def apply_proper_triple_barrier_vectorized(df: pd.DataFrame, tp: float | np.ndarray = 0.015, sl: float | np.ndarray = 0.01, timeout: int = 12) -> pd.DataFrame:
     """
     Vectorized implementation of proper triple barrier method without look-ahead bias.
+    Supports both static (float) and dynamic (array) barriers.
     
     Args:
         df: DataFrame with OHLCV data
-        tp: Take profit threshold
-        sl: Stop loss threshold  
+        tp: Take profit threshold (float or array of same length as df)
+        sl: Stop loss threshold (float or array of same length as df)
         timeout: Maximum holding period in bars
     
     Returns:
@@ -86,9 +87,25 @@ def apply_proper_triple_barrier_vectorized(df: pd.DataFrame, tp: float = 0.015, 
     
     n = len(df)
     
+    # Handle dynamic vs static barriers
+    if isinstance(tp, (pd.Series, np.ndarray)):
+        if len(tp) != n:
+            raise ValueError(f"Dynamic TP length {len(tp)} != DataFrame length {n}")
+        tp_values = np.array(tp)
+    else:
+        tp_values = np.full(n, tp)
+        
+    if isinstance(sl, (pd.Series, np.ndarray)):
+        if len(sl) != n:
+            raise ValueError(f"Dynamic SL length {len(sl)} != DataFrame length {n}")
+        sl_values = np.array(sl)
+    else:
+        sl_values = np.full(n, sl)
+    
     # Calculate barriers for all positions at once
-    tp_levels = close_prices.reshape(-1, 1) * (1 + tp)  # Shape: (n, 1)
-    sl_levels = close_prices.reshape(-1, 1) * (1 - sl)  # Shape: (n, 1)
+    # Shape: (n, 1) to broadcast against future prices
+    tp_levels = (close_prices * (1 + tp_values)).reshape(-1, 1)
+    sl_levels = (close_prices * (1 - sl_values)).reshape(-1, 1)
     
     # For each starting position, check the next 'timeout' bars
     for i in range(n - timeout):
@@ -97,6 +114,7 @@ def apply_proper_triple_barrier_vectorized(df: pd.DataFrame, tp: float = 0.015, 
         future_lows = low_prices[i+1:i+1+timeout]
         
         # Check if take profit was hit in any of the next 'timeout' bars
+        # current barrier is tp_levels[i, 0]
         tp_hit = np.any(future_highs >= tp_levels[i, 0])
         
         # Check if stop loss was hit in any of the next 'timeout' bars
