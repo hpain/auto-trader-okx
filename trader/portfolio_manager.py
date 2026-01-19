@@ -922,6 +922,25 @@ class PortfolioManager:
         except Exception as e:
              self.logger.error(f"Failed to sync derivatives positions: {e}")
 
+        # 4. Update Value (Critical for Portfolio Status)
+        for symbol in self.symbols:
+             try:
+                 qty = self.positions.get(symbol, 0.0)
+                 if abs(qty) > 0:
+                     # Fetch current price to calculate value
+                     ticker = await self.exchange_client.get_ticker(symbol)
+                     current_price = ticker['last']
+                     
+                     if symbol not in self.asset_data: self.asset_data[symbol] = {}
+                     
+                     self.asset_data[symbol]['position'] = qty
+                     self.asset_data[symbol]['value'] = qty * current_price
+                     self.asset_data[symbol]['pnl'] = 0.0 # TODO: Sync unrealized PnL if possible
+                     
+                     self.logger.info(f"Synced {symbol}: {qty} units @ {current_price} = ${self.asset_data[symbol]['value']:.2f}")
+             except Exception as e:
+                 self.logger.warning(f"Failed to update value for {symbol}: {e}")
+
         self.logger.info("Portfolio synchronization complete.")
 
 
