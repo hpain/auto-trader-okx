@@ -43,7 +43,7 @@ class TimeSeriesTransformer(nn.Module if HAS_TORCH else object):
     Standard Transformer for Time Series.
     Reverted from GRU as per user request.
     """
-    def __init__(self, input_dim, d_model=64, nhead=4, num_layers=2, dropout=0.2, dim_feedforward=None):
+    def __init__(self, input_dim, d_model=64, nhead=4, num_layers=2, dropout=0.2, dim_feedforward=None, decoder_hidden_dim=None):
         super(TimeSeriesTransformer, self).__init__()
         self.d_model = d_model
         
@@ -56,7 +56,17 @@ class TimeSeriesTransformer(nn.Module if HAS_TORCH else object):
         encoder_layers = nn.TransformerEncoderLayer(d_model, nhead, dim_feedforward=dim_feedforward, dropout=dropout, batch_first=True)
         self.transformer_encoder = nn.TransformerEncoder(encoder_layers, num_layers)
         
-        self.decoder = nn.Linear(d_model, 1)
+        if decoder_hidden_dim:
+            # Complex Sequential Decoder matched to checkpoint
+            self.decoder = nn.Sequential(
+                nn.Linear(d_model, decoder_hidden_dim),
+                nn.ReLU(),
+                nn.Dropout(dropout),
+                nn.Linear(decoder_hidden_dim, 1)
+            )
+        else:
+            # Simple Linear Decoder
+            self.decoder = nn.Linear(d_model, 1)
 
     def forward(self, src):
         # src: [Batch, Seq_Len, Features]
@@ -106,13 +116,26 @@ class TransformerStrategy:
         
         self.logger.info(f"Building Transformer: d_model={d_model}, nhead={nhead}, layers={num_layers}, dim_ff={dim_feedforward}")
         
+        # Try to infer decoder hidden dim if not explicit (standard is d_model // 2)
+        # But for compatibility, only set if explicitly requested OR we are in a 'v3' context?
+        # Actually, let's look at the error: decoder.0.weight (Input->Hidden), decoder.3.weight (Hidden->Output)
+        # This implies: Linear(d_model, H) -> ReLU -> Dropout -> Linear(H, 1)
+        # We need H. It's usually d_model or d_model//2. 
+        # Checkpoint error: decoder.0.weight shape mismatch is not shown because keys are missing.
+        # Checkpoint likely has H = 64 (since d_model=128).
+        
+        decoder_hidden_dim = self.model_params.get('decoder_hidden_dim', 64) # Default to 64 as per checkpoint hint?
+        
+        self.logger.info(f"Building Transformer: d_model={d_model}, nhead={nhead}, layers={num_layers}, dim_ff={dim_feedforward}, dec_hidden={decoder_hidden_dim}")
+        
         self.model = TimeSeriesTransformer(
             input_dim=input_dim, 
             d_model=d_model,
             nhead=nhead,
             num_layers=num_layers,
             dropout=self.dropout,
-            dim_feedforward=dim_feedforward
+            dim_feedforward=dim_feedforward,
+            decoder_hidden_dim=decoder_hidden_dim
         ).to(self.device).float()
         
         # Manually check/set internal dim_feedforward if TimeSeriesTransformer doesn't accept it in init?

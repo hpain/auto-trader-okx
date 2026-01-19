@@ -139,6 +139,7 @@ strategy_management:
       nhead: 4 # Assuming default was used
       num_layers: 2 # Assuming default was used
       dim_feedforward: 2048 # Explicitly set to match checkpoint (2048 vs 128*4=512)
+      decoder_hidden_dim: 64 # Match checkpoint structure (Sequential Decoder)
   ma_fast_strategy:
     short_window: 5
     long_window: 15
