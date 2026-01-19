@@ -211,7 +211,38 @@ def train_main(args):
     # Use balanced loss function with calculated pos_weight
     import torch
     import torch.nn as nn
-    strategy.criterion = nn.BCEWithLogitsLoss(pos_weight=torch.tensor(pos_weight))
+    # Use Focal Loss to better handle imbalanced dataset
+    from torch.nn import functional as F
+
+    class FocalLoss(nn.Module):
+        def __init__(self, alpha=1, gamma=2, reduction='mean'):
+            super(FocalLoss, self).__init__()
+            self.alpha = alpha
+            self.gamma = gamma
+            self.reduction = reduction
+
+        def forward(self, inputs, targets):
+            # Compute sigmoid of inputs
+            p = torch.sigmoid(inputs)
+            # When target is 1, probability of correct classification is p
+            # When target is 0, probability of correct classification is (1-p)
+            pt = torch.where(targets == 1, p, 1 - p)
+            # Compute cross entropy loss
+            ce_loss = F.binary_cross_entropy_with_logits(inputs, targets, reduction='none')
+            # Compute focal weight
+            focal_weight = self.alpha * (targets * (1 - pt) + (1 - targets) * pt) ** self.gamma
+            # Apply focal weight to cross entropy loss
+            focal_loss = focal_weight * ce_loss
+
+            if self.reduction == 'mean':
+                return focal_loss.mean()
+            elif self.reduction == 'sum':
+                return focal_loss.sum()
+            else:
+                return focal_loss
+
+    # Use Focal Loss instead of BCEWithLogitsLoss for better handling of imbalanced data
+    strategy.criterion = FocalLoss(alpha=pos_weight, gamma=2.0)
 
     strategy.scaler = scaler
 
@@ -271,6 +302,7 @@ def train_main(args):
         train_tp = 0  # True positives
         train_fp = 0  # False positives
         train_fn = 0  # False negatives
+        total_grad_norm = 0  # Track gradient norms
 
         for batch_X, batch_y in train_loader:
             batch_X = batch_X.to(strategy.device).float()
@@ -283,8 +315,9 @@ def train_main(args):
             loss = strategy.criterion(outputs, batch_y)
             loss.backward()
 
-            # Adaptive gradient clipping based on loss magnitude
+            # Adaptive gradient clipping and monitoring
             grad_norm = torch.nn.utils.clip_grad_norm_(strategy.model.parameters(), max_norm=1.0)
+            total_grad_norm += grad_norm.item()
             strategy.optimizer.step()
 
             train_loss += loss.item()
@@ -301,6 +334,7 @@ def train_main(args):
             train_fn += ((preds == 0) & (batch_y == 1)).sum().item()
 
         avg_train_loss = train_loss / train_batches if train_batches > 0 else 0
+        avg_grad_norm = total_grad_norm / train_batches if train_batches > 0 else 0
         train_acc = train_correct / train_total if train_total > 0 else 0
 
         # Calculate train F1 score
@@ -355,10 +389,11 @@ def train_main(args):
         strategy.scheduler.step(avg_val_loss)
         current_lr = strategy.optimizer.param_groups[0]['lr']
 
-        logger.info(f"Epoch {epoch+1}/{args.epochs} - Train: {avg_train_loss:.4f} (Acc: {train_acc:.4f}, F1: {train_f1:.4f}) - Val: {avg_val_loss:.4f} (Acc: {val_acc:.4f}, F1: {val_f1:.4f}) - LR: {current_lr:.6f}")
+        logger.info(f"Epoch {epoch+1}/{args.epochs} - Train: {avg_train_loss:.4f} (Acc: {train_acc:.4f}, F1: {train_f1:.4f}) - Val: {avg_val_loss:.4f} (Acc: {val_acc:.4f}, F1: {val_f1:.4f}) - Grad: {avg_grad_norm:.2f} - LR: {current_lr:.6f}")
 
         # Early stopping based on validation F1 score (more appropriate for imbalanced data)
         # Also consider improvement in loss to avoid stopping too early on F1 fluctuations
+        # Additionally, track the trend of metrics to avoid stopping prematurely
         if val_f1 > best_val_f1 or (val_f1 >= best_val_f1 * 0.99 and avg_val_loss < best_val_loss):
             best_val_loss = avg_val_loss
             best_val_acc = val_acc
@@ -368,6 +403,10 @@ def train_main(args):
             best_state = {k: v.cpu().clone() for k, v in strategy.model.state_dict().items()}
         else:
             patience_counter += 1
+            # Additional check: if the model is significantly worse than the best, stop early
+            if val_f1 < best_val_f1 * 0.90 and avg_val_loss > best_val_loss * 1.1:
+                logger.info(f"Performance degradation detected. Stopping early at epoch {epoch+1}. Best epoch: {best_epoch}, Best Val Loss: {best_val_loss:.4f}, Best Val Acc: {best_val_acc:.4f}, Best Val F1: {best_val_f1:.4f}")
+                break
             if patience_counter >= patience:
                 logger.info(f"Early stopping at epoch {epoch+1}. Best epoch: {best_epoch}, Best Val Loss: {best_val_loss:.4f}, Best Val Acc: {best_val_acc:.4f}, Best Val F1: {best_val_f1:.4f}")
                 break
@@ -397,11 +436,11 @@ if __name__ == "__main__":
     parser.add_argument('--timeout', type=int, default=24, help='Timeout in bars')
 
     # New optimization parameters
-    parser.add_argument('--d_model', type=int, default=64, help='Transformer model dimension')
-    parser.add_argument('--nhead', type=int, default=4, help='Number of attention heads')
+    parser.add_argument('--d_model', type=int, default=72, help='Transformer model dimension')
+    parser.add_argument('--nhead', type=int, default=6, help='Number of attention heads')
     parser.add_argument('--num_layers', type=int, default=2, help='Number of transformer layers')
-    parser.add_argument('--dropout', type=float, default=0.3, help='Dropout rate')
-    parser.add_argument('--patience', type=int, default=15, help='Patience for early stopping')
+    parser.add_argument('--dropout', type=float, default=0.25, help='Dropout rate')
+    parser.add_argument('--patience', type=int, default=20, help='Patience for early stopping')
     parser.add_argument('--lr', type=float, default=0.0001, help='Learning rate')
 
     args = parser.parse_args()

@@ -152,7 +152,7 @@ class TransformerStrategy:
         else:
             self.logger.warning("PyTorch not installed. Strategy disabled.")
 
-    def build_model(self, input_dim, d_model=64, nhead=4, num_layers=2, dropout=0.3, lr=0.0001):
+    def build_model(self, input_dim, d_model=72, nhead=6, num_layers=2, dropout=0.25, lr=0.0001):
         if not HAS_TORCH: return
         self.model = TimeSeriesTransformer(
             input_dim=input_dim,
@@ -161,6 +161,17 @@ class TransformerStrategy:
             num_layers=num_layers,
             dropout=dropout
         ).to(self.device).float()
+
+        # Initialize weights using Xavier/Glorot initialization for better convergence
+        def init_weights(m):
+            if isinstance(m, nn.Linear):
+                nn.init.xavier_uniform_(m.weight)
+                if m.bias is not None:
+                    nn.init.constant_(m.bias, 0)
+            elif isinstance(m, nn.Embedding):
+                nn.init.normal_(m.weight, mean=0, std=0.1)
+
+        self.model.apply(init_weights)
 
         # Use AdamW for better regularization with configurable learning rate
         self.optimizer = optim.AdamW(self.model.parameters(), lr=lr, weight_decay=1e-3)
