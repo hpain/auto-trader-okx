@@ -67,7 +67,7 @@ class TimeSeriesTransformer(nn.Module if HAS_TORCH else object):
         self.pos_encoder = PositionalEncoding(d_model, dropout)
 
         # 3. Transformer Encoder Layers with enhanced architecture
-        encoder_layers = []
+        encoder_layers = nn.ModuleList()
         for _ in range(num_layers):
             encoder_layer = nn.TransformerEncoderLayer(
                 d_model=d_model,
@@ -81,8 +81,7 @@ class TimeSeriesTransformer(nn.Module if HAS_TORCH else object):
             encoder_layers.append(encoder_layer)
 
         self.transformer_encoder = nn.TransformerEncoder(
-            nn.ModuleList(encoder_layers),
-            num_layers=num_layers
+            encoder_layers
         )
 
         # 4. Enhanced Output Head with multiple layers for better representation
