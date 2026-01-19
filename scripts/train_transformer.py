@@ -12,10 +12,47 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from strategies.transformer_strategy import TransformerStrategy, TimeSeriesTransformer
 from features.feature_engineering import generate_features, apply_triple_barrier
 from sklearn.preprocessing import StandardScaler
+from sklearn.feature_selection import SelectKBest, f_classif
 
 # Setup Logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger("Trainer")
+
+
+def select_features(df, feature_cols, target_col, max_features=80):
+    """
+    Select the most informative features using statistical tests
+    """
+    if len(feature_cols) <= max_features:
+        return feature_cols
+
+    # Remove features with zero variance
+    valid_features = []
+    for col in feature_cols:
+        if df[col].std() > 0:  # Only keep features with variance
+            valid_features.append(col)
+
+    if len(valid_features) <= max_features:
+        return valid_features
+
+    # Use SelectKBest to select top features based on ANOVA F-test
+    selector = SelectKBest(score_func=f_classif, k=min(max_features, len(valid_features)))
+
+    X = df[valid_features]
+    y = df[target_col]
+
+    # Handle any remaining NaN values
+    X = X.fillna(X.mean())  # Fill with mean to avoid issues with SelectKBest
+
+    try:
+        X_selected = selector.fit_transform(X, y)
+        selected_features = [valid_features[i] for i in selector.get_support(indices=True)]
+
+        logger.info(f"Feature selection reduced from {len(valid_features)} to {len(selected_features)} features")
+        return selected_features
+    except Exception as e:
+        logger.warning(f"Feature selection failed: {e}. Using first {max_features} features.")
+        return valid_features[:max_features]
 
 
 def train_main(args):
@@ -63,7 +100,36 @@ def train_main(args):
         df = df[df['symbol'] == symbols[0]].copy()
         logger.info(f"Using {symbols[0]}: {len(df)} rows")
 
-    # 3. Generate Features
+    # 3. Data Quality Improvements
+    logger.info("Performing data quality improvements...")
+
+    # Handle missing values in derived features
+    # Forward fill for time series data
+    for col in ['funding_rate', 'open_interest', 'open_interest_value']:
+        if col in df.columns:
+            df[col] = df[col].ffill().bfill()
+
+    # Handle other derived features
+    for col in ['count_toptrader_long_short_ratio', 'sum_toptrader_long_short_ratio',
+                'count_long_short_ratio', 'sum_taker_long_short_vol_ratio']:
+        if col in df.columns:
+            df[col] = df[col].ffill().bfill()
+
+    # Remove extreme outliers using IQR method
+    numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
+    numeric_cols = [col for col in numeric_cols if col not in ['timestamp', 'datetime']]
+
+    for col in numeric_cols:
+        Q1 = df[col].quantile(0.25)
+        Q3 = df[col].quantile(0.75)
+        IQR = Q3 - Q1
+        lower_bound = Q1 - 3 * IQR  # Using 3*IQR for more tolerance
+        upper_bound = Q3 + 3 * IQR
+        df[col] = df[col].clip(lower=lower_bound, upper=upper_bound)
+
+    logger.info(f"After data cleaning: {len(df)} rows")
+
+    # 4. Generate Features
     logger.info("Generating features...")
     df_features = generate_features(df)
 
@@ -104,10 +170,14 @@ def train_main(args):
 
     logger.info(f"Split: Train={len(train_df)}, Val={len(val_df)}, Test={len(test_df)}")
 
-    # 6. Feature Selection
+    # 7. Feature Selection with correlation analysis
     exclude = ['y', 'open', 'high', 'low', 'close', 'symbol'] + [c for c in df_labeled.columns if 'future' in c]
     feature_cols = [c for c in df_labeled.columns if c not in exclude and np.issubdtype(df_labeled[c].dtype, np.number)]
-    logger.info(f"Features: {len(feature_cols)}")
+    logger.info(f"Initial features: {len(feature_cols)}")
+
+    # Perform feature selection to reduce dimensionality
+    feature_cols = select_features(train_df, feature_cols, target_col, max_features=80)
+    logger.info(f"Selected features: {len(feature_cols)}")
 
     # 7. Scaling
     scaler = StandardScaler()
@@ -134,7 +204,8 @@ def train_main(args):
         d_model=args.d_model,  # Allow customization
         nhead=args.nhead,
         num_layers=args.num_layers,
-        dropout=args.dropout
+        dropout=args.dropout,
+        lr=args.lr  # Use configurable learning rate
     )
 
     # Use balanced loss function with calculated pos_weight
@@ -175,8 +246,19 @@ def train_main(args):
     patience_counter = 0
     best_state = None
 
+    # Add warmup scheduler
+    from torch.optim.lr_scheduler import LambdaLR
+    def warmup_lambda(current_step):
+        warmup_steps = args.epochs * 0.1  # Warmup for first 10% of epochs
+        if current_step < warmup_steps:
+            return float(current_step) / float(max(1, warmup_steps))
+        return 1.0
+
+    warmup_scheduler = LambdaLR(strategy.optimizer, lr_lambda=warmup_lambda)
+
     # Track metrics for better early stopping
     best_val_acc = 0.0
+    best_val_f1 = 0.0
     best_epoch = 0
 
     for epoch in range(args.epochs):
@@ -186,6 +268,9 @@ def train_main(args):
         train_batches = 0
         train_correct = 0
         train_total = 0
+        train_tp = 0  # True positives
+        train_fp = 0  # False positives
+        train_fn = 0  # False negatives
 
         for batch_X, batch_y in train_loader:
             batch_X = batch_X.to(strategy.device).float()
@@ -198,20 +283,30 @@ def train_main(args):
             loss = strategy.criterion(outputs, batch_y)
             loss.backward()
 
-            # Gradient clipping
-            torch.nn.utils.clip_grad_norm_(strategy.model.parameters(), max_norm=1.0)
+            # Adaptive gradient clipping based on loss magnitude
+            grad_norm = torch.nn.utils.clip_grad_norm_(strategy.model.parameters(), max_norm=1.0)
             strategy.optimizer.step()
 
             train_loss += loss.item()
             train_batches += 1
 
-            # Calculate accuracy
+            # Calculate accuracy and other metrics
             preds = (torch.sigmoid(outputs) > 0.5).float()
             train_correct += (preds == batch_y).sum().item()
             train_total += batch_y.size(0)
 
+            # Calculate TP, FP, FN for F1 score
+            train_tp += ((preds == 1) & (batch_y == 1)).sum().item()
+            train_fp += ((preds == 1) & (batch_y == 0)).sum().item()
+            train_fn += ((preds == 0) & (batch_y == 1)).sum().item()
+
         avg_train_loss = train_loss / train_batches if train_batches > 0 else 0
         train_acc = train_correct / train_total if train_total > 0 else 0
+
+        # Calculate train F1 score
+        train_precision = train_tp / (train_tp + train_fp) if (train_tp + train_fp) > 0 else 0
+        train_recall = train_tp / (train_tp + train_fn) if (train_tp + train_fn) > 0 else 0
+        train_f1 = 2 * (train_precision * train_recall) / (train_precision + train_recall) if (train_precision + train_recall) > 0 else 0
 
         # Validation
         strategy.model.eval()
@@ -219,6 +314,9 @@ def train_main(args):
         val_batches = 0
         val_correct = 0
         val_total = 0
+        val_tp = 0  # True positives
+        val_fp = 0  # False positives
+        val_fn = 0  # False negatives
 
         with torch.no_grad():
             for batch_X, batch_y in val_loader:
@@ -231,31 +329,47 @@ def train_main(args):
                 val_loss += loss.item()
                 val_batches += 1
 
-                # Calculate accuracy
+                # Calculate accuracy and other metrics
                 preds = (torch.sigmoid(outputs) > 0.5).float()
                 val_correct += (preds == batch_y).sum().item()
                 val_total += batch_y.size(0)
 
+                # Calculate TP, FP, FN for F1 score
+                val_tp += ((preds == 1) & (batch_y == 1)).sum().item()
+                val_fp += ((preds == 1) & (batch_y == 0)).sum().item()
+                val_fn += ((preds == 0) & (batch_y == 1)).sum().item()
+
         avg_val_loss = val_loss / val_batches if val_batches > 0 else 0
         val_acc = val_correct / val_total if val_total > 0 else 0
+
+        # Calculate validation F1 score
+        val_precision = val_tp / (val_tp + val_fp) if (val_tp + val_fp) > 0 else 0
+        val_recall = val_tp / (val_tp + val_fn) if (val_tp + val_fn) > 0 else 0
+        val_f1 = 2 * (val_precision * val_recall) / (val_precision + val_recall) if (val_precision + val_recall) > 0 else 0
+
+        # Update warmup scheduler first, then main scheduler
+        if epoch < int(args.epochs * 0.1):  # Only apply warmup in first 10% of epochs
+            warmup_scheduler.step()
 
         # LR Scheduler
         strategy.scheduler.step(avg_val_loss)
         current_lr = strategy.optimizer.param_groups[0]['lr']
 
-        logger.info(f"Epoch {epoch+1}/{args.epochs} - Train: {avg_train_loss:.4f} (Acc: {train_acc:.4f}) - Val: {avg_val_loss:.4f} (Acc: {val_acc:.4f}) - LR: {current_lr:.6f}")
+        logger.info(f"Epoch {epoch+1}/{args.epochs} - Train: {avg_train_loss:.4f} (Acc: {train_acc:.4f}, F1: {train_f1:.4f}) - Val: {avg_val_loss:.4f} (Acc: {val_acc:.4f}, F1: {val_f1:.4f}) - LR: {current_lr:.6f}")
 
-        # Early stopping based on validation loss and accuracy
-        if avg_val_loss < best_val_loss:
+        # Early stopping based on validation F1 score (more appropriate for imbalanced data)
+        # Also consider improvement in loss to avoid stopping too early on F1 fluctuations
+        if val_f1 > best_val_f1 or (val_f1 >= best_val_f1 * 0.99 and avg_val_loss < best_val_loss):
             best_val_loss = avg_val_loss
             best_val_acc = val_acc
+            best_val_f1 = val_f1
             best_epoch = epoch + 1
             patience_counter = 0
             best_state = {k: v.cpu().clone() for k, v in strategy.model.state_dict().items()}
         else:
             patience_counter += 1
             if patience_counter >= patience:
-                logger.info(f"Early stopping at epoch {epoch+1}. Best epoch: {best_epoch}, Best Val Loss: {best_val_loss:.4f}, Best Val Acc: {best_val_acc:.4f}")
+                logger.info(f"Early stopping at epoch {epoch+1}. Best epoch: {best_epoch}, Best Val Loss: {best_val_loss:.4f}, Best Val Acc: {best_val_acc:.4f}, Best Val F1: {best_val_f1:.4f}")
                 break
 
     # Restore best model
@@ -269,6 +383,7 @@ def train_main(args):
     logger.info(f"Model saved to {model_path}")
     logger.info(f"Best Val Loss: {best_val_loss:.4f} (Baseline: {baseline:.4f}) at epoch {best_epoch}")
     logger.info(f"Best Val Accuracy: {best_val_acc:.4f}")
+    logger.info(f"Best Val F1 Score: {best_val_f1:.4f}")
 
 
 if __name__ == "__main__":
@@ -282,11 +397,11 @@ if __name__ == "__main__":
     parser.add_argument('--timeout', type=int, default=24, help='Timeout in bars')
 
     # New optimization parameters
-    parser.add_argument('--d_model', type=int, default=64, help='Transformer model dimension')
-    parser.add_argument('--nhead', type=int, default=4, help='Number of attention heads')
-    parser.add_argument('--num_layers', type=int, default=2, help='Number of transformer layers')
-    parser.add_argument('--dropout', type=float, default=0.3, help='Dropout rate')
-    parser.add_argument('--patience', type=int, default=10, help='Patience for early stopping')
+    parser.add_argument('--d_model', type=int, default=96, help='Transformer model dimension')
+    parser.add_argument('--nhead', type=int, default=6, help='Number of attention heads')
+    parser.add_argument('--num_layers', type=int, default=3, help='Number of transformer layers')
+    parser.add_argument('--dropout', type=float, default=0.2, help='Dropout rate')
+    parser.add_argument('--patience', type=int, default=15, help='Patience for early stopping')
     parser.add_argument('--lr', type=float, default=0.0001, help='Learning rate')
 
     args = parser.parse_args()

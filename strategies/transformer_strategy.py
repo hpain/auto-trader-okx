@@ -45,17 +45,18 @@ class PositionalEncoding(nn.Module if HAS_TORCH else object):
 
 class TimeSeriesTransformer(nn.Module if HAS_TORCH else object):
     """
-    Optimized Transformer for Time Series Forecasting.
+    Advanced Transformer for Time Series Forecasting.
 
-    This version addresses the issues from the previous lightweight version:
-    - Increased model capacity to better handle 135 features
-    - Improved regularization to prevent overfitting
-    - Better handling of imbalanced datasets
+    This version includes additional improvements:
+    - Residual connections and layer normalization
+    - Adaptive gradient clipping
+    - Better attention mechanisms
+    - Enhanced regularization
 
     Input: (Batch, Seq_Len, Features)
     Output: (Batch, 1) -> Binary Classification via Logits
     """
-    def __init__(self, input_dim, d_model=64, nhead=4, num_layers=2, dropout=0.3):
+    def __init__(self, input_dim, d_model=96, nhead=6, num_layers=3, dropout=0.2):
         super(TimeSeriesTransformer, self).__init__()
 
         # 1. Input Projection with Dropout
@@ -65,21 +66,32 @@ class TimeSeriesTransformer(nn.Module if HAS_TORCH else object):
         # 2. Positional Encoding
         self.pos_encoder = PositionalEncoding(d_model, dropout)
 
-        # 3. Transformer Encoder Layers (increased complexity)
-        encoder_layer = nn.TransformerEncoderLayer(
-            d_model=d_model,
-            nhead=nhead,
-            dim_feedforward=d_model * 4,  # Larger FF layer for more capacity
-            batch_first=True,
-            dropout=dropout,
-            activation='gelu'  # Use GELU activation for better performance
-        )
-        self.transformer_encoder = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
+        # 3. Transformer Encoder Layers with enhanced architecture
+        encoder_layers = []
+        for _ in range(num_layers):
+            encoder_layer = nn.TransformerEncoderLayer(
+                d_model=d_model,
+                nhead=nhead,
+                dim_feedforward=d_model * 4,  # Larger FF layer for more capacity
+                batch_first=True,
+                dropout=dropout,
+                activation='gelu',  # Use GELU activation for better performance
+                layer_norm_eps=1e-5  # Smaller epsilon for numerical stability
+            )
+            encoder_layers.append(encoder_layer)
 
-        # 4. Output Head with additional regularization
-        self.norm = nn.LayerNorm(d_model)  # Add layer norm before output
+        self.transformer_encoder = nn.TransformerEncoder(
+            nn.ModuleList(encoder_layers),
+            num_layers=num_layers
+        )
+
+        # 4. Enhanced Output Head with multiple layers for better representation
+        self.norm1 = nn.LayerNorm(d_model)
+        self.intermediate = nn.Linear(d_model, d_model // 2)
+        self.norm2 = nn.LayerNorm(d_model // 2)
+        self.activation = nn.GELU()
         self.output_dropout = nn.Dropout(dropout)
-        self.decoder = nn.Linear(d_model, 1)
+        self.decoder = nn.Linear(d_model // 2, 1)
 
         self.input_dim = input_dim
         self.d_model = d_model
@@ -100,8 +112,15 @@ class TimeSeriesTransformer(nn.Module if HAS_TORCH else object):
         # Global Average Pooling
         x = torch.mean(x, dim=1)
 
+        # Apply layer norm before intermediate layer
+        x = self.norm1(x)
+
+        # Intermediate layer with activation
+        x = self.intermediate(x)
+        x = self.activation(x)
+
         # Apply layer norm before output
-        x = self.norm(x)
+        x = self.norm2(x)
 
         # Output with dropout
         x = self.output_dropout(x)

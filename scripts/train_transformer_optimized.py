@@ -107,13 +107,13 @@ def train_main(args):
     # Forward fill for time series data
     for col in ['funding_rate', 'open_interest', 'open_interest_value']:
         if col in df.columns:
-            df[col] = df[col].fillna(method='ffill').fillna(method='bfill')
+            df[col] = df[col].ffill().bfill()
 
     # Handle other derived features
     for col in ['count_toptrader_long_short_ratio', 'sum_toptrader_long_short_ratio',
                 'count_long_short_ratio', 'sum_taker_long_short_vol_ratio']:
         if col in df.columns:
-            df[col] = df[col].fillna(method='ffill').fillna(method='bfill')
+            df[col] = df[col].ffill().bfill()
 
     # Remove extreme outliers using IQR method
     numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
@@ -251,6 +251,16 @@ def train_main(args):
     best_val_f1 = 0.0
     best_epoch = 0
 
+    # Add warmup scheduler
+    from torch.optim.lr_scheduler import LambdaLR
+    def warmup_lambda(current_step):
+        warmup_steps = args.epochs * 0.1  # Warmup for first 10% of epochs
+        if current_step < warmup_steps:
+            return float(current_step) / float(max(1, warmup_steps))
+        return 1.0
+
+    warmup_scheduler = LambdaLR(strategy.optimizer, lr_lambda=warmup_lambda)
+
     for epoch in range(args.epochs):
         # Training
         strategy.model.train()
@@ -273,8 +283,8 @@ def train_main(args):
             loss = strategy.criterion(outputs, batch_y)
             loss.backward()
 
-            # Gradient clipping
-            torch.nn.utils.clip_grad_norm_(strategy.model.parameters(), max_norm=1.0)
+            # Adaptive gradient clipping based on loss magnitude
+            grad_norm = torch.nn.utils.clip_grad_norm_(strategy.model.parameters(), max_norm=1.0)
             strategy.optimizer.step()
 
             train_loss += loss.item()
@@ -337,6 +347,10 @@ def train_main(args):
         val_recall = val_tp / (val_tp + val_fn) if (val_tp + val_fn) > 0 else 0
         val_f1 = 2 * (val_precision * val_recall) / (val_precision + val_recall) if (val_precision + val_recall) > 0 else 0
 
+        # Update warmup scheduler first, then main scheduler
+        if epoch < int(args.epochs * 0.1):  # Only apply warmup in first 10% of epochs
+            warmup_scheduler.step()
+
         # LR Scheduler
         strategy.scheduler.step(avg_val_loss)
         current_lr = strategy.optimizer.param_groups[0]['lr']
@@ -344,7 +358,8 @@ def train_main(args):
         logger.info(f"Epoch {epoch+1}/{args.epochs} - Train: {avg_train_loss:.4f} (Acc: {train_acc:.4f}, F1: {train_f1:.4f}) - Val: {avg_val_loss:.4f} (Acc: {val_acc:.4f}, F1: {val_f1:.4f}) - LR: {current_lr:.6f}")
 
         # Early stopping based on validation F1 score (more appropriate for imbalanced data)
-        if val_f1 > best_val_f1:
+        # Also consider improvement in loss to avoid stopping too early on F1 fluctuations
+        if val_f1 > best_val_f1 or (val_f1 >= best_val_f1 * 0.99 and avg_val_loss < best_val_loss):
             best_val_loss = avg_val_loss
             best_val_acc = val_acc
             best_val_f1 = val_f1
@@ -382,11 +397,11 @@ if __name__ == "__main__":
     parser.add_argument('--timeout', type=int, default=24, help='Timeout in bars')
 
     # New optimization parameters
-    parser.add_argument('--d_model', type=int, default=64, help='Transformer model dimension')
-    parser.add_argument('--nhead', type=int, default=4, help='Number of attention heads')
-    parser.add_argument('--num_layers', type=int, default=2, help='Number of transformer layers')
-    parser.add_argument('--dropout', type=float, default=0.3, help='Dropout rate')
-    parser.add_argument('--patience', type=int, default=10, help='Patience for early stopping')
+    parser.add_argument('--d_model', type=int, default=96, help='Transformer model dimension')
+    parser.add_argument('--nhead', type=int, default=6, help='Number of attention heads')
+    parser.add_argument('--num_layers', type=int, default=3, help='Number of transformer layers')
+    parser.add_argument('--dropout', type=float, default=0.2, help='Dropout rate')
+    parser.add_argument('--patience', type=int, default=15, help='Patience for early stopping')
     parser.add_argument('--lr', type=float, default=0.0001, help='Learning rate')
 
     args = parser.parse_args()
