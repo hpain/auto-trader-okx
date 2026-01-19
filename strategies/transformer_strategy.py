@@ -407,8 +407,17 @@ class TransformerStrategy:
             
         if os.path.exists(path):
             # Map location is crucial for GPU -> CPU transfer
-            self.model.load_state_dict(torch.load(path, map_location=self.device))
+            # strict=False is KEY here because the checkpoint contains 'encoder_layer' artifacts 
+            # and potentially other unused keys from the training script's history.
+            state_dict = torch.load(path, map_location=self.device)
+            missing, unexpected = self.model.load_state_dict(state_dict, strict=False)
+            
             self.model.eval()
             self.logger.info(f"Model loaded from {path}")
+            
+            if missing:
+                self.logger.warning(f"Feature Loader - Missing Keys (Critical?): {missing}")
+            if unexpected:
+                self.logger.info(f"Feature Loader - Ignored Unexpected Keys (Artifacts): {len(unexpected)} keys")
         else:
             self.logger.warning(f"Model file not found: {path}")

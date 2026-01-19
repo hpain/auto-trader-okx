@@ -137,7 +137,7 @@ strategy_management:
     model_architecture:
       d_model: 128
       nhead: 4 # Assuming default was used
-      num_layers: 2 # Assuming default was used
+      num_layers: 3 # Updated to 3 (Fix for "Unexpected key ... layers.2")
       dim_feedforward: 2048 # Explicitly set to match checkpoint (2048 vs 128*4=512)
       decoder_hidden_dim: 64 # Match checkpoint structure (Sequential Decoder)
   ma_fast_strategy:
