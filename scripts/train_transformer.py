@@ -152,8 +152,10 @@ def train_main(args):
     rf.fit(train_df[feature_cols], train_df[target_col])
     
     importances = pd.Series(rf.feature_importances_, index=feature_cols).sort_values(ascending=False)
-    # Keep top 30 features or those with importance > 0.01
-    top_n = 30
+    # Keep top N features
+    # User requested FULL features (previously ~139). Transformer can handle more inputs.
+    # We relax the strict selection to allow directional signals like RSI/MACD to pass through.
+    top_n = 150 
     selected_features = importances.head(top_n).index.tolist()
     logger.info(f"Selected Top {len(selected_features)} Features: {selected_features}")
     
@@ -171,20 +173,20 @@ def train_main(args):
     logger.info("Scaler saved to models/scaler.pkl")
 
     # 5. Initialize Strategy & Model
-    # ANTI-OVERFITTING CONFIGURATION
+    # ANTI-OVERFITTING CONFIGURATION (BALANCED)
     strategy = TransformerStrategy(
         strategy_name="Transformer_P2",
         window_size=args.window,
         features=feature_cols,
         buy_threshold=0.6,
         sell_threshold=0.4,
-        dropout=0.4,  # INCREASED DROPOUT (Was 0.2)
+        dropout=0.25,  # BALANCED DROPOUT (Was 0.4, too high)
         model_params={
-            'd_model': 64,       # Keep model small
+            'd_model': 64,       
             'nhead': 4,
-            'num_layers': 2,     # Keep depth shallow
-            'dim_feedforward': 128, # CRITICAL: Constrain FF dim (Original 2048 is way too big for financial data)
-            'decoder_hidden_dim': 32 # Bottleneck decoder
+            'num_layers': 2,     
+            'dim_feedforward': 128, 
+            'decoder_hidden_dim': 32 
         }
     )
     
@@ -195,7 +197,7 @@ def train_main(args):
     
     # OVERRIDE OPTIMIZER WITH STRONGER REGULARIZATION
     import torch.optim as optim
-    strategy.optimizer = optim.AdamW(strategy.model.parameters(), lr=0.0005, weight_decay=0.05) # Higher Weight Decay (0.05), Lower LR
+    strategy.optimizer = optim.AdamW(strategy.model.parameters(), lr=0.0005, weight_decay=0.01) # Moderate Weight Decay (0.01)
     
     strategy.scaler = scaler
     
