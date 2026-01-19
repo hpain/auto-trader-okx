@@ -282,7 +282,9 @@ def train_main(args):
     # For 3-class classification (take profit, stop loss, timeout), use CrossEntropyLoss
     # with class weights to handle imbalanced dataset
     # Ensure weights are on the same device as model and use float32 to match model outputs
-    class_weights = torch.tensor([neu_weight, neg_weight, pos_weight], device=strategy.device, dtype=torch.float32)  # [timeout, stop_loss, take_profit]
+    class_weights = torch.tensor([neu_weight, neg_weight, pos_weight], dtype=torch.float32)  # [timeout, stop_loss, take_profit]
+    # Move weights to the same device as the model
+    class_weights = class_weights.to(strategy.device)
     strategy.criterion = nn.CrossEntropyLoss(weight=class_weights)
 
     strategy.scaler = scaler
