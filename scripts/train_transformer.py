@@ -139,7 +139,8 @@ def train_main(args):
     # Select feature columns
     # CRITICAL FIX: Exclude raw price columns to prevent non-stationarity overfitting.
     # The model should learn from rates of change (RSI, PCT_CHANGE), not absolute price levels (BTC=60k).
-    raw_prices = ['open', 'high', 'low', 'close', 'volume', 'open_interest', 'symbol']
+    # UPDATED: User requested restoration of features. We allow Volume/OI but keep Price levels out.
+    raw_prices = ['open', 'high', 'low', 'close', 'symbol'] # Removed volume, open_interest from ban list
     exclude = ['y'] + raw_prices + [c for c in df_labeled.columns if 'future' in c]
     feature_cols = [c for c in df_labeled.columns if c not in exclude and np.issubdtype(df_labeled[c].dtype, np.number)]
     
