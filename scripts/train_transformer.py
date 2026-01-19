@@ -129,6 +129,28 @@ def train_main(args):
 
     logger.info(f"After data cleaning: {len(df)} rows")
 
+    # 3.5 Enhanced Feature Engineering
+    logger.info("Performing enhanced feature engineering...")
+
+    # Add technical indicators that might help with prediction
+    if 'close' in df.columns:
+        # Add returns and volatility features
+        df['returns'] = df['close'].pct_change()
+        df['volatility'] = df['returns'].rolling(window=10).std()
+
+        # Add rolling statistics
+        df['close_ma_ratio'] = df['close'] / df['close'].rolling(window=20).mean()
+        df['volume_ma_ratio'] = df['volume'] / df['volume'].rolling(window=20).mean()
+
+        # Add momentum features
+        df['momentum_5'] = df['close'] / df['close'].shift(5) - 1
+        df['momentum_10'] = df['close'] / df['close'].shift(10) - 1
+
+        # Fill NaN values created by these operations
+        df = df.fillna(method='bfill').fillna(method='ffill')
+
+    logger.info(f"After enhanced feature engineering: {len(df)} rows")
+
     # 4. Generate Features
     logger.info("Generating features...")
     df_features = generate_features(df)
@@ -272,15 +294,44 @@ def train_main(args):
     val_scaled = val_df.copy()
     val_scaled[feature_cols] = scaler.transform(val_df[feature_cols])
 
-    # 10. Train with validation
-    logger.info(f"Training for {args.epochs} epochs...")
+    # 9.5 Data Augmentation for Time Series
+    # Apply Gaussian noise augmentation to training data to improve generalization
+    import numpy as np
+    augmentation_factor = 0.1  # 10% of the standard deviation
+    noise_factor = 0.05  # Additional noise factor
+
+    # Add small Gaussian noise to training features to improve robustness
+    for col in feature_cols:
+        if col in train_scaled.columns:
+            # Calculate the std of the feature to scale the noise appropriately
+            feature_std = train_scaled[col].std()
+            if not np.isnan(feature_std) and feature_std > 0:
+                noise = np.random.normal(0, noise_factor * feature_std, size=train_scaled[col].shape)
+                train_scaled[col] += noise
+
+    # 10. Curriculum Learning and Training Setup
+    logger.info(f"Training for {args.epochs} epochs with Curriculum Learning...")
 
     from features.tensor_loader import create_lazy_loader
     import torch
 
+    # Curriculum Learning: Start with easier examples and gradually increase difficulty
+    # Sort training data by volatility (easier examples first)
+    train_scaled_enhanced = train_scaled.copy()
+
+    # Calculate sample difficulty based on volatility or other metrics
+    if 'volatility' in train_scaled_enhanced.columns:
+        # Sort by lowest volatility first (easier patterns)
+        train_scaled_enhanced = train_scaled_enhanced.sort_values('volatility')
+    else:
+        # If no volatility column, sort by absolute return magnitude (easier patterns first)
+        if 'returns' in train_scaled_enhanced.columns:
+            train_scaled_enhanced['abs_returns'] = train_scaled_enhanced['returns'].abs()
+            train_scaled_enhanced = train_scaled_enhanced.sort_values('abs_returns')
+
     train_loader = create_lazy_loader(
-        train_scaled[feature_cols],
-        train_scaled[target_col],
+        train_scaled_enhanced[feature_cols],
+        train_scaled_enhanced[target_col],
         args.window,
         args.batch_size
     )
@@ -406,8 +457,9 @@ def train_main(args):
         if epoch < int(args.epochs * 0.1):  # Only apply warmup in first 10% of epochs
             warmup_scheduler.step()
 
-        # LR Scheduler - use CosineAnnealingLR for more gradual decay after initial plateau
-        strategy.scheduler.step(avg_val_loss)
+        # LR Scheduler - use CosineAnnealingWarmRestarts for more sophisticated scheduling
+        # This allows the model to explore different regions of the loss landscape
+        strategy.scheduler.step(epoch)  # Pass epoch for cosine annealing
         current_lr = strategy.optimizer.param_groups[0]['lr']
 
         # Additional check: if loss is decreasing too rapidly, consider reducing learning rate
@@ -421,6 +473,9 @@ def train_main(args):
             # Reduce learning rate to allow for fine-tuning
             for param_group in strategy.optimizer.param_groups:
                 param_group['lr'] = max(param_group['lr'] * 0.9, 1e-6)
+
+        # Cyclical learning rate for better exploration of the loss landscape
+        # Note: This is now handled by CosineAnnealingWarmRestarts, so we can remove manual cycling
 
         logger.info(f"Epoch {epoch+1}/{args.epochs} - Train: {avg_train_loss:.4f} (Acc: {train_acc:.4f}, F1: {train_f1:.4f}) - Val: {avg_val_loss:.4f} (Acc: {val_acc:.4f}, F1: {val_f1:.4f}) - Grad: {avg_grad_norm:.2f} - LR: {current_lr:.6f}")
 

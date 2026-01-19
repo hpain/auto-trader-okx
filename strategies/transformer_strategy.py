@@ -175,10 +175,14 @@ class TransformerStrategy:
 
         # Use AdamW for better regularization with configurable learning rate
         # Increase weight decay for stronger regularization
-        self.optimizer = optim.AdamW(self.model.parameters(), lr=lr, weight_decay=5e-3)
+        # Use amsgrad variant for more stable training
+        self.optimizer = optim.AdamW(self.model.parameters(), lr=lr, weight_decay=5e-3, amsgrad=True)
 
-        # Scheduler to reduce LR when loss plateaus
-        self.scheduler = optim.lr_scheduler.ReduceLROnPlateau(self.optimizer, mode='min', factor=0.5, patience=5)
+        # Use CosineAnnealingWarmRestarts for more sophisticated LR scheduling
+        # This allows the model to explore different regions of the loss landscape
+        from torch.optim.lr_scheduler import CosineAnnealingWarmRestarts
+        # Calculate total steps for scheduler
+        self.scheduler = CosineAnnealingWarmRestarts(self.optimizer, T_0=50, T_mult=1, eta_min=1e-6)
 
         # Binary Cross Entropy with Logits (Combined Sigmoid + BCELoss for stability)
         # Using pos_weight to handle class imbalance if needed (future upgrade)
