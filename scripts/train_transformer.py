@@ -229,8 +229,8 @@ def train_main(args):
             pt = torch.where(targets == 1, p, 1 - p)
             # Compute cross entropy loss
             ce_loss = F.binary_cross_entropy_with_logits(inputs, targets, reduction='none')
-            # Compute focal weight
-            focal_weight = self.alpha * (targets * (1 - pt) + (1 - targets) * pt) ** self.gamma
+            # Compute focal weight - use more conservative approach to prevent over-confidence
+            focal_weight = self.alpha * (1 - pt) ** self.gamma
             # Apply focal weight to cross entropy loss
             focal_loss = focal_weight * ce_loss
 
@@ -241,8 +241,9 @@ def train_main(args):
             else:
                 return focal_loss
 
-    # Use Focal Loss instead of BCEWithLogitsLoss for better handling of imbalanced data
-    strategy.criterion = FocalLoss(alpha=pos_weight, gamma=2.0)
+    # Use Focal Loss with more conservative gamma to prevent overfitting
+    # Reduce alpha to prevent over-emphasis on minority class
+    strategy.criterion = FocalLoss(alpha=min(pos_weight, 1.5), gamma=1.5)
 
     strategy.scaler = scaler
 
@@ -315,8 +316,10 @@ def train_main(args):
             loss = strategy.criterion(outputs, batch_y)
             loss.backward()
 
-            # Adaptive gradient clipping and monitoring
-            grad_norm = torch.nn.utils.clip_grad_norm_(strategy.model.parameters(), max_norm=1.0)
+            # Adaptive gradient clipping with dynamic threshold based on loss magnitude
+            # Use a higher clip value initially and reduce it as training progresses
+            adaptive_max_norm = max(1.0, 0.1 * loss.item()) if loss.item() > 0 else 1.0
+            grad_norm = torch.nn.utils.clip_grad_norm_(strategy.model.parameters(), max_norm=min(adaptive_max_norm, 5.0))
             total_grad_norm += grad_norm.item()
             strategy.optimizer.step()
 
@@ -385,15 +388,22 @@ def train_main(args):
         if epoch < int(args.epochs * 0.1):  # Only apply warmup in first 10% of epochs
             warmup_scheduler.step()
 
-        # LR Scheduler
+        # LR Scheduler - use CosineAnnealingLR for more gradual decay after initial plateau
         strategy.scheduler.step(avg_val_loss)
         current_lr = strategy.optimizer.param_groups[0]['lr']
+
+        # Additional check: if loss is decreasing too rapidly, consider reducing learning rate
+        if epoch > 1 and avg_train_loss < 0.1 and current_lr > 1e-5:
+            # Reduce learning rate if loss is already very low to prevent overshooting
+            for param_group in strategy.optimizer.param_groups:
+                param_group['lr'] = max(param_group['lr'] * 0.8, 1e-6)
 
         logger.info(f"Epoch {epoch+1}/{args.epochs} - Train: {avg_train_loss:.4f} (Acc: {train_acc:.4f}, F1: {train_f1:.4f}) - Val: {avg_val_loss:.4f} (Acc: {val_acc:.4f}, F1: {val_f1:.4f}) - Grad: {avg_grad_norm:.2f} - LR: {current_lr:.6f}")
 
         # Early stopping based on validation F1 score (more appropriate for imbalanced data)
         # Also consider improvement in loss to avoid stopping too early on F1 fluctuations
         # Additionally, track the trend of metrics to avoid stopping prematurely
+        # Also check for signs of overfitting (loss going too low)
         if val_f1 > best_val_f1 or (val_f1 >= best_val_f1 * 0.99 and avg_val_loss < best_val_loss):
             best_val_loss = avg_val_loss
             best_val_acc = val_acc
@@ -406,6 +416,10 @@ def train_main(args):
             # Additional check: if the model is significantly worse than the best, stop early
             if val_f1 < best_val_f1 * 0.90 and avg_val_loss > best_val_loss * 1.1:
                 logger.info(f"Performance degradation detected. Stopping early at epoch {epoch+1}. Best epoch: {best_epoch}, Best Val Loss: {best_val_loss:.4f}, Best Val Acc: {best_val_acc:.4f}, Best Val F1: {best_val_f1:.4f}")
+                break
+            # Additional check: if loss is too low (possible overfitting), consider stopping
+            if avg_val_loss < 0.01 and epoch > 5:  # If validation loss is extremely low after a few epochs
+                logger.info(f"Extremely low validation loss detected (possible overfitting). Stopping early at epoch {epoch+1}. Best epoch: {best_epoch}, Best Val Loss: {best_val_loss:.4f}, Best Val Acc: {best_val_acc:.4f}, Best Val F1: {best_val_f1:.4f}")
                 break
             if patience_counter >= patience:
                 logger.info(f"Early stopping at epoch {epoch+1}. Best epoch: {best_epoch}, Best Val Loss: {best_val_loss:.4f}, Best Val Acc: {best_val_acc:.4f}, Best Val F1: {best_val_f1:.4f}")
