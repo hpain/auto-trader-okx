@@ -4,20 +4,19 @@ import pandas as pd
 import numpy as np
 import logging
 import pickle
-import argparse
 
 # Add project root to path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from strategies.transformer_strategy import TransformerStrategy
-from features.feature_engineering import generate_features, apply_triple_barrier
+from features.feature_engineering import generate_features, make_supervised
 from sklearn.preprocessing import StandardScaler
-from sklearn.ensemble import RandomForestClassifier
 
 # Setup Logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger("Trainer")
 
+import argparse
 
 def train_main(args):
     # 1. Load Data
@@ -26,9 +25,9 @@ def train_main(args):
     # Priority check if no path provided
     if not data_path:
         potential_files = [
-            'data/history/CLEAN_UNIVERSAL_2022_2026.csv',     # Multi-asset dataset
-            'data/history/BTCUSDT_FULL_2020_2025.csv',        # Default GPU
+            'data/history/BTCUSDT_FULL_2020_2025.csv',       # Default GPU
             'data/history/binance_BTCUSDT_1h_4y.csv',         # VPS Fallback
+            'data/history/BTCUSDT_FULL_2024_2025.csv',        # Short VPS Fallback
         ]
         for p in potential_files:
             if os.path.exists(p):
@@ -57,7 +56,6 @@ def train_main(args):
     }
     df.rename(columns=rename_map, inplace=True)
 
-    # Handle timestamp
     if 'timestamp' in df.columns:
         if df['timestamp'].dtype == object: 
              df['datetime'] = pd.to_datetime(df['timestamp'])
@@ -69,99 +67,30 @@ def train_main(args):
     
     logger.info(f"Loaded {len(df)} rows.")
 
-    # 2. Generate Features & Labeling (Per Symbol to avoid data bleeding)
-    logger.info("Generating features and labels per symbol...")
+    # 2. Generate Features (P2-1 Logic)
+    logger.info("Generating features (including logical derivatives)...")
+    df_features = generate_features(df)
     
-    if 'symbol' not in df.columns:
-        df['symbol'] = 'default'
-        
-    symbols = df['symbol'].unique()
-    logger.info(f"Processing symbols: {symbols.tolist()}")
+    # 3. Labeling (Target)
+    horizon = 1
+    threshold = 0.002 
     
-    processed_chunks = []
-    for sym in symbols:
-        # Filter & Sort
-        sub_df = df[df['symbol'] == sym].copy()
-        if sub_df.empty: continue
-        sub_df.sort_index(inplace=True)
-        
-        # Features
-        sub_df = generate_features(sub_df)
-        
-        # Labeling
-        sub_df = apply_triple_barrier(sub_df, tp=args.tp, sl=args.sl, timeout=args.timeout)
-        
-        # Drop NaNs per chunk
-        sub_df.dropna(inplace=True)
-        
-        processed_chunks.append(sub_df)
-        logger.info(f"  -> {sym}: {len(sub_df)} rows ready.")
-        
-    if not processed_chunks:
-        logger.error("No data remaining after processing.")
-        return
-
-    df_labeled = pd.concat(processed_chunks)
-    # Sort by index to maintain temporal order (crucial for Universal dataset with shifted timestamps)
-    df_labeled.sort_index(inplace=True)
-    
+    df_labeled = make_supervised(df_features, horizon=horizon, threshold=threshold)
     target_col = 'y'
     
-    logger.info(f"Total Data after labeling & merging: {len(df_labeled)}")
-    
-    # Log label distribution
-    label_counts = df_labeled[target_col].value_counts()
-    logger.info(f"Label distribution: {label_counts.to_dict()}")
-    
-    # Calculate Baseline Loss (Random Guessing based on Class Prior)
-    # If model loss is near this value, it's not learning features, just the bias.
-    p_up = label_counts.get(1, 0) / len(df_labeled)
-    p_down = 1 - p_up
-    # Binary Cross Entropy of the mean
-    baseline_loss = - (p_up * np.log(p_up + 1e-9) + p_down * np.log(p_down + 1e-9))
-    logger.info(f"BASELINE LOSS (Predicting Mean): {baseline_loss:.4f}. If Val Loss is near this, model is not learning.")
+    # Drop NaNs
+    df_labeled.dropna(inplace=True)
+    logger.info(f"Data after labeling & dropping NaNs: {len(df_labeled)}")
 
-    # 4. Splitting & Scaling (70% train, 10% val, 20% test)
-    train_end_idx = int(len(df_labeled) * 0.7)
-    val_end_idx = int(len(df_labeled) * 0.8)
-    
-    # Fix: Overlap validation and test sets by window_size to prevent cold start data loss
-    # The first prediction in validation needs 'window_size' prior data points.
-    window_overlap = args.window
-    
-    train_df = df_labeled.iloc[:train_end_idx]
-    
-    val_df = df_labeled.iloc[max(0, train_end_idx - window_overlap) : val_end_idx]
-    test_df = df_labeled.iloc[max(0, val_end_idx - window_overlap) :]  # Reserved for final evaluation
-    
-    logger.info(f"Split: Train={len(train_df)}, Val={len(val_df)}, Test={len(test_df)}")
+    # 4. Splitting & Scaling
+    split_idx = int(len(df_labeled) * 0.8)
+    train_df = df_labeled.iloc[:split_idx]
     
     # Select feature columns
-    # CRITICAL FIX: Exclude raw price columns to prevent non-stationarity overfitting.
-    # The model should learn from rates of change (RSI, PCT_CHANGE), not absolute price levels (BTC=60k).
-    # UPDATED: User requested restoration of features. We allow Volume/OI but keep Price levels out.
-    raw_prices = ['open', 'high', 'low', 'close', 'symbol'] # Removed volume, open_interest from ban list
-    exclude = ['y'] + raw_prices + [c for c in df_labeled.columns if 'future' in c]
+    exclude = ['y'] + [c for c in df_labeled.columns if 'future' in c]
     feature_cols = [c for c in df_labeled.columns if c not in exclude and np.issubdtype(df_labeled[c].dtype, np.number)]
     
     logger.info(f"Training with {len(feature_cols)} features.")
-    
-    # --- FEATURE SELECTION STEP ---
-    # Use Random Forest to pick top features. Transformer hates noise.
-    logger.info("Running Feature Selection via RandomForest...")
-    rf = RandomForestClassifier(n_estimators=100, max_depth=5, random_state=42, n_jobs=-1)
-    rf.fit(train_df[feature_cols], train_df[target_col])
-    
-    importances = pd.Series(rf.feature_importances_, index=feature_cols).sort_values(ascending=False)
-    # Keep top N features
-    # User requested FULL features (previously ~139). Transformer can handle more inputs.
-    # We relax the strict selection to allow directional signals like RSI/MACD to pass through.
-    top_n = 150 
-    selected_features = importances.head(top_n).index.tolist()
-    logger.info(f"Selected Top {len(selected_features)} Features: {selected_features}")
-    
-    feature_cols = selected_features
-    # ------------------------------
 
     # Fit Scaler
     scaler = StandardScaler()
@@ -174,32 +103,15 @@ def train_main(args):
     logger.info("Scaler saved to models/scaler.pkl")
 
     # 5. Initialize Strategy & Model
-    # RESTORED HEAVY ARCHITECTURE (Matches historical "Slow but Good" config)
     strategy = TransformerStrategy(
         strategy_name="Transformer_P2",
         window_size=args.window,
         features=feature_cols,
         buy_threshold=0.6,
-        sell_threshold=0.4,
-        dropout=0.2,  # Standard Dropout
-        model_params={
-            'd_model': 128,       # Restore width
-            'nhead': 8,           # More heads for 128 dim
-            'num_layers': 3,      # Deeper network (matches old checkpoint)
-            'dim_feedforward': 1024, # Heavy FF layer (Computationally expensive but powerful)
-            'decoder_hidden_dim': 64 
-        }
+        sell_threshold=0.4
     )
     
-    # Note: NOT using pos_weight for Transformer as it causes overfitting
-    # LGB also works better without it - the model should focus on precision
-    # rather than trying to predict more class 1s
     strategy.build_model(input_dim=len(feature_cols))
-    
-    # RESTORED STANDARD OPTIMIZER
-    import torch.optim as optim
-    strategy.optimizer = optim.AdamW(strategy.model.parameters(), lr=0.0001, weight_decay=1e-4) # Slower LR for big model
-    
     strategy.scaler = scaler
     
     # 6. Train
@@ -208,44 +120,24 @@ def train_main(args):
     train_df_scaled = train_df.copy()
     train_df_scaled[feature_cols] = scaler.transform(train_df[feature_cols])
     
-    # Prepare validation data if available
-    val_df_scaled = None
-    if len(val_df) > 0:
-        val_df_scaled = val_df.copy()
-        val_df_scaled[feature_cols] = scaler.transform(val_df[feature_cols])
-    
-    strategy.train_model(
-        train_df_scaled, 
-        target_col=target_col, 
-        epochs=args.epochs, 
-        batch_size=args.batch_size,
-        val_df=val_df_scaled
-    )
+    strategy.train_model(train_df_scaled, target_col=target_col, epochs=args.epochs, batch_size=args.batch_size)
     
     # 7. Save Model
-    model_path = f'models/transformer_v5_reg_tb{int(args.tp*1000)}_{int(args.sl*1000)}.pth'
-    strategy.save_model(model_path)
-    logger.info(f"Model saved to {model_path}")
+    strategy.save_model('models/transformer_v3.pth')
+    logger.info("Model saved to models/transformer_v3.pth")
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description='Train Transformer Model with Triple Barrier Labeling')
-    
-    # Training parameters
-    parser.add_argument('--epochs', type=int, default=50, help='Number of training epochs')
+    parser = argparse.ArgumentParser(description='Train Transformer Model')
+    parser.add_argument('--epochs', type=int, default=30, help='Number of training epochs')
     parser.add_argument('--batch_size', type=int, default=64, help='Batch size')
     parser.add_argument('--window', type=int, default=60, help='Lookback window size')
     parser.add_argument('--data', type=str, help='Path to CSV data file')
-    
-    # Triple Barrier parameters
-    parser.add_argument('--tp', type=float, default=0.008, help='Take Profit threshold')
-    parser.add_argument('--sl', type=float, default=0.005, help='Stop Loss threshold')
-    parser.add_argument('--timeout', type=int, default=12, help='Timeout in bars')
     
     args = parser.parse_args()
     
     try:
         train_main(args)
     except KeyboardInterrupt:
-        logger.info("Training interrupted by user.")
+        pass
     except Exception as e:
         logger.error(f"Training failed: {e}", exc_info=True)

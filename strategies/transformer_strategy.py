@@ -20,6 +20,10 @@ except ImportError:
 from features.tensor_loader import create_lazy_loader
 
 class PositionalEncoding(nn.Module if HAS_TORCH else object):
+    """
+    Injects some information about the relative or absolute position of the tokens in the sequence.
+    The positional encodings have the same dimension as the embeddings, so that the two can be summed.
+    """
     def __init__(self, d_model, dropout=0.1, max_len=5000):
         super(PositionalEncoding, self).__init__()
         self.dropout = nn.Dropout(p=dropout)
@@ -31,58 +35,69 @@ class PositionalEncoding(nn.Module if HAS_TORCH else object):
         pe[:, 0::2] = torch.sin(position * div_term)
         pe[:, 1::2] = torch.cos(position * div_term)
         
-        pe = pe.unsqueeze(0)
+        pe = pe.unsqueeze(0) # [1, max_len, d_model]
         self.register_buffer('pe', pe)
 
     def forward(self, x):
+        # x: [Batch, Seq_Len, d_model]
         x = x + self.pe[:, :x.size(1), :]
         return self.dropout(x)
 
 class TimeSeriesTransformer(nn.Module if HAS_TORCH else object):
     """
-    Standard Transformer for Time Series.
-    Reverted from GRU as per user request.
+    Advanced Transformer for Time Series Forecasting.
+    Input: (Batch, Seq_Len, Features)
+    Output: (Batch, 1) -> Binary Classification (Up/Down) via Logits
     """
-    def __init__(self, input_dim, d_model=64, nhead=4, num_layers=2, dropout=0.2, dim_feedforward=None, decoder_hidden_dim=None):
+    def __init__(self, input_dim, d_model=128, nhead=4, num_layers=3, dropout=0.2):
         super(TimeSeriesTransformer, self).__init__()
-        self.d_model = d_model
         
-        if dim_feedforward is None:
-            dim_feedforward = d_model * 4
-        
+        # 1. Input Projection
         self.embedding = nn.Linear(input_dim, d_model)
+        
+        # 2. Positional Encoding (Crucial for Sequence Data)
         self.pos_encoder = PositionalEncoding(d_model, dropout)
         
-        encoder_layers = nn.TransformerEncoderLayer(d_model, nhead, dim_feedforward=dim_feedforward, dropout=dropout, batch_first=True)
-        self.transformer_encoder = nn.TransformerEncoder(encoder_layers, num_layers)
+        # 3. Transformer Encoder
+        # batch_first=True is important!
+        self.encoder_layer = nn.TransformerEncoderLayer(d_model=d_model, nhead=nhead, batch_first=True, dropout=dropout)
+        self.transformer_encoder = nn.TransformerEncoder(self.encoder_layer, num_layers=num_layers)
         
-        if decoder_hidden_dim:
-            # Complex Sequential Decoder matched to checkpoint
-            self.decoder = nn.Sequential(
-                nn.Linear(d_model, decoder_hidden_dim),
-                nn.ReLU(),
-                nn.Dropout(dropout),
-                nn.Linear(decoder_hidden_dim, 1)
-            )
-        else:
-            # Simple Linear Decoder
-            self.decoder = nn.Linear(d_model, 1)
+        # 4. Output Head (MLP)
+        self.decoder = nn.Sequential(
+            nn.Linear(d_model, 64),
+            nn.ReLU(),
+            nn.Dropout(dropout),
+            nn.Linear(64, 1) # Output Logits
+        )
+        
+        self.input_dim = input_dim
 
     def forward(self, src):
         # src: [Batch, Seq_Len, Features]
-        x = self.embedding(src) * math.sqrt(self.d_model)
-        x = self.pos_encoder(x)
+        
+        # Embed inputs
+        x = self.embedding(src) # [Batch, Seq_Len, d_model]
+        x = self.pos_encoder(x) # Add position info
+        
+        # Transformer output: [Batch, Seq_Len, d_model]
         output = self.transformer_encoder(x)
-        x = output[:, -1, :] # Last token pooling
-        return self.decoder(x)
+        
+        # Global Average Pooling (better than taking just the last step)
+        # Allows the model to aggregate signals from the entire window
+        x = torch.mean(output, dim=1) 
+        
+        # Project to target
+        prediction = self.decoder(x)
+        return prediction # Return raw logits
 
 class TransformerStrategy:
     """
-    Deep Learning Strategy (Transformer).
+    Transformer-based Trading Strategy (Phase 2 Upgrade).
     Hardware Agnostic: Runs on CPU or CUDA.
     Memory Optimized: Uses Lazy Loading for low RAM environments.
     """
-    def __init__(self, strategy_name="Transformer_v2", window_size=60, features=None, buy_threshold=0.60, sell_threshold=0.40, dropout=0.2, model_params=None):
+    def __init__(self, strategy_name="Transformer_v2", window_size=60, features=None, buy_threshold=0.60, sell_threshold=0.40):
         self.logger = logging.getLogger(__name__)
         self.strategy_name = strategy_name
         self.window_size = window_size
@@ -92,8 +107,6 @@ class TransformerStrategy:
         self.buy_threshold = buy_threshold
         self.sell_threshold = sell_threshold
         self.logger.info(f"Thresholds -> Buy: {self.buy_threshold}, Sell: {self.sell_threshold}")
-        self.dropout = dropout
-        self.model_params = model_params or {}
         
         self.device = 'cpu'
         self.model = None
@@ -105,67 +118,25 @@ class TransformerStrategy:
         else:
             self.logger.warning("PyTorch not installed. Strategy disabled.")
 
-    def build_model(self, input_dim, pos_weight=None):
+    def build_model(self, input_dim):
         if not HAS_TORCH: return
-        # Revert to Transformer
-        # Allow override from model_params
-        d_model = self.model_params.get('d_model', 64)
-        nhead = self.model_params.get('nhead', 4)
-        num_layers = self.model_params.get('num_layers', 2)
-        dim_feedforward = self.model_params.get('dim_feedforward', d_model*4) # Default to 4x like standard
+        self.model = TimeSeriesTransformer(input_dim=input_dim).to(self.device).float()
         
-        self.logger.info(f"Building Transformer: d_model={d_model}, nhead={nhead}, layers={num_layers}, dim_ff={dim_feedforward}")
-        
-        # Try to infer decoder hidden dim if not explicit (standard is d_model // 2)
-        # But for compatibility, only set if explicitly requested OR we are in a 'v3' context?
-        # Actually, let's look at the error: decoder.0.weight (Input->Hidden), decoder.3.weight (Hidden->Output)
-        # This implies: Linear(d_model, H) -> ReLU -> Dropout -> Linear(H, 1)
-        # We need H. It's usually d_model or d_model//2. 
-        # Checkpoint error: decoder.0.weight shape mismatch is not shown because keys are missing.
-        # Checkpoint likely has H = 64 (since d_model=128).
-        
-        decoder_hidden_dim = self.model_params.get('decoder_hidden_dim', 64) # Default to 64 as per checkpoint hint?
-        
-        self.logger.info(f"Building Transformer: d_model={d_model}, nhead={nhead}, layers={num_layers}, dim_ff={dim_feedforward}, dec_hidden={decoder_hidden_dim}")
-        
-        self.model = TimeSeriesTransformer(
-            input_dim=input_dim, 
-            d_model=d_model,
-            nhead=nhead,
-            num_layers=num_layers,
-            dropout=self.dropout,
-            dim_feedforward=dim_feedforward,
-            decoder_hidden_dim=decoder_hidden_dim
-        ).to(self.device).float()
-        
-        # Manually check/set internal dim_feedforward if TimeSeriesTransformer doesn't accept it in init?
-        # Our TimeSeriesTransformer definition (lines 46-56) uses hardcoded d_model*4 or default?
-        # Wait, let's look at TimeSeriesTransformer definition in file
-        # It calls: nn.TransformerEncoderLayer(d_model, nhead, dim_feedforward=d_model*4...)
-        # We need to update TimeSeriesTransformer signature too or pass it down.
-        # Let's perform a multi-edit to update TimeSeriesTransformer as well.
-        
-        # Increased LR to 0.001 to help model escape baseline
-        self.optimizer = optim.AdamW(self.model.parameters(), lr=0.001, weight_decay=1e-3)
+        # Use AdamW for better regularization
+        self.optimizer = optim.AdamW(self.model.parameters(), lr=0.0003, weight_decay=1e-3)
         
         # Scheduler to reduce LR when loss plateaus
         self.scheduler = optim.lr_scheduler.ReduceLROnPlateau(self.optimizer, mode='min', factor=0.5, patience=5)
         
-        # Binary Cross Entropy with Logits
-        # Use pos_weight to handle class imbalance (makes model focus more on minority class)
-        if pos_weight is not None:
-            pos_weight_tensor = torch.tensor([pos_weight]).to(self.device)
-            self.criterion = nn.BCEWithLogitsLoss(pos_weight=pos_weight_tensor)
-            self.logger.info(f"Using pos_weight={pos_weight:.2f} for class imbalance")
-        else:
-            self.criterion = nn.BCEWithLogitsLoss()
+        # Binary Cross Entropy with Logits (Combined Sigmoid + BCELoss for stability)
+        # Using pos_weight to handle class imbalance if needed (future upgrade)
+        self.criterion = nn.BCEWithLogitsLoss() 
         
         self.logger.info(f"Model built with Input Dim: {input_dim}")
 
-    def train_model(self, df: pd.DataFrame, target_col='target_up', epochs=10, batch_size=32, val_df=None):
+    def train_model(self, df: pd.DataFrame, target_col='target_up', epochs=10, batch_size=32):
         """
         Train the model on provided DataFrame using Lazy Loader.
-        Supports optional validation set for early stopping.
         """
         if not HAS_TORCH or self.model is None:
             self.logger.warning("Cannot train: Torch missing or model not built.")
@@ -186,22 +157,6 @@ class TransformerStrategy:
         if loader is None or len(loader) == 0:
             self.logger.warning("Not enough data to train.")
             return
-        
-        # Prepare validation loader if provided
-        val_loader = None
-        if val_df is not None:
-            try:
-                val_data = val_df[self.features]
-                val_target = val_df[target_col]
-                val_loader = create_lazy_loader(val_data, val_target, self.window_size, batch_size)
-            except Exception as e:
-                self.logger.warning(f"Could not create validation loader: {e}")
-        
-        # Early stopping setup
-        best_val_loss = float('inf')
-        patience = 10
-        patience_counter = 0
-        best_state = None
             
         self.model.train()
         for epoch in range(epochs):
@@ -227,50 +182,12 @@ class TransformerStrategy:
             
             if batch_count > 0:
                 avg_loss = total_loss / batch_count
-                
-                # Validation evaluation
-                val_loss_str = ""
-                avg_val_loss = None
-                if val_loader is not None and len(val_loader) > 0:
-                    self.model.eval()
-                    val_loss = 0
-                    val_count = 0
-                    with torch.no_grad():
-                        for batch_X, batch_y in val_loader:
-                            batch_X = batch_X.to(self.device).float()
-                            batch_y = batch_y.to(self.device).float().unsqueeze(1)
-                            outputs = self.model(batch_X)
-                            val_loss += self.criterion(outputs, batch_y).item()
-                            val_count += 1
-                    
-                    if val_count > 0:
-                        avg_val_loss = val_loss / val_count
-                        val_loss_str = f" - Val Loss: {avg_val_loss:.4f}"
-                        
-                        # Early stopping check
-                        if avg_val_loss < best_val_loss:
-                            best_val_loss = avg_val_loss
-                            patience_counter = 0
-                            best_state = self.model.state_dict().copy()
-                        else:
-                            patience_counter += 1
-                            if patience_counter >= patience:
-                                self.logger.info(f"Early stopping at epoch {epoch+1} (no improvement for {patience} epochs)")
-                                if best_state is not None:
-                                    self.model.load_state_dict(best_state)
-                                break
-                    
-                    self.model.train()
-                
                 # Step the scheduler
                 if hasattr(self, 'scheduler'):
-                    if avg_val_loss is not None:
-                        self.scheduler.step(avg_val_loss)
-                    else:
-                        self.scheduler.step(avg_loss)
+                    self.scheduler.step(avg_loss)
                 
                 current_lr = self.optimizer.param_groups[0]['lr']
-                self.logger.info(f"Epoch {epoch+1}/{epochs} - Loss: {avg_loss:.4f}{val_loss_str} - LR: {current_lr:.6f}")
+                self.logger.info(f"Epoch {epoch+1}/{epochs} - Loss: {avg_loss:.4f} - LR: {current_lr:.6f}")
             
     def load_scaler(self, scaler_path: str):
         """Load the feature scaler from a pickle file."""
@@ -348,9 +265,9 @@ class TransformerStrategy:
             # Fallback for un-normalized raw data (Not recommended for Transformer)
             self.logger.warning("No scaler loaded! Models trained on scaled data will fail with raw input.")
             try:
-                # Ensure we only pick numeric columns (simple heuristic)
-                numeric_df = df.select_dtypes(include=[np.number]) 
-                # Try to match input dim blindly if features not set
+                # Ensure we only pick numeric columns
+                numeric_df = df.select_dtypes(include=[np.number])
+                # Limit to input dim
                 if self.model.input_dim <= len(numeric_df.columns):
                      target_cols = numeric_df.columns.tolist()[:self.model.input_dim]
                 else:
@@ -407,17 +324,8 @@ class TransformerStrategy:
             
         if os.path.exists(path):
             # Map location is crucial for GPU -> CPU transfer
-            # strict=False is KEY here because the checkpoint contains 'encoder_layer' artifacts 
-            # and potentially other unused keys from the training script's history.
-            state_dict = torch.load(path, map_location=self.device)
-            missing, unexpected = self.model.load_state_dict(state_dict, strict=False)
-            
+            self.model.load_state_dict(torch.load(path, map_location=self.device))
             self.model.eval()
             self.logger.info(f"Model loaded from {path}")
-            
-            if missing:
-                self.logger.warning(f"Feature Loader - Missing Keys (Critical?): {missing}")
-            if unexpected:
-                self.logger.info(f"Feature Loader - Ignored Unexpected Keys (Artifacts): {len(unexpected)} keys")
         else:
             self.logger.warning(f"Model file not found: {path}")
