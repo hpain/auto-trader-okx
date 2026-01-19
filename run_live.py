@@ -131,7 +131,8 @@ async def main_loop(args):
                 window_size=transformer_cfg.get('window_size', 60),
                 features=None,
                 buy_threshold=transformer_cfg.get('buy_threshold', 0.55),
-                sell_threshold=transformer_cfg.get('sell_threshold', 0.45)
+                sell_threshold=transformer_cfg.get('sell_threshold', 0.45),
+                model_params=transformer_cfg.get('model_architecture', {})
             )
             # Load model weights
             model_path = transformer_cfg.get('model_path')

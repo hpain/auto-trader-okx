@@ -43,14 +43,17 @@ class TimeSeriesTransformer(nn.Module if HAS_TORCH else object):
     Standard Transformer for Time Series.
     Reverted from GRU as per user request.
     """
-    def __init__(self, input_dim, d_model=64, nhead=4, num_layers=2, dropout=0.2):
+    def __init__(self, input_dim, d_model=64, nhead=4, num_layers=2, dropout=0.2, dim_feedforward=None):
         super(TimeSeriesTransformer, self).__init__()
         self.d_model = d_model
+        
+        if dim_feedforward is None:
+            dim_feedforward = d_model * 4
         
         self.embedding = nn.Linear(input_dim, d_model)
         self.pos_encoder = PositionalEncoding(d_model, dropout)
         
-        encoder_layers = nn.TransformerEncoderLayer(d_model, nhead, dim_feedforward=d_model*4, dropout=dropout, batch_first=True)
+        encoder_layers = nn.TransformerEncoderLayer(d_model, nhead, dim_feedforward=dim_feedforward, dropout=dropout, batch_first=True)
         self.transformer_encoder = nn.TransformerEncoder(encoder_layers, num_layers)
         
         self.decoder = nn.Linear(d_model, 1)
@@ -69,7 +72,7 @@ class TransformerStrategy:
     Hardware Agnostic: Runs on CPU or CUDA.
     Memory Optimized: Uses Lazy Loading for low RAM environments.
     """
-    def __init__(self, strategy_name="Transformer_v2", window_size=60, features=None, buy_threshold=0.60, sell_threshold=0.40, dropout=0.2):
+    def __init__(self, strategy_name="Transformer_v2", window_size=60, features=None, buy_threshold=0.60, sell_threshold=0.40, dropout=0.2, model_params=None):
         self.logger = logging.getLogger(__name__)
         self.strategy_name = strategy_name
         self.window_size = window_size
@@ -80,6 +83,7 @@ class TransformerStrategy:
         self.sell_threshold = sell_threshold
         self.logger.info(f"Thresholds -> Buy: {self.buy_threshold}, Sell: {self.sell_threshold}")
         self.dropout = dropout
+        self.model_params = model_params or {}
         
         self.device = 'cpu'
         self.model = None
@@ -94,7 +98,29 @@ class TransformerStrategy:
     def build_model(self, input_dim, pos_weight=None):
         if not HAS_TORCH: return
         # Revert to Transformer
-        self.model = TimeSeriesTransformer(input_dim=input_dim, dropout=self.dropout).to(self.device).float()
+        # Allow override from model_params
+        d_model = self.model_params.get('d_model', 64)
+        nhead = self.model_params.get('nhead', 4)
+        num_layers = self.model_params.get('num_layers', 2)
+        dim_feedforward = self.model_params.get('dim_feedforward', d_model*4) # Default to 4x like standard
+        
+        self.logger.info(f"Building Transformer: d_model={d_model}, nhead={nhead}, layers={num_layers}, dim_ff={dim_feedforward}")
+        
+        self.model = TimeSeriesTransformer(
+            input_dim=input_dim, 
+            d_model=d_model,
+            nhead=nhead,
+            num_layers=num_layers,
+            dropout=self.dropout,
+            dim_feedforward=dim_feedforward
+        ).to(self.device).float()
+        
+        # Manually check/set internal dim_feedforward if TimeSeriesTransformer doesn't accept it in init?
+        # Our TimeSeriesTransformer definition (lines 46-56) uses hardcoded d_model*4 or default?
+        # Wait, let's look at TimeSeriesTransformer definition in file
+        # It calls: nn.TransformerEncoderLayer(d_model, nhead, dim_feedforward=d_model*4...)
+        # We need to update TimeSeriesTransformer signature too or pass it down.
+        # Let's perform a multi-edit to update TimeSeriesTransformer as well.
         
         # Increased LR to 0.001 to help model escape baseline
         self.optimizer = optim.AdamW(self.model.parameters(), lr=0.001, weight_decay=1e-3)
