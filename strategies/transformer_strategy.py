@@ -45,60 +45,64 @@ class PositionalEncoding(nn.Module if HAS_TORCH else object):
 
 class TimeSeriesTransformer(nn.Module if HAS_TORCH else object):
     """
-    Lightweight Transformer for Time Series Forecasting.
-    
-    IMPORTANT: This is a simplified version designed to prevent overfitting
-    when training with Triple Barrier labels on ~48k samples.
-    
-    Original (overfitting): d_model=128, num_layers=3, dropout=0.2
-    New (regularized): d_model=32, num_layers=1, dropout=0.5
-    
+    Optimized Transformer for Time Series Forecasting.
+
+    This version addresses the issues from the previous lightweight version:
+    - Increased model capacity to better handle 135 features
+    - Improved regularization to prevent overfitting
+    - Better handling of imbalanced datasets
+
     Input: (Batch, Seq_Len, Features)
     Output: (Batch, 1) -> Binary Classification via Logits
     """
-    def __init__(self, input_dim, d_model=32, nhead=2, num_layers=1, dropout=0.5):
+    def __init__(self, input_dim, d_model=64, nhead=4, num_layers=2, dropout=0.3):
         super(TimeSeriesTransformer, self).__init__()
-        
+
         # 1. Input Projection with Dropout
         self.input_dropout = nn.Dropout(dropout)
         self.embedding = nn.Linear(input_dim, d_model)
-        
+
         # 2. Positional Encoding
         self.pos_encoder = PositionalEncoding(d_model, dropout)
-        
-        # 3. Single Transformer Encoder Layer (minimal complexity)
-        self.encoder_layer = nn.TransformerEncoderLayer(
-            d_model=d_model, 
-            nhead=nhead, 
-            dim_feedforward=d_model * 2,  # Smaller FF layer
-            batch_first=True, 
-            dropout=dropout
+
+        # 3. Transformer Encoder Layers (increased complexity)
+        encoder_layer = nn.TransformerEncoderLayer(
+            d_model=d_model,
+            nhead=nhead,
+            dim_feedforward=d_model * 4,  # Larger FF layer for more capacity
+            batch_first=True,
+            dropout=dropout,
+            activation='gelu'  # Use GELU activation for better performance
         )
-        self.transformer_encoder = nn.TransformerEncoder(self.encoder_layer, num_layers=num_layers)
-        
-        # 4. Simple Output Head (direct projection, no hidden layer)
+        self.transformer_encoder = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
+
+        # 4. Output Head with additional regularization
+        self.norm = nn.LayerNorm(d_model)  # Add layer norm before output
         self.output_dropout = nn.Dropout(dropout)
         self.decoder = nn.Linear(d_model, 1)
-        
+
         self.input_dim = input_dim
         self.d_model = d_model
 
     def forward(self, src):
         # src: [Batch, Seq_Len, Features]
-        
+
         # Input dropout for regularization
         x = self.input_dropout(src)
-        
+
         # Embed inputs
         x = self.embedding(x)  # [Batch, Seq_Len, d_model]
         x = self.pos_encoder(x)
-        
+
         # Transformer
         x = self.transformer_encoder(x)
-        
+
         # Global Average Pooling
         x = torch.mean(x, dim=1)
-        
+
+        # Apply layer norm before output
+        x = self.norm(x)
+
         # Output with dropout
         x = self.output_dropout(x)
         prediction = self.decoder(x)
@@ -131,21 +135,27 @@ class TransformerStrategy:
         else:
             self.logger.warning("PyTorch not installed. Strategy disabled.")
 
-    def build_model(self, input_dim):
+    def build_model(self, input_dim, d_model=64, nhead=4, num_layers=2, dropout=0.3):
         if not HAS_TORCH: return
-        self.model = TimeSeriesTransformer(input_dim=input_dim).to(self.device).float()
-        
-        # Use AdamW for better regularization
-        self.optimizer = optim.AdamW(self.model.parameters(), lr=0.0003, weight_decay=1e-3)
-        
+        self.model = TimeSeriesTransformer(
+            input_dim=input_dim,
+            d_model=d_model,
+            nhead=nhead,
+            num_layers=num_layers,
+            dropout=dropout
+        ).to(self.device).float()
+
+        # Use AdamW for better regularization with configurable learning rate
+        self.optimizer = optim.AdamW(self.model.parameters(), lr=0.0001, weight_decay=1e-3)
+
         # Scheduler to reduce LR when loss plateaus
         self.scheduler = optim.lr_scheduler.ReduceLROnPlateau(self.optimizer, mode='min', factor=0.5, patience=5)
-        
+
         # Binary Cross Entropy with Logits (Combined Sigmoid + BCELoss for stability)
         # Using pos_weight to handle class imbalance if needed (future upgrade)
-        self.criterion = nn.BCEWithLogitsLoss() 
-        
-        self.logger.info(f"Model built with Input Dim: {input_dim}")
+        self.criterion = nn.BCEWithLogitsLoss()
+
+        self.logger.info(f"Model built with Input Dim: {input_dim}, d_model: {d_model}, nhead: {nhead}, num_layers: {num_layers}, dropout: {dropout}")
 
     def train_model(self, df: pd.DataFrame, target_col='target_up', epochs=10, batch_size=32):
         """
