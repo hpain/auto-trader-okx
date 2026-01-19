@@ -325,6 +325,18 @@ async def main_loop(args):
                 selected_strategies = strategy_manager.get_active_strategies()
                 portfolio_manager.asset_strategies[symbol] = selected_strategies
 
+            # --- CRITICAL FIX: Update Portfolio Valuations with FRESH DATA ---
+            # Ensure the "Portfolio Status" log below reflects current market prices, not stale sync data.
+            for symbol, data in data_for_pm.items():
+                if not data.empty:
+                    latest_price = data['close'].iloc[-1]
+                    # Direct update to Asset Data in PM
+                    if symbol in portfolio_manager.asset_data:
+                        pos = portfolio_manager.asset_data[symbol].get('position', 0.0)
+                        portfolio_manager.asset_data[symbol]['value'] = pos * latest_price
+                        # We don't update PnL here as we need avg_entry_price, assuming PM handles it or it's approx.
+            # -----------------------------------------------------------------
+
             trade_orders, _ = portfolio_manager.rebalance(data_for_pm, cycle_logger)
 
             if trade_orders:
