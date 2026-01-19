@@ -45,51 +45,64 @@ class PositionalEncoding(nn.Module if HAS_TORCH else object):
 
 class TimeSeriesTransformer(nn.Module if HAS_TORCH else object):
     """
-    Advanced Transformer for Time Series Forecasting.
+    Lightweight Transformer for Time Series Forecasting.
+    
+    IMPORTANT: This is a simplified version designed to prevent overfitting
+    when training with Triple Barrier labels on ~48k samples.
+    
+    Original (overfitting): d_model=128, num_layers=3, dropout=0.2
+    New (regularized): d_model=32, num_layers=1, dropout=0.5
+    
     Input: (Batch, Seq_Len, Features)
-    Output: (Batch, 1) -> Binary Classification (Up/Down) via Logits
+    Output: (Batch, 1) -> Binary Classification via Logits
     """
-    def __init__(self, input_dim, d_model=128, nhead=4, num_layers=3, dropout=0.2):
+    def __init__(self, input_dim, d_model=32, nhead=2, num_layers=1, dropout=0.5):
         super(TimeSeriesTransformer, self).__init__()
         
-        # 1. Input Projection
+        # 1. Input Projection with Dropout
+        self.input_dropout = nn.Dropout(dropout)
         self.embedding = nn.Linear(input_dim, d_model)
         
-        # 2. Positional Encoding (Crucial for Sequence Data)
+        # 2. Positional Encoding
         self.pos_encoder = PositionalEncoding(d_model, dropout)
         
-        # 3. Transformer Encoder
-        # batch_first=True is important!
-        self.encoder_layer = nn.TransformerEncoderLayer(d_model=d_model, nhead=nhead, batch_first=True, dropout=dropout)
+        # 3. Single Transformer Encoder Layer (minimal complexity)
+        self.encoder_layer = nn.TransformerEncoderLayer(
+            d_model=d_model, 
+            nhead=nhead, 
+            dim_feedforward=d_model * 2,  # Smaller FF layer
+            batch_first=True, 
+            dropout=dropout
+        )
         self.transformer_encoder = nn.TransformerEncoder(self.encoder_layer, num_layers=num_layers)
         
-        # 4. Output Head (MLP)
-        self.decoder = nn.Sequential(
-            nn.Linear(d_model, 64),
-            nn.ReLU(),
-            nn.Dropout(dropout),
-            nn.Linear(64, 1) # Output Logits
-        )
+        # 4. Simple Output Head (direct projection, no hidden layer)
+        self.output_dropout = nn.Dropout(dropout)
+        self.decoder = nn.Linear(d_model, 1)
         
         self.input_dim = input_dim
+        self.d_model = d_model
 
     def forward(self, src):
         # src: [Batch, Seq_Len, Features]
         
+        # Input dropout for regularization
+        x = self.input_dropout(src)
+        
         # Embed inputs
-        x = self.embedding(src) # [Batch, Seq_Len, d_model]
-        x = self.pos_encoder(x) # Add position info
+        x = self.embedding(x)  # [Batch, Seq_Len, d_model]
+        x = self.pos_encoder(x)
         
-        # Transformer output: [Batch, Seq_Len, d_model]
-        output = self.transformer_encoder(x)
+        # Transformer
+        x = self.transformer_encoder(x)
         
-        # Global Average Pooling (better than taking just the last step)
-        # Allows the model to aggregate signals from the entire window
-        x = torch.mean(output, dim=1) 
+        # Global Average Pooling
+        x = torch.mean(x, dim=1)
         
-        # Project to target
+        # Output with dropout
+        x = self.output_dropout(x)
         prediction = self.decoder(x)
-        return prediction # Return raw logits
+        return prediction
 
 class TransformerStrategy:
     """

@@ -4,30 +4,28 @@ import pandas as pd
 import numpy as np
 import logging
 import pickle
+import argparse
 
 # Add project root to path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from strategies.transformer_strategy import TransformerStrategy
-from features.feature_engineering import generate_features, make_supervised
+from features.feature_engineering import generate_features, apply_triple_barrier
 from sklearn.preprocessing import StandardScaler
 
 # Setup Logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger("Trainer")
 
-import argparse
 
 def train_main(args):
     # 1. Load Data
     data_path = args.data
     
-    # Priority check if no path provided
     if not data_path:
         potential_files = [
-            'data/history/BTCUSDT_FULL_2020_2025.csv',       # Default GPU
-            'data/history/binance_BTCUSDT_1h_4y.csv',         # VPS Fallback
-            'data/history/BTCUSDT_FULL_2024_2025.csv',        # Short VPS Fallback
+            'data/history/CLEAN_UNIVERSAL_2022_2026.csv',
+            'data/history/BTCUSDT_FULL_2020_2025.csv',
         ]
         for p in potential_files:
             if os.path.exists(p):
@@ -37,74 +35,82 @@ def train_main(args):
     if not data_path:
         logger.error("No data file found. Please provide --data argument.")
         return
-    else:
-        logger.info(f"Loading data from {data_path}...")
-
+    
+    logger.info(f"Loading data from {data_path}...")
     df = pd.read_csv(data_path)
     
     # Standardize columns
     df.columns = [c.lower() for c in df.columns]
-    
-    # Handle mappings for compressed/abbreviated headers
-    rename_map = {
-        'ts': 'timestamp',
-        'o': 'open',
-        'h': 'high',
-        'l': 'low',
-        'c': 'close',
-        'v': 'volume'
-    }
+    rename_map = {'ts': 'timestamp', 'o': 'open', 'h': 'high', 'l': 'low', 'c': 'close', 'v': 'volume'}
     df.rename(columns=rename_map, inplace=True)
 
     if 'timestamp' in df.columns:
         if df['timestamp'].dtype == object: 
-             df['datetime'] = pd.to_datetime(df['timestamp'])
+            df['datetime'] = pd.to_datetime(df['timestamp'])
         else:
-             df['datetime'] = pd.to_datetime(df['timestamp'], unit='ms')
+            df['datetime'] = pd.to_datetime(df['timestamp'], unit='ms')
         df.set_index('datetime', inplace=True)
     elif 'date' in df.columns:
         df.index = pd.to_datetime(df['date'])
     
     logger.info(f"Loaded {len(df)} rows.")
 
-    # 2. Generate Features (P2-1 Logic)
-    logger.info("Generating features (including logical derivatives)...")
+    # 2. Handle multi-symbol data
+    if 'symbol' in df.columns:
+        symbols = df['symbol'].unique()
+        logger.info(f"Multi-symbol data: {symbols.tolist()}")
+        # Use first symbol only (BTC)
+        df = df[df['symbol'] == symbols[0]].copy()
+        logger.info(f"Using {symbols[0]}: {len(df)} rows")
+
+    # 3. Generate Features
+    logger.info("Generating features...")
     df_features = generate_features(df)
     
-    # 3. Labeling (Target)
-    horizon = 1
-    threshold = 0.002 
-    
-    df_labeled = make_supervised(df_features, horizon=horizon, threshold=threshold)
+    # 4. Triple Barrier Labeling (same as LGB for fair comparison)
+    logger.info(f"Applying Triple Barrier: TP={args.tp}, SL={args.sl}, Timeout={args.timeout}")
+    df_labeled = apply_triple_barrier(df_features, tp=args.tp, sl=args.sl, timeout=args.timeout)
     target_col = 'y'
     
-    # Drop NaNs
     df_labeled.dropna(inplace=True)
-    logger.info(f"Data after labeling & dropping NaNs: {len(df_labeled)}")
-
-    # 4. Splitting & Scaling
-    split_idx = int(len(df_labeled) * 0.8)
-    train_df = df_labeled.iloc[:split_idx]
+    logger.info(f"Data after labeling: {len(df_labeled)}")
     
-    # Select feature columns
-    exclude = ['y'] + [c for c in df_labeled.columns if 'future' in c]
+    # Label distribution
+    label_counts = df_labeled[target_col].value_counts()
+    logger.info(f"Labels: {label_counts.to_dict()}")
+    
+    # Calculate baseline loss
+    p_up = label_counts.get(1, 0) / len(df_labeled)
+    baseline = - (p_up * np.log(p_up + 1e-9) + (1-p_up) * np.log(1-p_up + 1e-9))
+    logger.info(f"Baseline Loss: {baseline:.4f}")
+
+    # 5. Split: 70% train, 10% val, 20% test
+    train_end = int(len(df_labeled) * 0.7)
+    val_end = int(len(df_labeled) * 0.8)
+    
+    train_df = df_labeled.iloc[:train_end]
+    val_df = df_labeled.iloc[train_end:val_end]
+    test_df = df_labeled.iloc[val_end:]
+    
+    logger.info(f"Split: Train={len(train_df)}, Val={len(val_df)}, Test={len(test_df)}")
+    
+    # 6. Feature Selection
+    exclude = ['y', 'open', 'high', 'low', 'close', 'symbol'] + [c for c in df_labeled.columns if 'future' in c]
     feature_cols = [c for c in df_labeled.columns if c not in exclude and np.issubdtype(df_labeled[c].dtype, np.number)]
-    
-    logger.info(f"Training with {len(feature_cols)} features.")
+    logger.info(f"Features: {len(feature_cols)}")
 
-    # Fit Scaler
+    # 7. Scaling
     scaler = StandardScaler()
     scaler.fit(train_df[feature_cols])
     
-    # Save Scaler
     os.makedirs('models', exist_ok=True)
-    with open('models/scaler.pkl', 'wb') as f:
+    with open('models/scaler_transformer_tb.pkl', 'wb') as f:
         pickle.dump(scaler, f)
-    logger.info("Scaler saved to models/scaler.pkl")
+    logger.info("Scaler saved")
 
-    # 5. Initialize Strategy & Model
+    # 8. Initialize Lightweight Transformer
     strategy = TransformerStrategy(
-        strategy_name="Transformer_P2",
+        strategy_name="Transformer_Lite",
         window_size=args.window,
         features=feature_cols,
         buy_threshold=0.6,
@@ -114,30 +120,119 @@ def train_main(args):
     strategy.build_model(input_dim=len(feature_cols))
     strategy.scaler = scaler
     
-    # 6. Train
-    logger.info(f"Starting Training for {args.epochs} epochs...")
+    # 9. Prepare scaled data
+    train_scaled = train_df.copy()
+    train_scaled[feature_cols] = scaler.transform(train_df[feature_cols])
     
-    train_df_scaled = train_df.copy()
-    train_df_scaled[feature_cols] = scaler.transform(train_df[feature_cols])
+    val_scaled = val_df.copy()
+    val_scaled[feature_cols] = scaler.transform(val_df[feature_cols])
     
-    strategy.train_model(train_df_scaled, target_col=target_col, epochs=args.epochs, batch_size=args.batch_size)
+    # 10. Train with validation
+    logger.info(f"Training for {args.epochs} epochs...")
     
-    # 7. Save Model
-    strategy.save_model('models/transformer_v3.pth')
-    logger.info("Model saved to models/transformer_v3.pth")
+    from features.tensor_loader import create_lazy_loader
+    import torch
+    
+    train_loader = create_lazy_loader(
+        train_scaled[feature_cols], 
+        train_scaled[target_col], 
+        args.window, 
+        args.batch_size
+    )
+    val_loader = create_lazy_loader(
+        val_scaled[feature_cols], 
+        val_scaled[target_col], 
+        args.window, 
+        args.batch_size
+    )
+    
+    best_val_loss = float('inf')
+    patience = 15
+    patience_counter = 0
+    best_state = None
+    
+    for epoch in range(args.epochs):
+        # Training
+        strategy.model.train()
+        train_loss = 0
+        train_batches = 0
+        
+        for batch_X, batch_y in train_loader:
+            batch_X = batch_X.to(strategy.device).float()
+            batch_y = batch_y.to(strategy.device).float().unsqueeze(1)
+            
+            strategy.optimizer.zero_grad()
+            outputs = strategy.model(batch_X)
+            loss = strategy.criterion(outputs, batch_y)
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(strategy.model.parameters(), max_norm=1.0)
+            strategy.optimizer.step()
+            
+            train_loss += loss.item()
+            train_batches += 1
+        
+        avg_train_loss = train_loss / train_batches if train_batches > 0 else 0
+        
+        # Validation
+        strategy.model.eval()
+        val_loss = 0
+        val_batches = 0
+        
+        with torch.no_grad():
+            for batch_X, batch_y in val_loader:
+                batch_X = batch_X.to(strategy.device).float()
+                batch_y = batch_y.to(strategy.device).float().unsqueeze(1)
+                outputs = strategy.model(batch_X)
+                loss = strategy.criterion(outputs, batch_y)
+                val_loss += loss.item()
+                val_batches += 1
+        
+        avg_val_loss = val_loss / val_batches if val_batches > 0 else 0
+        
+        # LR Scheduler
+        strategy.scheduler.step(avg_val_loss)
+        current_lr = strategy.optimizer.param_groups[0]['lr']
+        
+        logger.info(f"Epoch {epoch+1}/{args.epochs} - Train: {avg_train_loss:.4f} - Val: {avg_val_loss:.4f} - LR: {current_lr:.6f}")
+        
+        # Early stopping
+        if avg_val_loss < best_val_loss:
+            best_val_loss = avg_val_loss
+            patience_counter = 0
+            best_state = {k: v.cpu().clone() for k, v in strategy.model.state_dict().items()}
+        else:
+            patience_counter += 1
+            if patience_counter >= patience:
+                logger.info(f"Early stopping at epoch {epoch+1}")
+                break
+    
+    # Restore best model
+    if best_state is not None:
+        strategy.model.load_state_dict(best_state)
+        strategy.model.to(strategy.device)
+    
+    # 11. Save
+    model_path = f'models/transformer_lite_tb{int(args.tp*1000)}_{int(args.sl*1000)}.pth'
+    strategy.save_model(model_path)
+    logger.info(f"Model saved to {model_path}")
+    logger.info(f"Best Val Loss: {best_val_loss:.4f} (Baseline: {baseline:.4f})")
+
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description='Train Transformer Model')
-    parser.add_argument('--epochs', type=int, default=30, help='Number of training epochs')
-    parser.add_argument('--batch_size', type=int, default=64, help='Batch size')
-    parser.add_argument('--window', type=int, default=60, help='Lookback window size')
-    parser.add_argument('--data', type=str, help='Path to CSV data file')
+    parser = argparse.ArgumentParser(description='Train Lightweight Transformer with Triple Barrier')
+    parser.add_argument('--epochs', type=int, default=100, help='Training epochs')
+    parser.add_argument('--batch_size', type=int, default=256, help='Batch size')
+    parser.add_argument('--window', type=int, default=60, help='Lookback window')
+    parser.add_argument('--data', type=str, help='Path to CSV')
+    parser.add_argument('--tp', type=float, default=0.010, help='Take Profit (1%)')
+    parser.add_argument('--sl', type=float, default=0.007, help='Stop Loss (0.7%)')
+    parser.add_argument('--timeout', type=int, default=24, help='Timeout in bars')
     
     args = parser.parse_args()
     
     try:
         train_main(args)
     except KeyboardInterrupt:
-        pass
+        logger.info("Interrupted")
     except Exception as e:
-        logger.error(f"Training failed: {e}", exc_info=True)
+        logger.error(f"Failed: {e}", exc_info=True)
