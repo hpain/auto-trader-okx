@@ -933,80 +933,30 @@ def merge_price_and_sentiment(price_df: pd.DataFrame, daily_sent_df: pd.DataFram
     return m
 def apply_triple_barrier(df: pd.DataFrame, tp: float = 0.015, sl: float = 0.01, timeout: int = 12) -> pd.DataFrame:
     """
-    Apply Triple Barrier Method to create labels.
-    Label 1: Price hits TP first.
-    Label 0: Price hits SL first OR Timeout reached.
+    Apply Triple Barrier Method (Simplified / Fixed Horizon Revert).
+    
+    ORIGINAL LOGIC REVERT:
+    Checks if the return after 'timeout' bars exceeds 'tp'.
+    Ignores intra-bar SL touches for labeling to allow model to learn trend direction 
+    without being penalized by volatility noise.
     """
     out_df = df.copy()
-    close_prices = df['close'].values
-    high_prices = df['high'].values
-    low_prices = df['low'].values
-    n = len(df)
     
-    labels = np.zeros(n)
+    # Vectorized Calculation - Much faster and cleaner
+    # Target: Return after 'timeout' bars
+    out_df['future_close'] = out_df['close'].shift(-timeout)
+    out_df['future_ret'] = (out_df['future_close'] - out_df['close']) / out_df['close']
     
-    # We need to iterate to find the first barrier touch. 
-    # Vectorizing this fully is hard because of the path dependency, but we can fast-loop it.
-    # For performance on large datasets, numba is preferred, but standard python loop is okay for 30k rows.
+    # Label 1 if return > tp, else 0
+    # We consciously ignore SL here to maximize trend learning. 
+    # Risk management (SL) is handled by the execution engine, not the labeler.
+    out_df['y'] = (out_df['future_ret'] > tp).astype(int)
     
-    for i in range(n - timeout):
-        # Current reference price
-        ref_price = close_prices[i]
-        
-        # Barrier Levels
-        tp_price = ref_price * (1 + tp)
-        sl_price = ref_price * (1 - sl)
-        
-        # Look ahead 'timeout' bars
-        # Note: We check High for TP and Low for SL
-        future_highs = high_prices[i+1 : i+1+timeout]
-        future_lows = low_prices[i+1 : i+1+timeout]
-        
-        # Check first touch
-        # Ideally we check each bar sequentially.
-        hit_tp = False
-        hit_sl = False
-        
-        for j in range(len(future_highs)):
-            h = future_highs[j]
-            l = future_lows[j]
-            
-            # Check strictly: if specific bar High > TP
-            if h >= tp_price:
-                # But wait, did it hit SL in the same bar first? 
-                # Without tick data we don't know intra-bar path.
-                # Conservative approach: Assume SL hit first if both hit in same bar?
-                # Or standard approach: If Low also < SL, then it's ambiguous.
-                # Let's assume Worst Case (SL hit) if both happen, to be safe.
-                if l <= sl_price:
-                   hit_sl = True
-                   break
-                else:
-                   hit_tp = True
-                   break
-            
-            if l <= sl_price:
-                hit_sl = True
-                break
-        
-        if hit_tp:
-            labels[i] = 1
-        # else label remains 0 (SL or Timeout)
-        
-    out_df['y'] = labels
+    # Valid rows only
+    out_df = out_df.dropna(subset=['future_close', 'future_ret', 'y'])
     
-    # Calculate next bar return for backtesting purposes (not used for labeling anymore)
-    out_df['future_ret'] = out_df['close'].shift(-1) / out_df['close'] - 1
-    
-    # --- Add missing future columns for run_backtest compatibility ---
-    # Ideally, run_backtest should simulate bar-by-bar using current price and future bars.
-    # Current implementation of run_backtest uses shifted columns to peek at 'next' bar.
-    # So we compute them here. Horizon=1 is assumed for the backtester's step check.
-    out_df['future_high'] = out_df['high'].shift(-1)
-    out_df['future_low'] = out_df['low'].shift(-1)
-    out_df['future_close'] = out_df['close'].shift(-1)
-
-    # Drop the last 'timeout' rows where we couldn't calculate labels
-    out_df = out_df.iloc[:-timeout]
+    # Add other future helper columns for backtest compatibility
+    out_df['future_high'] = out_df['high'].shift(-timeout) # Approx for checking
+    out_df['future_low'] = out_df['low'].shift(-timeout)
     
     return out_df
