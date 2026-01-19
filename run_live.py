@@ -66,16 +66,26 @@ async def main_loop(args):
     is_sandbox = (flag == '0')
     print(f"Exchange Mode: {'SANDBOX' if is_sandbox else 'LIVE'}",flush=True)
     
+    # --- DEBUG: Show Masked API Key for Verification ---
+    key_to_use = api_credentials.get('api_key', '')
+    if key_to_use and len(key_to_use) > 8:
+        masked_key = key_to_use[:4] + "****" + key_to_use[-4:]
+    else:
+        masked_key = "NOT_SET_OR_SHORT"
+    print(f"DEBUG: Loading OKX API Key: {masked_key}", flush=True)
+    # ---------------------------------------------------
+
     try:
         exchange_client = await ExchangeFactory.create_exchange(
             'aggregated',
-            api_key=api_credentials.get('api_key'),
+            api_key=key_to_use,
             api_secret=api_credentials.get('secret_key'),
             passphrase=api_credentials.get('passphrase'),
             sandbox=is_sandbox,
             mock=args.mock # Pass mock argument
         )
         print(f"Aggregated exchange client initialized.",flush=True)
+
     except Exception as e:
         print(f"CRITICAL ERROR: Failed to initialize exchange: {e}",flush=True)
         return

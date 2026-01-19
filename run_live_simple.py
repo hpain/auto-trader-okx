@@ -13,6 +13,7 @@ from exchange.factory import ExchangeFactory
 from strategies.funding_arb import FundingRateArbitrageStrategy
 from trader.execution_handler import ExecutionHandler
 from utils.logger import setup_script_logger as setup_logger
+from tenacity import retry, stop_after_attempt, wait_exponential
 
 class SimpleBot:
     """
@@ -210,7 +211,8 @@ class SimpleBot:
                                 self.logger.info(f"🚀 ARBITRAGE POSITION OPENED SUCCESSFULLY.")
                             else:
                                 self.logger.critical(f"❌ CRITICAL: Perp LEG FAILED. You have unhedged Spot position!")
-                                # TODO: Emergency Close Spot?
+                                # Emergency Rollback: Close Spot immediately
+                                await self._emergency_close_spot(self.symbol, trade_qty)
                         else:
                             self.logger.error("❌ Spot Leg Failed. Aborting Arb entry.")
 
@@ -237,6 +239,24 @@ class SimpleBot:
             except Exception as e:
                 self.logger.error(f"Error in loop: {e}")
                 await asyncio.sleep(60)
+
+    @retry(stop=stop_after_attempt(5), wait=wait_exponential(multiplier=1, min=1, max=10))
+    async def _emergency_close_spot(self, symbol: str, quantity: float):
+        """
+        Emergency method to close spot position if Perp leg fails.
+        Retries aggressively to ensure we don't hold naked spot.
+        """
+        self.logger.critical(f"🚨 EMERGENCY: Rolling back SPOT position for {symbol} (Qty: {quantity})...")
+        try:
+            res = await self.spot_execution.execute_order(symbol, 'sell', quantity, type='market')
+            if res:
+                 self.logger.info(f"✅ EMERGENCY ROLLBACK SUCCESSFUL. Spot sold.")
+                 return True
+            else:
+                 raise Exception("Spot Sell returned None")
+        except Exception as e:
+            self.logger.critical(f"❌ EMERGENCY ROLLBACK FAILED: {e}. Retrying...")
+            raise e
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()

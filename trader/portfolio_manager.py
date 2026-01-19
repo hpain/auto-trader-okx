@@ -841,7 +841,7 @@ class PortfolioManager:
 
         self.logger.info("Synchronizing portfolio state with exchange...")
         
-        # Sync Capital (USDT)
+        # 1. Sync Capital (USDT)
         try:
             # Assuming USDT is the quote currency for all pairs for now
             usdt_balance = await self.exchange_client.get_balance('USDT')
@@ -850,7 +850,7 @@ class PortfolioManager:
         except Exception as e:
             self.logger.error(f"Failed to sync capital: {e}")
 
-        # Sync Positions
+        # 2. Sync Spot Balances (Legacy)
         for symbol in self.symbols:
             try:
                 # Parse base currency (e.g., BTC/USDT -> BTC)
@@ -866,26 +866,61 @@ class PortfolioManager:
                 balance = await self.exchange_client.get_balance(base_currency)
                 balance = float(balance)
                 
-                # Update internal state
+                # Store Spot Balance
+                # Note: This overwrites specific symbol entries if they share base ccy? 
+                # Ideally we separate Spot vs Perp in data structure, but for now we merge or prefer Perp if active?
+                # Actually, our bot trades PERPS mainly with ML, but holds Spot for Arb.
+                # If this is run_live.py (ML), it trades Spot or Perp? 
+                # Config says 'market_type'. But assuming perps for now:
+                
+                # Update internal state (Spot)
                 self.positions[symbol] = balance
                 
                 # Update asset_data
                 if symbol not in self.asset_data:
                     self.asset_data[symbol] = {}
                 self.asset_data[symbol]['position'] = balance
-                
-                # Try to update value if we can get a price (best effort)
-                try:
-                    price = await self.exchange_client.get_current_price(symbol)
-                    if price:
-                        value = balance * price
-                        self.asset_data[symbol]['value'] = value
-                        self.logger.info(f"Synced {symbol}: {balance:.6f} (Value: ${value:.2f})")
-                except Exception:
-                    self.logger.info(f"Synced {symbol}: {balance:.6f} (Price unavailable)")
                     
             except Exception as e:
                 self.logger.error(f"Failed to sync position for {symbol}: {e}")
+
+        # 3. Sync Derivatives Positions (Contracts)
+        try:
+            # Fetch ALL positions for our interested symbols
+            deriv_positions = await self.exchange_client.fetch_positions(self.symbols)
+            for pos in deriv_positions:
+                sym = pos['symbol']
+                # Normalize symbol (CCXT might return BTC-USDT-SWAP, we use BTC/USDT)
+                # We need to match with self.symbols
+                # Our _format_symbol logic usually handles slash. 
+                # Let's try to match loosely.
+                
+                matched_symbol = None
+                for s in self.symbols:
+                    if s.replace('/', '') == sym.replace('/', '').replace('-', '').split('SWAP')[0]:
+                         matched_symbol = s
+                         break
+                    if s == sym:
+                         matched_symbol = s
+                         break
+                
+                if matched_symbol:
+                    amount = pos['amount'] # Signed amount
+                    self.logger.info(f"Found Derivative Position for {matched_symbol}: {amount} (Unrealized PnL: {pos['unrealized_pnl']})")
+                    
+                    # OVERWRITE/ADD to position (Priority to Derivatives if we are trading them?)
+                    # If we have both Spot and Perp, this summing is simplistic but better than ignoring.
+                    # Or we just track them separately?
+                    # For `run_live.py`, if it's trading Perps, we want this `amount`.
+                    self.positions[matched_symbol] = amount
+                    self.asset_data[matched_symbol]['position'] = amount
+                    
+                    # Update High Watermark
+                    if matched_symbol not in self.high_watermarks:
+                        self.high_watermarks[matched_symbol] = pos['entry_price']
+
+        except Exception as e:
+             self.logger.error(f"Failed to sync derivatives positions: {e}")
 
         self.logger.info("Portfolio synchronization complete.")
 

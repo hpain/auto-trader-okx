@@ -58,10 +58,20 @@ class OKXExchange(Exchange):
                 'OK-ACCESS-TIMESTAMP': timestamp,
                 'OK-ACCESS-PASSPHRASE': self.passphrase,
             }
+            # Redact sensitive info for logging
+            headers_safe = headers.copy()
+            if 'OK-ACCESS-KEY' in headers_safe:
+                headers_safe['OK-ACCESS-KEY'] = headers_safe['OK-ACCESS-KEY'][:4] + '***'
+            if 'OK-ACCESS-PASSPHRASE' in headers_safe:
+                headers_safe['OK-ACCESS-PASSPHRASE'] = '***'
+            if 'OK-ACCESS-SIGN' in headers_safe:
+                headers_safe['OK-ACCESS-SIGN'] = '***'
+
             self.logger.debug(f"Request URL: {url}")
-            self.logger.debug(f"Request Headers: {headers}")
-            self.logger.debug(f"Message to Sign: '{message}'")
-            self.logger.debug(f"Signature: {signature}")
+            self.logger.debug(f"Request Headers: {headers_safe}")
+            self.logger.debug(f"Message to Sign: '{message}'") # Message contains body, check body for sensitive info? Usually ok.
+            self.logger.debug(f"Signature: ***")
+
 
         try:
             if method.upper() == 'GET':
@@ -165,7 +175,14 @@ class OKXExchange(Exchange):
         if response and response.get("code") == "0" and response.get("data"):
             for detail in response['data'][0]['details']:
                 if detail['ccy'] == currency:
-                    return float(detail['availBal'])
+                    # Return total balance (Available + Frozen) to reflect true ownership
+                    avail = float(detail['availBal'])
+                    frozen = float(detail.get('frozenBal', 0))
+                    total = avail + frozen
+                    if frozen > 0:
+                        self.logger.info(f"Balance for {currency}: Avail={avail}, Frozen={frozen}, Total={total}")
+                    return total
+
         return 0.0
 
     def create_order(self, symbol: str, order_type: str, side: str, amount: float, price: Optional[float] = None) -> Dict[str, Any]:

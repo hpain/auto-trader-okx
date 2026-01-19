@@ -19,60 +19,53 @@ except ImportError:
     
 from features.tensor_loader import create_lazy_loader
 
-class TimeSeriesGRU(nn.Module if HAS_TORCH else object):
-    """
-    Switching to GRU (Gated Recurrent Unit) which is more robust for smaller datasets (<100k samples).
-    Transformer was overfitting/underfitting (Val Loss > Baseline).
-    """
-    def __init__(self, input_dim, d_model=64, num_layers=2, dropout=0.2):
-        super(TimeSeriesGRU, self).__init__()
-        
-        # 1. Input Projection (Optional, but helps to map features to hidden dim)
-        self.input_proj = nn.Sequential(
-            nn.Linear(input_dim, d_model),
-            nn.ReLU(),
-            nn.Dropout(dropout)
-        )
-        
-        # 2. GRU Layer
-        # batch_first=True: Input is (Batch, Seq, Feature)
-        self.rnn = nn.GRU(
-            input_size=d_model, 
-            hidden_size=d_model, 
-            num_layers=num_layers, 
-            batch_first=True, 
-            dropout=dropout if num_layers > 1 else 0
-        )
-        
-        # 3. Output Head
-        self.decoder = nn.Sequential(
-            nn.Linear(d_model, d_model // 2),
-            nn.ReLU(),
-            nn.Dropout(dropout),
-            nn.Linear(d_model // 2, 1)
-        )
+class PositionalEncoding(nn.Module if HAS_TORCH else object):
+    def __init__(self, d_model, dropout=0.1, max_len=5000):
+        super(PositionalEncoding, self).__init__()
+        self.dropout = nn.Dropout(p=dropout)
 
+        pe = torch.zeros(max_len, d_model)
+        position = torch.arange(0, max_len, dtype=torch.float).unsqueeze(1)
+        div_term = torch.exp(torch.arange(0, d_model, 2).float() * (-math.log(10000.0) / d_model))
+        
+        pe[:, 0::2] = torch.sin(position * div_term)
+        pe[:, 1::2] = torch.cos(position * div_term)
+        
+        pe = pe.unsqueeze(0)
+        self.register_buffer('pe', pe)
+
+    def forward(self, x):
+        x = x + self.pe[:, :x.size(1), :]
+        return self.dropout(x)
+
+class TimeSeriesTransformer(nn.Module if HAS_TORCH else object):
+    """
+    Standard Transformer for Time Series.
+    Reverted from GRU as per user request.
+    """
+    def __init__(self, input_dim, d_model=64, nhead=4, num_layers=2, dropout=0.2):
+        super(TimeSeriesTransformer, self).__init__()
+        self.d_model = d_model
+        
+        self.embedding = nn.Linear(input_dim, d_model)
+        self.pos_encoder = PositionalEncoding(d_model, dropout)
+        
+        encoder_layers = nn.TransformerEncoderLayer(d_model, nhead, dim_feedforward=d_model*4, dropout=dropout, batch_first=True)
+        self.transformer_encoder = nn.TransformerEncoder(encoder_layers, num_layers)
+        
+        self.decoder = nn.Linear(d_model, 1)
 
     def forward(self, src):
         # src: [Batch, Seq_Len, Features]
-        
-        # Project Input
-        x = self.input_proj(src)
-        
-        # RNN Forward
-        # out: (Batch, Seq, Hidden), hn: (Layers, Batch, Hidden)
-        out, _ = self.rnn(x)
-        
-        # Take the last time step
-        last_step = out[:, -1, :]
-        
-        # Project to target
-        prediction = self.decoder(last_step)
-        return prediction # Return raw logits
+        x = self.embedding(src) * math.sqrt(self.d_model)
+        x = self.pos_encoder(x)
+        output = self.transformer_encoder(x)
+        x = output[:, -1, :] # Last token pooling
+        return self.decoder(x)
 
 class TransformerStrategy:
     """
-    Deep Learning Strategy (Currently using GRU for stability on small datasets).
+    Deep Learning Strategy (Transformer).
     Hardware Agnostic: Runs on CPU or CUDA.
     Memory Optimized: Uses Lazy Loading for low RAM environments.
     """
@@ -100,8 +93,8 @@ class TransformerStrategy:
 
     def build_model(self, input_dim, pos_weight=None):
         if not HAS_TORCH: return
-        # Use the new GRU model (renamed class or swapped implementation)
-        self.model = TimeSeriesGRU(input_dim=input_dim, dropout=self.dropout).to(self.device).float()
+        # Revert to Transformer
+        self.model = TimeSeriesTransformer(input_dim=input_dim, dropout=self.dropout).to(self.device).float()
         
         # Increased LR to 0.001 to help model escape baseline
         self.optimizer = optim.AdamW(self.model.parameters(), lr=0.001, weight_decay=1e-3)

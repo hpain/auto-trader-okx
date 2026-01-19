@@ -434,6 +434,62 @@ class CcxtExchange(Exchange):
         params = {'stopPrice': stop_loss_price, 'stopLimitPrice': stop_loss_price}
         return await self.exchange.create_order(symbol, 'oco', side, amount, take_profit_price, params=params)
 
+    @robust_exchange_retry(retry_count=3, default_return=[])
+    async def fetch_positions(self, symbols: List[str] = None) -> List[Dict]:
+        """
+        Fetch positions for specific symbols or all symbols.
+        Returns a list of unified position dictionaries.
+        """
+        # Format symbols if provided
+        ccxt_symbols = [self._format_symbol(s) for s in symbols] if symbols else None
+        
+        try:
+            # OKX and others usually support fetching list of symbols
+            positions = await self.exchange.fetch_positions(ccxt_symbols)
+        except Exception as e:
+            logger.warning(f"Error fetching positions from {self.exchange.id}: {e}")
+            return []
+
+        unified_aps = []
+        for pos in positions:
+            # Parse key fields
+            # CCXT usually gives: symbol, contracts, contractSize, side, unrealizedPnl, etc.
+            
+            # Filter if we requested specific symbols but exchange returned all
+            if ccxt_symbols and pos['symbol'] not in ccxt_symbols:
+                continue
+
+            # Determine signed size
+            size = float(pos.get('contracts', 0) or pos.get('info', {}).get('sz', 0)) # contracts is safer for swaps
+            side = pos.get('side')
+            
+            # If Contracts is used, we need multiplier. But for Portfolio Manager, we might want raw units or value.
+            # OKX Swap: 1 contract = 0.01 ETH usually, or 100 USD. 
+            # CCXT 'contractSize' field helps.
+            contract_size = float(pos.get('contractSize', 1.0))
+            
+            # Calculate Base Currency Size (approx)
+            amount = size * contract_size
+            
+            if side == 'short':
+                amount = -abs(amount)
+            else:
+                amount = abs(amount)
+
+            unified_aps.append({
+                'symbol': pos['symbol'],
+                'amount': amount,
+                'contracts': size,
+                'side': side,
+                'unrealized_pnl': float(pos.get('unrealizedPnl') or 0.0),
+                'leverage': float(pos.get('leverage') or 1.0),
+                'entry_price': float(pos.get('entryPrice') or 0.0),
+                'mark_price': float(pos.get('markPrice') or 0.0)
+            })
+            
+        return unified_aps
+
+
     # The following methods are not part of the base Exchange class but are specific to this implementation
     async def fetch_funding_rates(self, symbol: str, timeframe: str, years: Optional[float] = None, since: Optional[int] = None, limit: Optional[int] = None) -> pd.DataFrame:
         if not self.exchange.has['fetchFundingRateHistory']:

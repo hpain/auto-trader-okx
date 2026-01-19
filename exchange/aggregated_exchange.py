@@ -434,6 +434,32 @@ class AggregatedExchange(Exchange):
     async def cancel_order(self, order_id: str, symbol: str) -> Dict[str, Any]:
         return await self.primary_spot_exchange.cancel_order(order_id, symbol)
 
+    async def fetch_positions(self, symbols: List[str] = None) -> List[Dict]:
+        """
+        Fetch positions from ALL Swap exchanges. 
+        AggregatedExchange assumes positions are held on Swap exchanges (Derivatives).
+        Spot holdings are checked via get_balance.
+        """
+        all_positions = []
+        for exc in self.all_swap_exchanges:
+            try:
+                # Assuming the underlying exchange has fetch_positions (CCXT standard)
+                # But we wrapped it in CcxtExchange, so it should have it if we used our class.
+                # If it's a raw CCXT instance, we might need to check.
+                # Our Factory returns CcxtExchange, so it has our new method.
+                
+                # We need to map our generic symbols (BTC/USDT) to exchange specific if needed?
+                # CcxtExchange handles that.
+                
+                pos = await exc.fetch_positions(symbols)
+                all_positions.extend(pos)
+                logger.info(f"Fetched {len(pos)} positions from {exc.exchange_id}")
+            except Exception as e:
+                logger.warning(f"Failed to fetch positions from {exc.exchange_id}: {e}")
+        
+        return all_positions
+
+
     async def get_current_price(self, symbol: str) -> float:
         async def _fetch_one_price(exchange):
             try:
