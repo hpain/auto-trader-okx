@@ -174,20 +174,20 @@ def train_main(args):
     logger.info("Scaler saved to models/scaler.pkl")
 
     # 5. Initialize Strategy & Model
-    # ANTI-OVERFITTING CONFIGURATION (BALANCED)
+    # RESTORED HEAVY ARCHITECTURE (Matches historical "Slow but Good" config)
     strategy = TransformerStrategy(
         strategy_name="Transformer_P2",
         window_size=args.window,
         features=feature_cols,
         buy_threshold=0.6,
         sell_threshold=0.4,
-        dropout=0.25,  # BALANCED DROPOUT (Was 0.4, too high)
+        dropout=0.2,  # Standard Dropout
         model_params={
-            'd_model': 64,       
-            'nhead': 4,
-            'num_layers': 2,     
-            'dim_feedforward': 128, 
-            'decoder_hidden_dim': 32 
+            'd_model': 128,       # Restore width
+            'nhead': 8,           # More heads for 128 dim
+            'num_layers': 3,      # Deeper network (matches old checkpoint)
+            'dim_feedforward': 1024, # Heavy FF layer (Computationally expensive but powerful)
+            'decoder_hidden_dim': 64 
         }
     )
     
@@ -196,9 +196,9 @@ def train_main(args):
     # rather than trying to predict more class 1s
     strategy.build_model(input_dim=len(feature_cols))
     
-    # OVERRIDE OPTIMIZER WITH STRONGER REGULARIZATION
+    # RESTORED STANDARD OPTIMIZER
     import torch.optim as optim
-    strategy.optimizer = optim.AdamW(strategy.model.parameters(), lr=0.0005, weight_decay=0.01) # Moderate Weight Decay (0.01)
+    strategy.optimizer = optim.AdamW(strategy.model.parameters(), lr=0.0001, weight_decay=1e-4) # Slower LR for big model
     
     strategy.scaler = scaler
     
