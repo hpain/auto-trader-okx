@@ -184,12 +184,23 @@ def train_main(args):
     logger.info(f"Label distribution - TP(Hit): {pos_count} ({pos_count/total_count:.2%}), SL(Hit): {neg_count} ({neg_count/total_count:.2%}), Timeout: {neu_count} ({neu_count/total_count:.2%})")
     logger.info(f"Calculated weights - Pos: {pos_weight:.4f}, Neg: {neg_weight:.4f}, Neu: {neu_weight:.4f}")
 
+    # For CrossEntropyLoss, we need to map labels from {-1, 0, 1} to {0, 1, 2}
+    # Update the labels in the dataset
+    df_labeled['y_mapped'] = df_labeled[target_col].map({-1: 0, 0: 1, 1: 2})  # {timeout: 0, stop_loss: 1, take_profit: 2}
+    target_col = 'y_mapped'  # Use the remapped target column
+
+    # Recalculate counts with mapped labels
+    mapped_label_counts = df_labeled[target_col].value_counts()
+    pos_count = mapped_label_counts.get(2, 0)  # take_profit class
+    neg_count = mapped_label_counts.get(1, 0)  # stop_loss class
+    neu_count = mapped_label_counts.get(0, 0)  # timeout class
+
     # Calculate baseline loss for 3-class problem using CrossEntropy
     p_tp = pos_count / total_count
     p_sl = neg_count / total_count
     p_timeout = neu_count / total_count
     # For CrossEntropy loss, baseline is the negative log-likelihood of always predicting the most frequent class
-    max_class_prob = max(p_tp, p_sl, p_timeout)
+    max_class_prob = max(p_timeout, p_sl, p_tp)  # Use the most frequent class
     baseline = -np.log(max_class_prob + 1e-9)  # CrossEntropy baseline
     logger.info(f"Baseline Loss: {baseline:.4f}")
 
@@ -203,10 +214,28 @@ def train_main(args):
 
     logger.info(f"Split: Train={len(train_df)}, Val={len(val_df)}, Test={len(test_df)}")
 
+    # Verify that the mapped labels are correct (should be 0, 1, 2)
+    logger.info(f"Target column after mapping: {target_col}")
+    logger.info(f"Train labels range: {train_df[target_col].min()} to {train_df[target_col].max()}")
+    logger.info(f"Val labels range: {val_df[target_col].min()} to {val_df[target_col].max()}")
+    logger.info(f"Test labels range: {test_df[target_col].min()} to {test_df[target_col].max()}")
+
     # Ensure target column is integer type for CrossEntropyLoss
     train_df[target_col] = train_df[target_col].astype(int)
     val_df[target_col] = val_df[target_col].astype(int)
     test_df[target_col] = test_df[target_col].astype(int)
+
+    # Double-check that all values are in the correct range [0, 1, 2]
+    # If not, apply mapping again to ensure correctness
+    if train_df[target_col].min() < 0 or train_df[target_col].max() > 2:
+        logger.warning(f"Target values out of range [0,1,2]. Remapping: {train_df[target_col].unique()}")
+        train_df[target_col] = train_df[target_col].map({-1: 0, 0: 1, 1: 2}).fillna(0).astype(int)
+    if val_df[target_col].min() < 0 or val_df[target_col].max() > 2:
+        logger.warning(f"Target values out of range [0,1,2]. Remapping: {val_df[target_col].unique()}")
+        val_df[target_col] = val_df[target_col].map({-1: 0, 0: 1, 1: 2}).fillna(0).astype(int)
+    if test_df[target_col].min() < 0 or test_df[target_col].max() > 2:
+        logger.warning(f"Target values out of range [0,1,2]. Remapping: {test_df[target_col].unique()}")
+        test_df[target_col] = test_df[target_col].map({-1: 0, 0: 1, 1: 2}).fillna(0).astype(int)
 
     # 7. Feature Selection with correlation analysis
     exclude = ['y', 'open', 'high', 'low', 'close', 'symbol'] + [c for c in df_labeled.columns if 'future' in c]
@@ -252,7 +281,8 @@ def train_main(args):
 
     # For 3-class classification (take profit, stop loss, timeout), use CrossEntropyLoss
     # with class weights to handle imbalanced dataset
-    class_weights = torch.tensor([neu_weight, neg_weight, pos_weight])  # [timeout, stop_loss, take_profit]
+    # Ensure weights are on the same device as model and use float32 to match model outputs
+    class_weights = torch.tensor([neu_weight, neg_weight, pos_weight], device=strategy.device, dtype=torch.float32)  # [timeout, stop_loss, take_profit]
     strategy.criterion = nn.CrossEntropyLoss(weight=class_weights)
 
     strategy.scaler = scaler
@@ -307,15 +337,19 @@ def train_main(args):
             train_scaled_enhanced['abs_returns'] = train_scaled_enhanced['returns'].abs()
             train_scaled_enhanced = train_scaled_enhanced.sort_values('abs_returns')
 
+    # Convert target to long type for CrossEntropyLoss
+    train_targets = train_scaled_enhanced[target_col].astype(int)
+    val_targets = val_scaled[target_col].astype(int)
+
     train_loader = create_lazy_loader(
         train_scaled_enhanced[feature_cols],
-        train_scaled_enhanced[target_col],
+        train_targets,
         args.window,
         args.batch_size
     )
     val_loader = create_lazy_loader(
         val_scaled[feature_cols],
-        val_scaled[target_col],
+        val_targets,
         args.window,
         args.batch_size
     )
@@ -353,13 +387,15 @@ def train_main(args):
         total_grad_norm = 0  # Track gradient norms
 
         for batch_X, batch_y in train_loader:
-            batch_X = batch_X.to(strategy.device).float()
-            batch_y = batch_y.to(strategy.device).float().unsqueeze(1)
+            batch_X = batch_X.to(strategy.device).float()  # Ensure inputs are float32
+            # Convert targets to long for CrossEntropyLoss (expects class indices)
+            # Ensure targets are flattened to 1D and converted to long
+            batch_y = batch_y.to(strategy.device).squeeze().long()
 
             strategy.optimizer.zero_grad()
             outputs = strategy.model(batch_X)
 
-            # Calculate loss
+            # Calculate loss - CrossEntropyLoss expects raw logits and class indices
             loss = strategy.criterion(outputs, batch_y)
             loss.backward()
 
@@ -376,11 +412,11 @@ def train_main(args):
             # Calculate accuracy and other metrics for multiclass
             # Get predicted class (highest probability)
             _, predicted_classes = torch.max(outputs, 1)  # Get class with highest probability
-            train_correct += (predicted_classes == batch_y.squeeze(1)).sum().item()
+            train_correct += (predicted_classes == batch_y).sum().item()
             train_total += batch_y.size(0)
 
             # Calculate TP, FP, FN for F1 score (focus on positive class - take profit = class 2)
-            actual_take_profit = (batch_y.squeeze(1) == 2).float()
+            actual_take_profit = (batch_y == 2).float()
             pred_take_profit = (predicted_classes == 2).float()
 
             # Calculate TP, FP, FN for F1 score (for take profit class)
@@ -411,7 +447,8 @@ def train_main(args):
             for batch_X, batch_y in val_loader:
                 batch_X = batch_X.to(strategy.device).float()
                 # Convert targets to long for CrossEntropyLoss (expects class indices)
-                batch_y = batch_y.to(strategy.device).long().squeeze(1)
+                # Ensure targets are flattened to 1D and converted to long
+                batch_y = batch_y.to(strategy.device).squeeze().long()
                 outputs = strategy.model(batch_X)
 
                 # Calculate loss - CrossEntropyLoss expects raw logits and class indices

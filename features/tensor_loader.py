@@ -22,9 +22,26 @@ class LazyTimeSeriesDataset(Dataset):
         # Store only raw data
         # Ensure data is simple float32 numpy array
         self.data = torch.tensor(data, dtype=torch.float32) if torch else data
-        self.target = torch.tensor(target, dtype=torch.float32) if torch else target
+
+        # For CrossEntropyLoss, target should be long (integer) type with values [0, num_classes-1]
+        # Check if this is a classification problem with negative indices
+        unique_vals = np.unique(target)
+        if len(unique_vals) <= 10 and np.all(np.equal(unique_vals, unique_vals.astype(int))):
+            # If there are few unique values and they're all integers, assume classification
+            # Check if target values include negative numbers (e.g., [-1, 0, 1]) which need remapping to [0, 1, 2]
+            min_val = int(np.min(unique_vals))
+            if min_val < 0:
+                # Remap from [-1, 0, 1] to [0, 1, 2] or similar
+                mapped_target = target - min_val  # Shift all values by the minimum to make them non-negative
+                self.target = torch.tensor(mapped_target, dtype=torch.long) if torch else mapped_target
+            else:
+                # Values are already non-negative, use as-is
+                self.target = torch.tensor(target, dtype=torch.long) if torch else target
+        else:
+            # Otherwise, assume regression
+            self.target = torch.tensor(target, dtype=torch.float32) if torch else target
         self.window_size = window_size
-        
+
         # Calculate valid length
         self.length = len(data) - window_size
 

@@ -124,7 +124,9 @@ class TimeSeriesTransformer(nn.Module if HAS_TORCH else object):
         # Output with dropout
         x = self.output_dropout(x)
         prediction = self.decoder(x)
-        return prediction
+
+        # Ensure output is float32 to match expected types for loss function
+        return prediction.float()
 
 class TransformerStrategy:
     """
@@ -172,7 +174,22 @@ class TransformerStrategy:
             elif isinstance(m, nn.Embedding):
                 nn.init.normal_(m.weight, mean=0, std=0.1)
 
-        self.model.apply(init_weights)
+        # Initialize weights with proper data types
+        def init_weights_proper(m):
+            if isinstance(m, nn.Linear):
+                # Use Xavier uniform initialization with proper data type
+                torch.nn.init.xavier_uniform_(m.weight)
+                if m.bias is not None:
+                    torch.nn.init.constant_(m.bias, 0)
+            elif isinstance(m, nn.Embedding):
+                # Initialize embedding with normal distribution
+                torch.nn.init.normal_(m.weight, mean=0, std=0.1)
+            elif isinstance(m, nn.LayerNorm):
+                # Initialize LayerNorm with proper data types
+                torch.nn.init.ones_(m.weight)
+                torch.nn.init.zeros_(m.bias)
+
+        self.model.apply(init_weights_proper)
 
         # Use AdamW for better regularization with configurable learning rate
         # Increase weight decay for stronger regularization
@@ -222,8 +239,9 @@ class TransformerStrategy:
             for batch_X, batch_y in loader:
                 # Lazy loader returns tensors directly
                 batch_X = batch_X.to(self.device).float()
-                batch_y = batch_y.to(self.device).float().unsqueeze(1)
-                
+                # Convert targets to long for CrossEntropyLoss (expects class indices)
+                batch_y = batch_y.to(self.device).long().squeeze()  # Ensure targets are long integers
+
                 self.optimizer.zero_grad()
                 outputs = self.model(batch_X)
                 loss = self.criterion(outputs, batch_y)
