@@ -171,18 +171,32 @@ def train_main(args):
     logger.info("Scaler saved to models/scaler.pkl")
 
     # 5. Initialize Strategy & Model
+    # ANTI-OVERFITTING CONFIGURATION
     strategy = TransformerStrategy(
         strategy_name="Transformer_P2",
         window_size=args.window,
         features=feature_cols,
         buy_threshold=0.6,
-        sell_threshold=0.4
+        sell_threshold=0.4,
+        dropout=0.4,  # INCREASED DROPOUT (Was 0.2)
+        model_params={
+            'd_model': 64,       # Keep model small
+            'nhead': 4,
+            'num_layers': 2,     # Keep depth shallow
+            'dim_feedforward': 128, # CRITICAL: Constrain FF dim (Original 2048 is way too big for financial data)
+            'decoder_hidden_dim': 32 # Bottleneck decoder
+        }
     )
     
     # Note: NOT using pos_weight for Transformer as it causes overfitting
     # LGB also works better without it - the model should focus on precision
     # rather than trying to predict more class 1s
     strategy.build_model(input_dim=len(feature_cols))
+    
+    # OVERRIDE OPTIMIZER WITH STRONGER REGULARIZATION
+    import torch.optim as optim
+    strategy.optimizer = optim.AdamW(strategy.model.parameters(), lr=0.0005, weight_decay=0.05) # Higher Weight Decay (0.05), Lower LR
+    
     strategy.scaler = scaler
     
     # 6. Train
@@ -206,7 +220,7 @@ def train_main(args):
     )
     
     # 7. Save Model
-    model_path = f'models/transformer_v4_tb{int(args.tp*1000)}_{int(args.sl*1000)}.pth'
+    model_path = f'models/transformer_v5_reg_tb{int(args.tp*1000)}_{int(args.sl*1000)}.pth'
     strategy.save_model(model_path)
     logger.info(f"Model saved to {model_path}")
 
