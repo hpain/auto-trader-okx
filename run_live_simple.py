@@ -72,11 +72,25 @@ class SimpleBot:
         self.logger.info(f"Environment OKX_FLAG={flag} -> Sandbox={is_sandbox}")
 
         # 1. Swap Exchange (Primary - for Perp)
+        # ------------------------------------------------------------------
+        # CREDENTIAL LOGIC:
+        # User Infrastructure: LIVE_OKX_... for Arb Bot (Live), OKX_... for ML/Mock.
+        # We explicitly load LIVE credentials if not in Mock mode.
+        # ------------------------------------------------------------------
+        exchange_kwargs = {'mock': self.mock, 'sandbox': is_sandbox}
+        
+        if not self.mock:
+            exchange_kwargs['api_key'] = os.environ.get('LIVE_OKX_API_KEY')
+            exchange_kwargs['api_secret'] = os.environ.get('LIVE_OKX_SECRET_KEY')
+            exchange_kwargs['passphrase'] = os.environ.get('LIVE_OKX_PASSPHRASE')
+            
+            if not exchange_kwargs['api_key']:
+                 self.logger.warning("[CONFIG] Running LIVE but 'LIVE_OKX_API_KEY' not found. ExchangeFactory will try fallback to 'OKX_API_KEY'.")
+
         self.exchange = await ExchangeFactory.create_exchange(
             'okx', 
-            mock=self.mock,
-            sandbox=is_sandbox,
-            market_type='swap'
+            market_type='swap',
+            **exchange_kwargs
         )
         # Access raw CCXT instance for advanced order types
         if self.mock:
@@ -85,11 +99,12 @@ class SimpleBot:
             self.ccxt_swap = self.exchange.exchange 
 
         # 2. Spot Exchange (Secondary - for Spot)
+        # 2. Spot Exchange (Secondary - for Spot)
+        # Use same exchange_kwargs to pass the LIVE credentials if loaded
         self.spot_exchange = await ExchangeFactory.create_exchange(
             'okx',
-            mock=self.mock,
-            sandbox=is_sandbox,
-            market_type='spot'
+            market_type='spot',
+            **exchange_kwargs
         )
         if self.mock:
             self.ccxt_spot = self.spot_exchange
@@ -118,31 +133,76 @@ class SimpleBot:
                 positions = await self.ccxt_swap.fetch_positions([self.symbol])
                 
             if positions:
-                # Iterate to find the correct symbol position
                 for pos in positions:
                     if pos['symbol'] == self.symbol or pos['info'].get('instId') == self.symbol.replace('/', '-'):
                         raw_sz = float(pos['contracts'])
                         if pos['side'] == 'short':
-                            perp_sz = -raw_sz 
+                            perp_sz = -raw_sz # Negative for short
+                        else:
+                            perp_sz = raw_sz
             
-            threshold = 0.001 
+            # 3. CRASH RECOVERY LOGIC (The "Ultimate Question" Fix)
+            # We must verify if the legs are balanced.
+            # Ideal: Abs(Perp) == Spot
+            
+            perp_abs = abs(perp_sz)
+            delta = spot_bal - perp_abs
+            
             if not quiet:
-                self.logger.info(f"State Check: Spot={spot_bal}, PerpContracts (raw)={perp_sz}")
+                self.logger.info(f"State Check: Spot={spot_bal}, Perp={perp_sz} (Abs={perp_abs}). Delta={delta}")
 
-            if spot_bal > threshold:
+            threshold = 0.001 
+            
+            if abs(delta) > threshold:
+                # MISMATCH DETECTED!
+                self.logger.critical(f"[ALERT] CRASH RECOVERY: Found Unbalanced Position! Spot:{spot_bal}, Perp:{perp_abs}. Delta:{delta}")
+                
+                # Case A: Naked Spot (Long > Short) -> Sell Excess Spot
+                if delta > 0:
+                     diff = delta
+                     self.logger.warning(f"[RECOVERY] Closing Naked Spot Exposure: {diff}")
+                     try:
+                         # Force Market Sell for safety (Liquidity permitting)
+                         # Using _execute_safe with slight discount to ensure fill
+                         spot_bid, _ = await self._get_order_book_price(self.ccxt_spot, self.symbol)
+                         await self._execute_safe(self.ccxt_spot.create_order, self.symbol, 'sell', diff, spot_bid)
+                         self.logger.warning("[RECOVERY] Naked Spot Closed.")
+                     except Exception as e:
+                         self.logger.critical(f"[FAIL] RECOVERY FAILED: {e}")
+                     
+                # Case B: Naked Short (Short > Long) -> Buy Perp to Close
+                elif delta < 0:
+                     diff = abs(delta)
+                     self.logger.critical(f"[RECOVERY] DANGER: Closing Naked Perp Exposure: {diff}")
+                     try:
+                         # Force Market Buy for safety
+                         _, perp_ask = await self._get_order_book_price(self.ccxt_swap, self.symbol)
+                         await self._execute_safe(self.ccxt_swap.create_order, self.symbol, 'buy', diff, perp_ask)
+                         self.logger.warning("[RECOVERY] Naked Perp Closed.")
+                     except Exception as e:
+                         self.logger.critical(f"[FAIL] RECOVERY FAILED: {e}")
+            
+            # 4. Resume State
+            # Verify again? Or just update stats. 
+            # Ideally we re-run verify, but let's just assume we sent the orders.
+            # Next cycle's guard will trigger again if failed.
+            
+            # Simple assumption for now:
+            self.has_position = False # Reset flag to let next loop discover truth if any remains
+            
+            # If we were perfectly balanced before recovery check:
+            if abs(delta) <= threshold and spot_bal > threshold:
                 self.has_position = True
-                self.position_qty = spot_bal 
+                self.position_qty = spot_bal
                 if not quiet:
-                    self.logger.warning(f"[WARN] FOUND EXISTING POSITION! Restoring state. Qty: {self.position_qty}")
-            else:
-                self.has_position = False
-                if not quiet:
-                    self.logger.info("[OK] No existing position found. Ready to trade.")
+                    self.logger.warning(f"[RESUME] Resumed Valid Arbitrage Position. Size: {self.position_qty}")
+            elif abs(delta) <= threshold and spot_bal < threshold:
+                 self.has_position = False
+                 if not quiet: self.logger.info("[OK] Clean State. Ready.")
 
         except Exception as e:
             self.logger.error(f"State Reconciliation Failed: {e}")
             if not self.mock:
-                # Don't exit on runtime check, just log error
                 if not quiet: sys.exit(1)
 
     async def _get_order_book_price(self, exchange, symbol: str) -> Tuple[float, float]:
@@ -278,10 +338,25 @@ class SimpleBot:
                 is_profitable_entry = False
                 if funding_rate > 0:
                      yield_buffer = funding_rate * 3 
-                     # Update Strategy Logs
+                     if funding_rate > total_entry_cost + MIN_PROFIT_SPREAD:
+                         is_profitable_entry = True
+
+                # Update Strategy Logs
                 log_color = '\033[92m' if is_profitable_entry else '\033[93m'
+                
                 if cycle_count % 12 == 0: # Log every ~1 minute
-                     self.logger.info(f"[DATA] Market: PerpBid={perp_bid:.2f}, SpotAsk={spot_ask:.2f}, Fund={funding_rate:.6f}. Cost={total_entry_cost:.5f}. Trade? {log_color}{is_profitable_entry}\033[0m")
+                     # Fetch USDT Balance for display
+                     try:
+                         if self.mock:
+                             bal = await self.spot_exchange.fetch_balance()
+                             usdt_show = bal['USDT']['free']
+                         else:
+                             # For single-currency/contract mode, usually check Spot account for USDT
+                             usdt_show = await self.spot_exchange.get_balance('USDT')
+                     except: 
+                         usdt_show = 0.0
+                     
+                     self.logger.info(f"[DATA] Balance: {usdt_show:.2f} U | Market: PerpBid={perp_bid:.2f}, SpotAsk={spot_ask:.2f}, Fund={funding_rate:.6f}. Cost={total_entry_cost:.5f}. Trade? {log_color}{is_profitable_entry}\033[0m")
 
                 # 3. Strategy Signal
                 signal = self.strategy.generate_signal(None, self.symbol, funding_rate=funding_rate)
@@ -314,13 +389,17 @@ class SimpleBot:
                                         self.logger.critical(f"[FAIL] HEDGE MISMATCH! Short:{perp_filled}, Long:{spot_filled}. Naked Short: {exposure}. CLOSING...")
                                         await self._emergency_close_perp(self.symbol, exposure)
                                     
-                                    # If we managed to hedge at least something, track it? 
                                     # Simplified: If mismatch occurred, we closed the excess. 
                                     # So we are left with 'spot_filled' amount perfectly hedged (assuming spot_filled > 0).
                                     if spot_filled > 0:
                                         self.has_position = True
                                         self.position_qty = spot_filled
                                         self.logger.warning(f"[RECOVERY] Kept partial hedged position: {self.position_qty}")
+                                
+                                # STEP 3: FINAL TRUTH CHECK
+                                # Fees were deduced. We must sync with wallet to know EXACT hold size.
+                                await self.reconcile_state(quiet=True)
+                                self.logger.info(f"[SYNC] Post-Trade Balance Synced. Holding: {self.position_qty}")
                             else:
                                 self.logger.warning("Entry Aborted: Perp fill 0. No action taken.")
                     else:
@@ -331,8 +410,27 @@ class SimpleBot:
                 elif (signal == 0.0 or signal == 1.0) and self.has_position:
                     self.logger.info("[EXIT] NORMAL EXIT TRIGGERED.")
                     
+                    # Close Perp (Short -> Buy to Close)
                     perp_s, perp_f = await self._execute_safe(self.ccxt_swap.create_order, self.symbol, 'buy', self.position_qty, perp_ask)
-                    spot_s, spot_f = await self._execute_safe(self.ccxt_spot.create_order, self.symbol, 'sell', self.position_qty, spot_bid)
+                    
+                    # Close Spot (Long -> Sell to Close)
+                    # Handle Dust: Fee deduction means we have slightly less than position_qty.
+                    # We must fetch the EXACT available balance to avoid "Insufficient Funds".
+                    try:
+                        base_ccy = self.symbol.split('/')[0]
+                        spot_bal = await self.spot_exchange.get_balance(base_ccy)
+                        # We intend to sell 'position_qty', but can only sell 'spot_bal'
+                        # Use the smaller of the two, but usually spot_bal is the limit.
+                        sell_qty = min(spot_bal, self.position_qty)
+                        
+                        # Guard: If balance is suspiciously low (moved out?), panic check
+                        if sell_qty < self.position_qty * 0.9:
+                             self.logger.warning(f"Spot Balance {spot_bal} is much less than expected {self.position_qty}. Selling available only.")
+                        
+                        spot_s, spot_f = await self._execute_safe(self.ccxt_spot.create_order, self.symbol, 'sell', sell_qty, spot_bid)
+                    except Exception as e:
+                        self.logger.error(f"Spot Exit Prep Failed: {e}")
+                        spot_s, spot_f = False, 0.0
                     
                     if perp_s and spot_s:
                         self.has_position = False
