@@ -49,19 +49,26 @@ def setup_script_logger(log_dir: str = 'logs', file_name: str = 'script.log', le
             if record.levelno == logging.INFO:
                 msg = record.msg if isinstance(record.msg, str) else str(record.msg)
                 
-                # 1. Trade Action (Highest Priority)
-                if any(k in msg for k in ["BUY", "PURCHASING", "LONG"]):
-                    log_fmt = self.BOLD_GREEN + self.FORMAT + self.RESET
-                elif any(k in msg for k in ["SELL", "SELLING", "SHORT"]):
+                # 1. Critical / Failures (Red)
+                if any(k in msg for k in ["[FAIL]", "[ALERT]", "Failed", "Error"]):
                     log_fmt = self.RED + self.FORMAT + self.RESET
-                # 2. Score / Analysis
-                elif "Score:" in msg:
-                     log_fmt = self.CYAN + self.FORMAT + self.RESET
-                # 3. Success Keywords
-                elif any(k in msg for k in ["Successfully", "OK:", "Complete", "Loaded", "Saved"]):
-                     log_fmt = self.GREEN + self.FORMAT + self.RESET
+                
+                # 2. Success / Execution (Green/Cyan)
+                elif any(k in msg for k in ["[SUCCESS]", "[OK]", "Successfully", "Complete", "Saved", "Loaded"]):
+                    log_fmt = self.GREEN + self.FORMAT + self.RESET
+                elif "[EXEC]" in msg or any(k in msg for k in ["BUY", "SELL", "LONG", "SHORT"]):
+                    log_fmt = self.CYAN + self.FORMAT + self.RESET
+
+                # 3. Warnings involved in Info (Yellow) - rare but possible
+                elif "[WARN]" in msg:
+                    log_fmt = self.YELLOW + self.FORMAT + self.RESET
+
+                # 4. Data / Heartbeat (Pass-through)
+                elif "[DATA]" in msg:
+                     log_fmt = self.RESET + self.FORMAT + self.RESET
+
+                # 5. Normal Info (Grey)
                 else:
-                     # Normal Info -> Light Grey
                      log_fmt = self.GREY + self.FORMAT + self.RESET
             else:
                 log_fmt = self.FORMATS.get(record.levelno, self.RESET + self.FORMAT + self.RESET)

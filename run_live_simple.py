@@ -291,7 +291,7 @@ class SimpleBot:
             
             if status == 'closed' or filled >= qty * 0.99:
                 # Highlight SUCCESSFUL TRADES in CYAN/GREEN
-                self.logger.info(f"\033[96m[EXEC] {side.upper()} FILLED: {filled} @ {order.get('average', limit_price)}\033[0m")
+                self.logger.info(f"[EXEC] {side.upper()} FILLED: {filled} @ {order.get('average', limit_price)}")
                 return True, filled
             else:
                 self.logger.warning(f"[WARN] {side.upper()} Partial/Fail: {filled} / {qty}. Status: {status}")
