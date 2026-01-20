@@ -252,14 +252,14 @@ def train_main(args):
     # Calculate inverse frequency weights for Focal Loss alpha
     # Make weights sum to number of classes (3) for scale consistency
     epsilon = 1e-6
-# Use smoother inverse-frequency weighting without scaling to total class count
-weights = torch.tensor([
-    total_count / (neu_count + epsilon),
-    total_count / (neg_count + epsilon),
-    total_count / (pos_count + epsilon)
-], dtype=torch.float32)
-# Normalize weights to have mean 1 for stability
-weights = weights / weights.mean()
+    # Use smoother inverse-frequency weighting without scaling to total class count
+    weights = torch.tensor([
+        total_count / (neu_count + epsilon),
+        total_count / (neg_count + epsilon),
+        total_count / (pos_count + epsilon)
+    ], dtype=torch.float32)
+    # Normalize weights to have mean 1 for stability
+    weights = weights / weights.mean()
     
     logger.info(f"Class Weights for Focal Loss: Timeout={weights[0]:.4f}, SL={weights[1]:.4f}, TP={weights[2]:.4f}")
 
