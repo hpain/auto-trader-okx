@@ -12,7 +12,6 @@ sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 from exchange.factory import ExchangeFactory
 from strategies.funding_arb import FundingRateArbitrageStrategy
-from trader.execution_handler import ExecutionHandler
 from utils.logger import setup_script_logger as setup_logger
 
 # -----------------------------------------------------------------------------
@@ -438,31 +437,28 @@ class SimpleBot:
                     # Close Perp (Short -> Buy to Close)
                     perp_s, perp_f = await self._execute_safe(self.ccxt_swap.create_order, self.symbol, 'buy', self.position_qty, perp_ask)
                     
-                    # Close Spot (Long -> Sell to Close)
-                    # Handle Dust: Fee deduction means we have slightly less than position_qty.
-                    # We must fetch the EXACT available balance to avoid "Insufficient Funds".
-                    try:
-                        base_ccy = self.symbol.split('/')[0]
-                        spot_bal = await self.spot_exchange.get_balance(base_ccy)
-                        # We intend to sell 'position_qty', but can only sell 'spot_bal'
-                        # Use the smaller of the two, but usually spot_bal is the limit.
-                        sell_qty = min(spot_bal, self.position_qty)
-                        
-                        # Guard: If balance is suspiciously low (moved out?), panic check
-                        if sell_qty < self.position_qty * 0.9:
-                             self.logger.warning(f"Spot Balance {spot_bal} is much less than expected {self.position_qty}. Selling available only.")
-                        
-                        spot_s, spot_f = await self._execute_safe(self.ccxt_spot.create_order, self.symbol, 'sell', sell_qty, spot_bid)
-                    except Exception as e:
-                        self.logger.error(f"Spot Exit Prep Failed: {e}")
-                        spot_s, spot_f = False, 0.0
-                    
-                    if perp_s and spot_s:
-                        self.has_position = False
-                        self.logger.info("[OK] POSITION CLOSED.")
+                    if perp_f > 0:
+                        # SAFETY: Only sell Spot equivalent to the Perp we successfully closed.
+                        # This prevents creating a Naked Short position if Perp close fails.
+                        try:
+                            base_ccy = self.symbol.split('/')[0]
+                            spot_bal = await self.spot_exchange.get_balance(base_ccy)
+                            
+                            # We want to sell 'perp_f', limited by what we actually have 'spot_bal'
+                            sell_qty = min(spot_bal, perp_f)
+                            
+                            spot_s, spot_f = await self._execute_safe(self.ccxt_spot.create_order, self.symbol, 'sell', sell_qty, spot_bid)
+                        except Exception as e:
+                            self.logger.error(f"Spot Exit Prep Failed: {e}")
+                            spot_s, spot_f = False, 0.0
                     else:
-                        self.logger.critical(f"[ALERT] DIRTY EXIT. Spot:{spot_f}, Perp:{perp_f}")
-                        self.has_position = False 
+                         self.logger.warning("[WARN] Perp Exit Failed (Qty 0). Holding Spot to maintain hedge.")
+                         spot_f = 0.0
+
+                    # Final State Check (Crucial for handling partials)
+                    await self.reconcile_state(quiet=True)
+                    if not self.has_position:
+                        self.logger.info("[OK] POSITION CLOSED.") 
 
                 # 5. RISK MONITOR (Always Run)
                 if self.has_position:
