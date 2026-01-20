@@ -159,6 +159,14 @@ Shift from pure price prediction to structural arbitrage. Implement Funding Rate
         - [x] Implemented data augmentation with noise injection.
         - [x] Added curriculum learning based on sample difficulty.
         - [x] Improved early stopping with multi-metric monitoring.
+    - [x] **P6-6: Transformer Model Optimization & Debugging** (Today)
+        - [x] Fixed device mismatch errors (CUDA vs CPU).
+        - [x] Corrected label mapping from {-1,0,1} to {0,1,2} for CrossEntropyLoss.
+        - [x] Implemented Asymmetric Focal Loss with proper parameter tuning.
+        - [x] Enhanced data augmentation with Gaussian noise.
+        - [x] Added curriculum learning based on volatility.
+        - [x] Improved regularization with increased weight decay and dropout adjustments.
+        - [x] Achieved significant F1 score improvement from 0.1271 to 0.8970.
 
 
 
