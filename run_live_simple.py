@@ -242,8 +242,17 @@ class SimpleBot:
                 # 1. Fetch Real-time Market Data
                 perp_bid, perp_ask = await self._get_order_book_price(self.ccxt_swap, self.symbol)
                 spot_bid, spot_ask = await self._get_order_book_price(self.ccxt_spot, self.symbol)
+                # Fetch Funding Rate
+                # Optimize: Only fetch recent history (last 48h) to avoid pagination loops
+                from datetime import datetime, timedelta, timezone
+                since_ts = int((datetime.now(timezone.utc) - timedelta(days=2)).timestamp() * 1000)
                 
-                funding_df = await self.exchange.fetch_funding_rates(self.symbol, limit=1, timeframe="")
+                funding_df = await self.exchange.fetch_funding_rates(
+                    self.symbol, 
+                    limit=1, 
+                    timeframe="",
+                    since=since_ts # Fix: Prevent fetching 1 year of history
+                )
                 funding_rate = float(funding_df.iloc[-1]['funding_rate']) if not funding_df.empty else 0.0
 
                 # 2. THE EQUATION: Real-time Cost Analysis
@@ -254,11 +263,10 @@ class SimpleBot:
                 is_profitable_entry = False
                 if funding_rate > 0:
                      yield_buffer = funding_rate * 3 
-                     if total_entry_cost < yield_buffer:
-                         is_profitable_entry = True
-                
-                if cycle_count % 60 == 0: 
-                     self.logger.info(f"[DATA] Market: PerpBid={perp_bid:.2f}, SpotAsk={spot_ask:.2f}, Fund={funding_rate:.6f}. Cost={total_entry_cost:.5f}. Trade? {is_profitable_entry}")
+                     # Update Strategy Logs
+                log_color = '\033[92m' if is_profitable_entry else '\033[93m'
+                if cycle_count % 12 == 0: # Log every ~1 minute
+                     self.logger.info(f"[DATA] Market: PerpBid={perp_bid:.2f}, SpotAsk={spot_ask:.2f}, Fund={funding_rate:.6f}. Cost={total_entry_cost:.5f}. Trade? {log_color}{is_profitable_entry}\033[0m")
 
                 # 3. Strategy Signal
                 signal = self.strategy.generate_signal(None, self.symbol, funding_rate=funding_rate)
