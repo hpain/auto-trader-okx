@@ -111,6 +111,23 @@ class SimpleBot:
         else:
             self.ccxt_spot = self.spot_exchange.exchange
 
+        # DEBUG: Credential & Balance Check
+        try:
+            key_used = self.ccxt_swap.apiKey
+            mask_key = f"{key_used[:4]}...{key_used[-4:]}" if key_used and len(key_used) > 8 else "None"
+            self.logger.info(f"[DEBUG] Using API Key: {mask_key}")
+            
+            # Test Balance Fetch
+            if not self.mock:
+                raw_bal = await self.ccxt_spot.fetch_balance()
+                # Log usage details to debug "Trading" vs "Funding"
+                usdt_free = raw_bal.get('USDT', {}).get('free', 0)
+                total_eq = raw_bal.get('total', {}).get('USDT', 0)
+                self.logger.info(f"[DEBUG] Raw Balance Check: USDT_Free={usdt_free}, USDT_Total={total_eq}")
+                # logging.info(f"[DEBUG] Full Balance Dump: {raw_bal['info']}") # Uncomment if desperate
+        except Exception as e:
+            self.logger.error(f"[DEBUG] Credential Check Failed: {e}")
+
         self.logger.info("Bot Initialized. Starting State Reconciliation...")
 
     async def reconcile_state(self, quiet=False):
@@ -273,7 +290,8 @@ class SimpleBot:
             filled = float(order.get('filled', 0))
             
             if status == 'closed' or filled >= qty * 0.99:
-                self.logger.info(f"[OK] {side.upper()} FILLED: {filled} @ {order.get('average', limit_price)}")
+                # Highlight SUCCESSFUL TRADES in CYAN/GREEN
+                self.logger.info(f"\033[96m[EXEC] {side.upper()} FILLED: {filled} @ {order.get('average', limit_price)}\033[0m")
                 return True, filled
             else:
                 self.logger.warning(f"[WARN] {side.upper()} Partial/Fail: {filled} / {qty}. Status: {status}")
@@ -356,7 +374,14 @@ class SimpleBot:
                      except: 
                          usdt_show = 0.0
                      
-                     self.logger.info(f"[DATA] Balance: {usdt_show:.2f} U | Market: PerpBid={perp_bid:.2f}, SpotAsk={spot_ask:.2f}, Fund={funding_rate:.6f}. Cost={total_entry_cost:.5f}. Trade? {log_color}{is_profitable_entry}\033[0m")
+                     # Highlighting Balance in Green
+                     bal_str = f"\033[92m{usdt_show:.2f} U\033[0m"
+                     
+                     # Highlight Funding Rate: Magenta if > 0 (Paying), else White
+                     fund_color = '\033[95m' if funding_rate > 0 else ''
+                     fund_str = f"{fund_color}{funding_rate:.6f}\033[0m"
+
+                     self.logger.info(f"[DATA] Balance: {bal_str} | Market: PerpBid={perp_bid:.2f}, SpotAsk={spot_ask:.2f}, Fund={fund_str}. Cost={total_entry_cost:.5f}. Trade? {log_color}{is_profitable_entry}\033[0m")
 
                 # 3. Strategy Signal
                 signal = self.strategy.generate_signal(None, self.symbol, funding_rate=funding_rate)
