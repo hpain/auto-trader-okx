@@ -242,18 +242,26 @@ class SimpleBot:
                 # 1. Fetch Real-time Market Data
                 perp_bid, perp_ask = await self._get_order_book_price(self.ccxt_swap, self.symbol)
                 spot_bid, spot_ask = await self._get_order_book_price(self.ccxt_spot, self.symbol)
-                # Fetch Funding Rate
-                # Optimize: Only fetch recent history (last 48h) to avoid pagination loops
-                from datetime import datetime, timedelta, timezone
-                since_ts = int((datetime.now(timezone.utc) - timedelta(days=2)).timestamp() * 1000)
+                # Fetch Funding Rate (Cached every ~1m)
+                # Optimize: Remove 'since' overhead entirely by skipping fetch
+                if cycle_count % 12 == 1: # Update on cycle 1, 13, 25...
+                    try:
+                        from datetime import datetime, timedelta, timezone
+                        since_ts = int((datetime.now(timezone.utc) - timedelta(days=2)).timestamp() * 1000)
+                        
+                        funding_df = await self.exchange.fetch_funding_rates(
+                            self.symbol, 
+                            limit=1, 
+                            timeframe="",
+                            since=since_ts
+                        )
+                        self.cached_funding_rate = float(funding_df.iloc[-1]['funding_rate']) if not funding_df.empty else 0.0
+                    except Exception as e:
+                        self.logger.warning(f"Funding Rate Fetch Failed: {e}. Using cache.")
+                        # Keep previous cached value
                 
-                funding_df = await self.exchange.fetch_funding_rates(
-                    self.symbol, 
-                    limit=1, 
-                    timeframe="",
-                    since=since_ts # Fix: Prevent fetching 1 year of history
-                )
-                funding_rate = float(funding_df.iloc[-1]['funding_rate']) if not funding_df.empty else 0.0
+                # Use Cache
+                funding_rate = getattr(self, 'cached_funding_rate', 0.0)
 
                 # 2. THE EQUATION: Real-time Cost Analysis
                 FEES = 0.002
