@@ -259,7 +259,7 @@ def train_main(args):
         total_count / (pos_count + epsilon)
     ], dtype=torch.float32)
     # increase Timeout (index 0) by a scaling factor
-    timeout_factor = 1.5  # user‑approved scaling factor
+    timeout_factor = 1.8  # increased scaling factor per user request
     raw_weights[0] = raw_weights[0] * timeout_factor
     # normalize to keep mean ≈ 1 for stability
     weights = raw_weights / raw_weights.mean()
