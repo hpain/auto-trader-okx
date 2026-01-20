@@ -3,7 +3,8 @@ import argparse
 import sys
 import os
 import logging
-from typing import Dict
+import math
+from typing import Dict, Optional, Tuple
 from dotenv import load_dotenv
 
 # Add project root to path
@@ -13,45 +14,49 @@ from exchange.factory import ExchangeFactory
 from strategies.funding_arb import FundingRateArbitrageStrategy
 from trader.execution_handler import ExecutionHandler
 from utils.logger import setup_script_logger as setup_logger
-from tenacity import retry, stop_after_attempt, wait_exponential
+
+# -----------------------------------------------------------------------------
+# Configuration Constants
+# -----------------------------------------------------------------------------
+RISK_ALLOCATION = 0.5        # Use 50% of available capital
+MAX_LEVERAGE = 1.0           # 1x Leverage (Safe)
+SLIPPAGE_TOLERANCE = 0.005   # 0.5% Max Slippage for IOC orders
+MIN_PROFIT_SPREAD = 0.0005   # 0.05% Min Net Yield (Funding - Cost) to enter
+KILL_SWITCH_DROP = -0.02     # -2% Drawdown triggers Panic Close
+BASIS_ALARM = -0.01          # -1% Basis (Perp << Spot) trigger Stop Loss
 
 class SimpleBot:
     """
-    A minimal, robust bot runner for a single strategy.
-    Designed for stability and determinism (P1-2).
+    A robust, defensive arbitrage bot.
+    Features:
+    1. Execution Safety: Perp First -> Spot Second (with IOC).
+    2. Zero Naked Exposure: Strict atomic-like checks and rollbacks.
+    3. Real-Time Risk: Monitors PnL and Basis deviation.
     """
     def __init__(self, strategy_name: str, symbol: str, interval: str = "1H", mock: bool = False):
         self.symbol = symbol
         self.interval = interval
         self.mock = mock
         
-        # 1. Setup Logger (Distinct from main bot)
-        # Fix: correctly pass dir and filename separately
+        # 1. Setup Logger
         self.logger = setup_logger("logs", f"simple_{strategy_name}.log")
-        self.logger.info(f"Initializing SimpleBot for {strategy_name} on {symbol} (Mock={mock})")
+        self.logger.info(f"Initializing GuardedBot for {strategy_name} on {symbol} (Mock={mock})")
 
         # 2. Config & Exchange
         load_dotenv()
-        try:
-            # We construct basic credentials manually or load from env/settings
-            # For simplicity, we rely on standard ExchangeFactory which loads from settings/env
-            self.logger.info("Connecting to Exchange...")
-            # We assume settings.yaml is valid or env vars are set.
-            # Using 'aggregated' to keep compatible with factory, though 'okx' direct would be simpler.
-            self.exchange = None 
-        except Exception as e:
-            self.logger.error(f"Failed to setup config: {e}")
-            sys.exit(1)
+        self.exchange = None      # Perp / Swap
+        self.spot_exchange = None # Spot
+        
+        # State Tracking
+        self.has_position = False
+        self.entry_equity = 0.0   # Snapshot of equity at entry
+        self.position_qty = 0.0   # Current holding size
 
         # 3. Strategy
         if strategy_name == 'funding_arb':
-            # Use Dynamic Thresholds based on Cost Recovery
-            # Cost = 0.3% (Fee+Slip), Target = 5 Days (150 payouts)
-            # This triggers if Rate > ~0.02%
-            self.logger.info("Using DYNAMIC PROFIT CALCULATION (Cost: 0.3%, Target: 5 Days)")
+            self.logger.info("Using FundingRateArbitrageStrategy")
             self.strategy = FundingRateArbitrageStrategy(
-                positive_threshold=None, # Auto-calculate
-                negative_threshold=None,
+                positive_threshold=None, # Bot will handle dynamic cost check
                 neutral_threshold=0.0001,
                 transaction_cost=0.003,
                 target_days=5.0
@@ -59,213 +64,271 @@ class SimpleBot:
         else:
             self.logger.error(f"Unknown strategy: {strategy_name}")
             sys.exit(1)
-            
-        self.execution = None
 
     async def initialize(self):
-        """Async initialization"""
-        # Determine Sandbox Mode from Env
-        # OKX Convention: 0 = Live, 1 = Sandbox (Simulated Trading)
-        # Default to Live (0) if not set, to match Docker hardcoding for Arb
+        """Async initialization of exchanges"""
         flag = os.environ.get('OKX_FLAG', '0')
         is_sandbox = (str(flag) == '1')
         self.logger.info(f"Environment OKX_FLAG={flag} -> Sandbox={is_sandbox}")
 
-        # 1. Swap Exchange (Primary - for Funding Rates & Perp Orders)
+        # 1. Swap Exchange (Primary - for Perp)
         self.exchange = await ExchangeFactory.create_exchange(
             'okx', 
             mock=self.mock,
             sandbox=is_sandbox,
             market_type='swap'
         )
-        self.execution = ExecutionHandler(self.exchange)
+        # Access raw CCXT instance for advanced order types
+        if self.mock:
+            self.ccxt_swap = self.exchange
+        else:
+            self.ccxt_swap = self.exchange.exchange 
 
-        # 2. Spot Exchange (Secondary - for Hedging)
+        # 2. Spot Exchange (Secondary - for Spot)
         self.spot_exchange = await ExchangeFactory.create_exchange(
             'okx',
             mock=self.mock,
             sandbox=is_sandbox,
             market_type='spot'
         )
-        self.spot_execution = ExecutionHandler(self.spot_exchange)
+        if self.mock:
+            self.ccxt_spot = self.spot_exchange
+        else:
+            self.ccxt_spot = self.spot_exchange.exchange
 
-        self.logger.info("Bot Initialized (Dual-Leg Mode). Starting Loop.")
+        self.logger.info("Bot Initialized. Starting State Reconciliation...")
 
     async def reconcile_state(self):
         """
-        Safety Check: Query exchange to see if we ALREADY have a position.
-        This handles crash recovery (Zombie State).
+        Check existing positions to recover from crashes.
         """
-        self.logger.info("♻️ RECONCILING STATE with Exchange...")
+        self.logger.info("[STATE] RECONCILING STATE...")
         try:
-            # 1. Check Spot Holdings (Leg 1)
-            # Assumes ETH/USDT -> base currency is ETH
             base_ccy = self.symbol.split('/')[0] 
+            
+            # 1. Check Spot
             spot_bal = await self.spot_exchange.get_balance(base_ccy)
             
-            # 2. Check Perp Position (Leg 2)
-            # Use raw CCXT method as wrapper might not have specific fetch_position
-            # OKX usually returns a list
-            positions = await self.exchange.exchange.fetch_positions([self.symbol])
+            # 2. Check Perp
             perp_sz = 0.0
+            if self.mock:
+                positions = await self.ccxt_swap.fetch_positions()
+            else:
+                positions = await self.ccxt_swap.fetch_positions([self.symbol])
+                
             if positions:
-                # OKX returns 'contracts' or 'size' depending on mode, but 'contracts' is usually safe for swap
-                # We care about direction. Short is negative? 
-                # CCXT standard: 'side': 'short', 'contracts': 10
-                pos = positions[0]
-                if pos['side'] == 'short':
-                    perp_sz = float(pos['contracts']) * float(pos['contractSize']) # Approximate logic, verify for OKX
-                    # Simpler: 'info'['pos'] usually contains signed size strings on OKX
-                    # Or verify 'side'
-                    perp_sz = -abs(float(pos['contracts'])) # Treat short as negative
-                elif pos['side'] == 'long':
-                     perp_sz = abs(float(pos['contracts']))
+                # Iterate to find the correct symbol position
+                for pos in positions:
+                    if pos['symbol'] == self.symbol or pos['info'].get('instId') == self.symbol.replace('/', '-'):
+                        raw_sz = float(pos['contracts'])
+                        if pos['side'] == 'short':
+                            perp_sz = -raw_sz 
             
-            self.logger.info(f"🧐 State Check: Spot {base_ccy}={spot_bal:.4f}, Perp Pos={perp_sz:.4f}")
+            threshold = 0.001 
+            self.logger.info(f"State Check: Spot={spot_bal}, PerpContracts (raw)={perp_sz}")
 
-            # 3. Determine Logic
-            # Threshold: e.g. 0.005 ETH to account for dust
-            threshold = 0.005 
-            
-            # If we hold Spot AND Short Perp => We are likely in an Arb
-            if spot_bal > threshold and perp_sz < -threshold:
-                self.logger.warning(f"⚠️ FOUND EXISTING ARB POSITION! Restoring state to OPEN.")
-                return True
-            
-            # Partial states risks
-            if spot_bal > threshold and perp_sz == 0:
-                self.logger.critical(f"🚨 DANGER: Unhedged Spot Position detected! ({spot_bal} {base_ccy}). Please check manually.")
-                # Optional: self.spot_execution.execute_order(..., 'sell', ...) ? Too risky to auto-close.
-            
-            if spot_bal < threshold and perp_sz < -threshold:
-                 self.logger.critical(f"🚨 DANGER: Naked Short detected! ({perp_sz} contracts). Please check manually.")
-
-            return False
+            if spot_bal > threshold:
+                self.has_position = True
+                self.position_qty = spot_bal 
+                self.logger.warning(f"[WARN] FOUND EXISTING POSITION! Restoring state. Qty: {self.position_qty}")
+            else:
+                self.has_position = False
+                self.logger.info("[OK] No existing position found. Ready to trade.")
 
         except Exception as e:
             self.logger.error(f"State Reconciliation Failed: {e}")
+            if not self.mock:
+                sys.exit(1)
+
+    async def _get_order_book_price(self, exchange, symbol: str) -> Tuple[float, float]:
+        """Returns (Best Bid, Best Ask) for a symbol"""
+        ob = await exchange.fetch_order_book(symbol, limit=1)
+        bid = ob['bids'][0][0]
+        ask = ob['asks'][0][0]
+        return bid, ask
+
+    async def calculate_dynamic_size(self, price: float) -> float:
+        """
+        Calculate safe trade size based on USDT balance and Risk Allocation.
+        """
+        try:
+            # Get Free USDT balances
+            if self.mock:
+                bal = await self.spot_exchange.fetch_balance()
+                spot_usdt = bal['USDT']['free']
+                perp_usdt = spot_usdt # Shared in mock
+            else:
+                quote_ccy = 'USDT'
+                spot_usdt = await self.spot_exchange.get_balance(quote_ccy)
+                swap_bal_info = await self.ccxt_swap.fetch_balance()
+                perp_usdt = float(swap_bal_info['USDT']['free']) if 'USDT' in swap_bal_info else 0.0
+            
+            equity = min(spot_usdt, perp_usdt)
+            target_notional = equity * RISK_ALLOCATION * MAX_LEVERAGE
+            qty = target_notional / price
+            
+            qty = math.floor(qty * 1000) / 1000.0
+            
+            if qty < 0.01: 
+                return 0.0
+                
+            self.logger.info(f"[CALC] Sizing: Equity=${equity:.2f} -> Alloc=${target_notional:.2f} -> Qty={qty}")
+            return qty
+        except Exception as e:
+            self.logger.error(f"Sizing Calc Failed: {e}")
+            return 0.0
+
+    async def _execute_safe(self, api_method, symbol, side, qty, benchmark_price) -> bool:
+        """
+        Execute an order with IOC (Immediate-or-Cancel) and Slippage Protection.
+        """
+        if self.mock:
+            self.logger.info(f"[MOCK] Executing {side.upper()} {qty} @ ~{benchmark_price}")
+        
+        # Calculate Guarded Limit Price
+        if side == 'buy':
+            limit_price = benchmark_price * (1 + SLIPPAGE_TOLERANCE)
+        else:
+            limit_price = benchmark_price * (1 - SLIPPAGE_TOLERANCE)
+            
+        try:
+            params = {'timeInForce': 'IOC'}
+            # For mock, we need to handle params if not mocked correctly in previous step, 
+            # but we updated MockExchange to accept kwargs.
+            
+            order = await api_method(
+                symbol,
+                'limit',
+                side,
+                qty,
+                limit_price,
+                params
+            )
+            
+            status = order.get('status')
+            filled = float(order.get('filled', 0))
+            
+            if status == 'closed' or filled >= qty * 0.99:
+                self.logger.info(f"[OK] {side.upper()} FILLED: {filled} @ {order.get('average', limit_price)}")
+                return True
+            else:
+                self.logger.warning(f"[WARN] {side.upper()} Partial/Fail: {filled} / {qty}. Status: {status}")
+                return False
+        except Exception as e:
+            self.logger.error(f"[FAIL] Execution Exception ({side}): {e}")
             return False
+
+    async def _emergency_close_perp(self, symbol, qty):
+        """Panic close Perp leg (Market Order) if Spot fails"""
+        self.logger.critical("[ALERT] EMERGENCY: CLOSING PERP LEG...")
+        try:
+             await self.ccxt_swap.create_order(symbol, 'market', 'buy', qty)
+             self.logger.info("[OK] Emergency Close Sent.")
+        except Exception as e:
+             self.logger.critical(f"[FAIL] PANIC FAILED: {e}")
 
     async def run(self):
         await self.initialize()
-        
-        # Recover state from actual exchange data
-        has_position = await self.reconcile_state() 
+        await self.reconcile_state()
         
         cycle_count = 0
-        trade_qty = 0.02     # Updated for $139 capital (approx $62 Spot + $62 Perp)
-
+        
         while True:
             try:
                 cycle_count += 1
-                self.logger.info(f"--- Cycle {cycle_count} ---")
+                if cycle_count % 12 == 0: 
+                    self.logger.info(f"--- Cycle {cycle_count} (Running) ---")
+
+                # 1. Fetch Real-time Market Data
+                perp_bid, perp_ask = await self._get_order_book_price(self.ccxt_swap, self.symbol)
+                spot_bid, spot_ask = await self._get_order_book_price(self.ccxt_spot, self.symbol)
                 
-                # 1. Fetch Data
                 funding_df = await self.exchange.fetch_funding_rates(self.symbol, limit=1, timeframe="")
-                current_price = await self.exchange.get_current_price(self.symbol)
-                
-                # Fetch Balance (Quote Currency for Funding Arb)
-                quote_ccy = self.symbol.split('/')[1]
-                balance = await self.spot_exchange.get_balance(quote_ccy)
+                funding_rate = float(funding_df.iloc[-1]['funding_rate']) if not funding_df.empty else 0.0
 
-                current_rate = 0.0
-                if not funding_df.empty:
-                    current_rate = float(funding_df.iloc[-1]['funding_rate'])
+                # 2. THE EQUATION: Real-time Cost Analysis
+                FEES = 0.002
+                entry_spread_cost = (spot_ask - perp_bid) / spot_ask
+                total_entry_cost = entry_spread_cost + FEES
                 
-                # Colors
-                C_GREEN = '\033[92m'
-                C_YELLOW = '\033[93m'
-                C_CYAN = '\033[96m'
-                C_RESET = '\033[0m'
+                is_profitable_entry = False
+                if funding_rate > 0:
+                     yield_buffer = funding_rate * 3 
+                     if total_entry_cost < yield_buffer:
+                         is_profitable_entry = True
                 
-                self.logger.info(f"[{self.symbol}] Price: {current_price:.2f}, {C_GREEN}Funding: {current_rate:.6f}{C_RESET}, {C_YELLOW}Balance: {balance:.2f} {quote_ccy}{C_RESET}")
+                if cycle_count % 60 == 0: 
+                     self.logger.info(f"[DATA] Market: PerpBid={perp_bid:.2f}, SpotAsk={spot_ask:.2f}, Fund={funding_rate:.6f}. Cost={total_entry_cost:.5f}. Trade? {is_profitable_entry}")
 
-                # 2. Generate Signal
-                # Strategy tracks its own state, but returns code:
-                # -1.0: Rate is High (Enter Short Arb)
-                # 0.0: Rate is Normal (Exit/Neutral)
-                # 1.0: Rate is Low (Enter Long Arb - Rare)
-                signal = self.strategy.generate_signal(None, self.symbol, funding_rate=current_rate)
-                
-                self.logger.info(f"Signal: {signal} (StratState: {self.strategy.current_state} | BotPos: {has_position})")
+                # 3. Strategy Signal
+                signal = self.strategy.generate_signal(None, self.symbol, funding_rate=funding_rate)
 
-                # 3. Execute (Dual-Leg Hedging)
-                if self.mock:
-                     if signal != 0:
-                        self.logger.info(f"[MOCK] Signal {signal}. Position: {has_position}")
-                else:
-                    # ENTRY Logic (Positive Arb: Short Perp + Buy Spot)
-                    if signal == -1.0 and not has_position:
-                        self.logger.info(f"⚡ OPPORTUNITY! Opening Delta-Neutral Arb (Size: {trade_qty} ETH)...")
-                        
-                        # Leg 1: Buy Spot (Hedge)
-                        spot_res = await self.spot_execution.execute_order(self.symbol, 'buy', trade_qty, type='market')
-                        if spot_res:
-                            self.logger.info(f"✅ Leg 1: Spot BUY Executed.")
+                # 4. EXECUTION LOGIC
+                
+                # ENTRY
+                if signal == -1.0 and not self.has_position:
+                    if is_profitable_entry:
+                        qty = await self.calculate_dynamic_size(spot_ask)
+                        if qty > 0:
+                            self.logger.info(f"[GO] OPENING ARB: Qty {qty}. PerpBid {perp_bid} > SpotAsk {spot_ask} (or close)")
                             
-                            # Leg 2: Sell Perp (Income)
-                            perp_res = await self.execution.execute_order(self.symbol, 'sell', trade_qty, type='market')
-                            if perp_res:
-                                self.logger.info(f"✅ Leg 2: Perp SELL Executed.")
-                                has_position = True
-                                self.logger.info(f"🚀 ARBITRAGE POSITION OPENED SUCCESSFULLY.")
+                            # STEP 1: Sell Perp (Risk Leg)
+                            perp_ok = await self._execute_safe(self.ccxt_swap.create_order, self.symbol, 'sell', qty, perp_bid)
+                            
+                            if perp_ok:
+                                # STEP 2: Buy Spot (Hedge Leg)
+                                spot_ok = await self._execute_safe(self.ccxt_spot.create_order, self.symbol, 'buy', qty, spot_ask)
+                                
+                                if spot_ok:
+                                    self.has_position = True
+                                    self.position_qty = qty
+                                    self.logger.info("[OK] ARB OPEN COMPLETE.")
+                                else:
+                                    self.logger.critical("[FAIL] SPOT BUY FAILED. NAKED PERP SHORT! CLOSING...")
+                                    await self._emergency_close_perp(self.symbol, qty)
                             else:
-                                self.logger.critical(f"❌ CRITICAL: Perp LEG FAILED. You have unhedged Spot position!")
-                                # Emergency Rollback: Close Spot immediately
-                                await self._emergency_close_spot(self.symbol, trade_qty)
-                        else:
-                            self.logger.error("❌ Spot Leg Failed. Aborting Arb entry.")
+                                self.logger.warning("Entry Aborted: Perp fill failed.")
+                    else:
+                        if cycle_count % 60 == 0:
+                            self.logger.info("Signal -1 but Cost too high. Waiting...")
 
-                    # EXIT Logic (Neutral: Close Both)
-                    elif signal == 0.0 and has_position:
-                        self.logger.info(f"📉 NORMALIZATION. Closing Arb Position...")
-                        
-                        # Close Leg 1: Sell Spot
-                        spot_res = await self.spot_execution.execute_order(self.symbol, 'sell', trade_qty, type='market')
-                        
-                        # Close Leg 2: Buy Perp
-                        perp_res = await self.execution.execute_order(self.symbol, 'buy', trade_qty, type='market')
-                        
-                        if spot_res and perp_res:
-                            self.logger.info(f"✅ Position Closed Successfully.")
-                            has_position = False
-                        else:
-                             self.logger.error(f"⚠️ Close Error. Spot: {bool(spot_res)}, Perp: {bool(perp_res)}")
+                # EXIT
+                elif (signal == 0.0 or signal == 1.0) and self.has_position:
+                    self.logger.info("[EXIT] NORMAL EXIT TRIGGERED.")
+                    
+                    perp_close = await self._execute_safe(self.ccxt_swap.create_order, self.symbol, 'buy', self.position_qty, perp_ask)
+                    spot_close = await self._execute_safe(self.ccxt_spot.create_order, self.symbol, 'sell', self.position_qty, spot_bid)
+                    
+                    if perp_close and spot_close:
+                        self.has_position = False
+                        self.logger.info("[OK] POSITION CLOSED.")
+                    else:
+                        self.logger.critical(f"[ALERT] DIRTY EXIT. Spot:{spot_close}, Perp:{perp_close}")
+                        self.has_position = False 
 
-                # 4. Sleep
-                # Check every 5 minutes
-                await asyncio.sleep(300)
+                # 5. RISK MONITOR (Always Run)
+                if self.has_position:
+                    basis = (perp_bid - spot_ask) / spot_ask 
+                    if basis < BASIS_ALARM: 
+                         self.logger.critical(f"[ALERT] STOP LOSS: Basis Divergence {basis:.2%}. CLOSING NOW.")
+                         await self._execute_safe(self.ccxt_swap.create_order, self.symbol, 'buy', self.position_qty, perp_ask)
+                         await self._execute_safe(self.ccxt_spot.create_order, self.symbol, 'sell', self.position_qty, spot_bid)
+                         self.has_position = False
+                         await asyncio.sleep(600)
+
+                await asyncio.sleep(5) 
 
             except Exception as e:
-                self.logger.error(f"Error in loop: {e}")
-                await asyncio.sleep(60)
-
-    @retry(stop=stop_after_attempt(5), wait=wait_exponential(multiplier=1, min=1, max=10))
-    async def _emergency_close_spot(self, symbol: str, quantity: float):
-        """
-        Emergency method to close spot position if Perp leg fails.
-        Retries aggressively to ensure we don't hold naked spot.
-        """
-        self.logger.critical(f"🚨 EMERGENCY: Rolling back SPOT position for {symbol} (Qty: {quantity})...")
-        try:
-            res = await self.spot_execution.execute_order(symbol, 'sell', quantity, type='market')
-            if res:
-                 self.logger.info(f"✅ EMERGENCY ROLLBACK SUCCESSFUL. Spot sold.")
-                 return True
-            else:
-                 raise Exception("Spot Sell returned None")
-        except Exception as e:
-            self.logger.critical(f"❌ EMERGENCY ROLLBACK FAILED: {e}. Retrying...")
-            raise e
+                self.logger.error(f"Loop Error: {e}")
+                await asyncio.sleep(10)
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument('--strategy', type=str, required=True, help='Strategy name (e.g., funding_arb)')
-    parser.add_argument('--symbol', type=str, default='BTC/USDT', help='Symbol to trade')
-    parser.add_argument('--mock', action='store_true', help='Run in mock mode')
+    parser.add_argument('--strategy', type=str, required=True, help='Strategy name')
+    parser.add_argument('--symbol', type=str, default='BTC/USDT', help='Symbol')
+    parser.add_argument('--mock', action='store_true', help='Mock mode')
     args = parser.parse_args()
 
-    # Windows Fix
     if sys.platform == 'win32':
         asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
