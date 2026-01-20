@@ -98,11 +98,12 @@ class SimpleBot:
 
         self.logger.info("Bot Initialized. Starting State Reconciliation...")
 
-    async def reconcile_state(self):
+    async def reconcile_state(self, quiet=False):
         """
         Check existing positions to recover from crashes.
         """
-        self.logger.info("[STATE] RECONCILING STATE...")
+        if not quiet:
+            self.logger.info("[STATE] RECONCILING STATE...")
         try:
             base_ccy = self.symbol.split('/')[0] 
             
@@ -125,20 +126,24 @@ class SimpleBot:
                             perp_sz = -raw_sz 
             
             threshold = 0.001 
-            self.logger.info(f"State Check: Spot={spot_bal}, PerpContracts (raw)={perp_sz}")
+            if not quiet:
+                self.logger.info(f"State Check: Spot={spot_bal}, PerpContracts (raw)={perp_sz}")
 
             if spot_bal > threshold:
                 self.has_position = True
                 self.position_qty = spot_bal 
-                self.logger.warning(f"[WARN] FOUND EXISTING POSITION! Restoring state. Qty: {self.position_qty}")
+                if not quiet:
+                    self.logger.warning(f"[WARN] FOUND EXISTING POSITION! Restoring state. Qty: {self.position_qty}")
             else:
                 self.has_position = False
-                self.logger.info("[OK] No existing position found. Ready to trade.")
+                if not quiet:
+                    self.logger.info("[OK] No existing position found. Ready to trade.")
 
         except Exception as e:
             self.logger.error(f"State Reconciliation Failed: {e}")
             if not self.mock:
-                sys.exit(1)
+                # Don't exit on runtime check, just log error
+                if not quiet: sys.exit(1)
 
     async def _get_order_book_price(self, exchange, symbol: str) -> Tuple[float, float]:
         """Returns (Best Bid, Best Ask) for a symbol"""
@@ -178,9 +183,10 @@ class SimpleBot:
             self.logger.error(f"Sizing Calc Failed: {e}")
             return 0.0
 
-    async def _execute_safe(self, api_method, symbol, side, qty, benchmark_price) -> bool:
+    async def _execute_safe(self, api_method, symbol, side, qty, benchmark_price) -> Tuple[bool, float]:
         """
         Execute an order with IOC (Immediate-or-Cancel) and Slippage Protection.
+        Returns: (Success_Bool, Filled_Quantity)
         """
         if self.mock:
             self.logger.info(f"[MOCK] Executing {side.upper()} {qty} @ ~{benchmark_price}")
@@ -193,8 +199,6 @@ class SimpleBot:
             
         try:
             params = {'timeInForce': 'IOC'}
-            # For mock, we need to handle params if not mocked correctly in previous step, 
-            # but we updated MockExchange to accept kwargs.
             
             order = await api_method(
                 symbol,
@@ -210,13 +214,13 @@ class SimpleBot:
             
             if status == 'closed' or filled >= qty * 0.99:
                 self.logger.info(f"[OK] {side.upper()} FILLED: {filled} @ {order.get('average', limit_price)}")
-                return True
+                return True, filled
             else:
                 self.logger.warning(f"[WARN] {side.upper()} Partial/Fail: {filled} / {qty}. Status: {status}")
-                return False
+                return False, filled
         except Exception as e:
             self.logger.error(f"[FAIL] Execution Exception ({side}): {e}")
-            return False
+            return False, 0.0
 
     async def _emergency_close_perp(self, symbol, qty):
         """Panic close Perp leg (Market Order) if Spot fails"""
@@ -245,6 +249,9 @@ class SimpleBot:
                 # Fetch Funding Rate (Cached every ~1m)
                 # Optimize: Remove 'since' overhead entirely by skipping fetch
                 if cycle_count % 12 == 1: # Update on cycle 1, 13, 25...
+                    # 1. Periodic State Guard (New)
+                    await self.reconcile_state(quiet=True)
+
                     try:
                         from datetime import datetime, timedelta, timezone
                         since_ts = int((datetime.now(timezone.utc) - timedelta(days=2)).timestamp() * 1000)
@@ -289,21 +296,33 @@ class SimpleBot:
                             self.logger.info(f"[GO] OPENING ARB: Qty {qty}. PerpBid {perp_bid} > SpotAsk {spot_ask} (or close)")
                             
                             # STEP 1: Sell Perp (Risk Leg)
-                            perp_ok = await self._execute_safe(self.ccxt_swap.create_order, self.symbol, 'sell', qty, perp_bid)
+                            perp_success, perp_filled = await self._execute_safe(self.ccxt_swap.create_order, self.symbol, 'sell', qty, perp_bid)
                             
-                            if perp_ok:
-                                # STEP 2: Buy Spot (Hedge Leg)
-                                spot_ok = await self._execute_safe(self.ccxt_spot.create_order, self.symbol, 'buy', qty, spot_ask)
+                            if perp_filled > 0:
+                                # STEP 2: Buy Spot (Hedge Leg) - Hedge WHATEVER was filled
+                                self.logger.info(f"[HEDGE] Hedging Perp Fill: {perp_filled}...")
+                                spot_success, spot_filled = await self._execute_safe(self.ccxt_spot.create_order, self.symbol, 'buy', perp_filled, spot_ask)
                                 
-                                if spot_ok:
+                                if spot_filled >= perp_filled * 0.99:
                                     self.has_position = True
-                                    self.position_qty = qty
-                                    self.logger.info("[OK] ARB OPEN COMPLETE.")
+                                    self.position_qty = perp_filled # Track the actual filled size
+                                    self.logger.info(f"[OK] ARB OPEN COMPLETE. Size: {self.position_qty}")
                                 else:
-                                    self.logger.critical("[FAIL] SPOT BUY FAILED. NAKED PERP SHORT! CLOSING...")
-                                    await self._emergency_close_perp(self.symbol, qty)
+                                    # Mismatch: Short > Long. Net Short Exposure.
+                                    exposure = perp_filled - spot_filled
+                                    if exposure > 0:
+                                        self.logger.critical(f"[FAIL] HEDGE MISMATCH! Short:{perp_filled}, Long:{spot_filled}. Naked Short: {exposure}. CLOSING...")
+                                        await self._emergency_close_perp(self.symbol, exposure)
+                                    
+                                    # If we managed to hedge at least something, track it? 
+                                    # Simplified: If mismatch occurred, we closed the excess. 
+                                    # So we are left with 'spot_filled' amount perfectly hedged (assuming spot_filled > 0).
+                                    if spot_filled > 0:
+                                        self.has_position = True
+                                        self.position_qty = spot_filled
+                                        self.logger.warning(f"[RECOVERY] Kept partial hedged position: {self.position_qty}")
                             else:
-                                self.logger.warning("Entry Aborted: Perp fill failed.")
+                                self.logger.warning("Entry Aborted: Perp fill 0. No action taken.")
                     else:
                         if cycle_count % 60 == 0:
                             self.logger.info("Signal -1 but Cost too high. Waiting...")
@@ -312,14 +331,14 @@ class SimpleBot:
                 elif (signal == 0.0 or signal == 1.0) and self.has_position:
                     self.logger.info("[EXIT] NORMAL EXIT TRIGGERED.")
                     
-                    perp_close = await self._execute_safe(self.ccxt_swap.create_order, self.symbol, 'buy', self.position_qty, perp_ask)
-                    spot_close = await self._execute_safe(self.ccxt_spot.create_order, self.symbol, 'sell', self.position_qty, spot_bid)
+                    perp_s, perp_f = await self._execute_safe(self.ccxt_swap.create_order, self.symbol, 'buy', self.position_qty, perp_ask)
+                    spot_s, spot_f = await self._execute_safe(self.ccxt_spot.create_order, self.symbol, 'sell', self.position_qty, spot_bid)
                     
-                    if perp_close and spot_close:
+                    if perp_s and spot_s:
                         self.has_position = False
                         self.logger.info("[OK] POSITION CLOSED.")
                     else:
-                        self.logger.critical(f"[ALERT] DIRTY EXIT. Spot:{spot_close}, Perp:{perp_close}")
+                        self.logger.critical(f"[ALERT] DIRTY EXIT. Spot:{spot_f}, Perp:{perp_f}")
                         self.has_position = False 
 
                 # 5. RISK MONITOR (Always Run)
@@ -327,8 +346,8 @@ class SimpleBot:
                     basis = (perp_bid - spot_ask) / spot_ask 
                     if basis < BASIS_ALARM: 
                          self.logger.critical(f"[ALERT] STOP LOSS: Basis Divergence {basis:.2%}. CLOSING NOW.")
-                         await self._execute_safe(self.ccxt_swap.create_order, self.symbol, 'buy', self.position_qty, perp_ask)
-                         await self._execute_safe(self.ccxt_spot.create_order, self.symbol, 'sell', self.position_qty, spot_bid)
+                         p_s, p_f = await self._execute_safe(self.ccxt_swap.create_order, self.symbol, 'buy', self.position_qty, perp_ask)
+                         s_s, s_f = await self._execute_safe(self.ccxt_spot.create_order, self.symbol, 'sell', self.position_qty, spot_bid)
                          self.has_position = False
                          await asyncio.sleep(600)
 
