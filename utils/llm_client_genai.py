@@ -2,46 +2,42 @@ import os
 import logging
 import time
 import json
-import google.generativeai as genai
-from google.generativeai.types import HarmCategory, HarmBlockThreshold
+from google import genai
+from google.genai import types
 
 class GeminiClient:
     """
-    Client for Google's Generative AI SDK (native).
-    Replacing the REST-based LLMClient for better stability with Gemini.
+    Client for Google's Generative AI SDK (new google.genai package).
+    Replaces the deprecated google.generativeai package.
     """
-    def __init__(self, api_key=None, model="gemini-1.5-flash"):
+    def __init__(self, api_key=None, model="gemini-2.0-flash"):
         self.api_key = api_key or os.getenv("LLM_API_KEY")
         self.model_name = model
         self.logger = logging.getLogger("GeminiClient")
         
         if not self.api_key:
             self.logger.warning("LLM API Key not found. Please set LLM_API_KEY env var.")
+            self.client = None
         else:
-            genai.configure(api_key=self.api_key)
-            
-        self.model = genai.GenerativeModel(self.model_name)
+            self.client = genai.Client(api_key=self.api_key)
 
     def query(self, prompt, system_prompt="You are a helpful assistant.", temperature=0.7, max_retries=3):
         """
-        Send request to Gemini.
-        Note: System instructions are better passed in init but for dynamic compat we prepend them.
+        Send request to Gemini using the new SDK.
         """
-        combined_prompt = f"{system_prompt}\n\n{prompt}"
-        
+        if not self.client:
+            self.logger.error("Client not initialized (missing API key)")
+            return None
+            
         for attempt in range(max_retries):
             try:
-                response = self.model.generate_content(
-                    combined_prompt,
-                    generation_config=genai.types.GenerationConfig(
-                        temperature=temperature
-                    ),
-                    safety_settings={
-                        HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_NONE,
-                        HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_NONE,
-                        HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT: HarmBlockThreshold.BLOCK_NONE,
-                        HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_NONE,
-                    }
+                response = self.client.models.generate_content(
+                    model=self.model_name,
+                    contents=prompt,
+                    config=types.GenerateContentConfig(
+                        system_instruction=system_prompt,
+                        temperature=temperature,
+                    )
                 )
                 return response.text
             except Exception as e:
@@ -53,7 +49,6 @@ class GeminiClient:
     def query_json(self, prompt, system_prompt):
         """
         Request JSON output specifically.
-        Gemini 1.5 supports native JSON mode, but we'll use text prompting for compatibility with older patterns first.
         """
         # Force JSON instruction validation
         if "JSON" not in system_prompt and "json" not in system_prompt:
