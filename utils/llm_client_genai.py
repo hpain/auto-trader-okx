@@ -41,7 +41,20 @@ class GeminiClient:
                 )
                 return response.text
             except Exception as e:
-                self.logger.error(f"Gemini Request failed (Attempt {attempt+1}): {e}")
+                error_str = str(e)
+                self.logger.error(f"Gemini Request failed (Attempt {attempt+1}): {error_str}")
+                
+                # Intelligent Retry for Rate Limits (429)
+                import re
+                if "429" in error_str or "RESOURCE_EXHAUSTED" in error_str:
+                    # Try to find "Please retry in X s"
+                    match = re.search(r"retry in ([\d\.]+)s", error_str)
+                    if match:
+                        wait_time = float(match.group(1)) + 1.0 # Add 1s buffer
+                        self.logger.warning(f"Rate Limit Hit. Sleeping for {wait_time:.1f}s...")
+                        time.sleep(wait_time)
+                        continue
+                
                 time.sleep(2 * (attempt + 1))
                 
         return None
