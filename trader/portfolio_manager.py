@@ -469,6 +469,30 @@ class PortfolioManager:
                 score_str = f"{final_signal:+.1f}"
                 action_str = "BUY" if final_signal > 0.5 else ("SELL" if final_signal < -0.5 else "HOLD")
                 
+                # ANSI Color Codes for terminal
+                C_GREEN = "\033[92m"
+                C_RED = "\033[91m"
+                C_YELLOW = "\033[93m"
+                C_CYAN = "\033[96m"
+                C_RESET = "\033[0m"
+                
+                # Color for action
+                if action_str == "BUY":
+                    action_colored = f"{C_GREEN}{action_str}{C_RESET}"
+                elif action_str == "SELL":
+                    action_colored = f"{C_RED}{action_str}{C_RESET}"
+                else:
+                    action_colored = f"{C_YELLOW}{action_str}{C_RESET}"
+                
+                # Color for price change
+                if prev_price and prev_price > 0:
+                    if delta >= 0:
+                        price_colored = f"{C_GREEN}{price_str}{C_RESET}"
+                    else:
+                        price_colored = f"{C_RED}{price_str}{C_RESET}"
+                else:
+                    price_colored = price_str
+                
                 # Build detail string: "Trans(+1.5) MA_S(-1.0)..."
                 details_parts = []
                 # Iterate over ALL selected strategies to show who failed
@@ -480,13 +504,19 @@ class PortfolioManager:
                         sig = strategy_signals[s_name]
                         weight = self.strategy_weights.get(s_name, 1.0)
                         contrib = sig * weight
-                        details_parts.append(f"{display_name}({contrib:+.1f})")
+                        # Color individual strategy contributions
+                        if contrib > 0:
+                            details_parts.append(f"{C_GREEN}{display_name}({contrib:+.1f}){C_RESET}")
+                        elif contrib < 0:
+                            details_parts.append(f"{C_RED}{display_name}({contrib:+.1f}){C_RESET}")
+                        else:
+                            details_parts.append(f"{display_name}({contrib:+.1f})")
                     else:
-                        details_parts.append(f"{display_name}(ERR)")
+                        details_parts.append(f"{C_RED}{display_name}(ERR){C_RESET}")
                 
                 details_str = " ".join(details_parts)
-                # Combine Price and Score
-                cycle_logger.add_info(f"[{symbol}] {price_str} | Score: {score_str} ({action_str}) | {details_str}")
+                # Combine Price and Score with colors
+                cycle_logger.add_info(f"[{C_CYAN}{symbol}{C_RESET}] {price_colored} | Score: {score_str} ({action_colored}) | {details_str}")
             # -------------------------------------
             
             # 决定是否交易
