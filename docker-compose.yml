@@ -12,7 +12,7 @@ services:
       - OKX_API_KEY=${OKX_API_KEY}
       - OKX_SECRET_KEY=${OKX_SECRET_KEY}
       - OKX_PASSPHRASE=${OKX_PASSPHRASE}
-      - OKX_FLAG=1 # Code: 1 = Sandbox Mode (OKX Demo)
+      - OKX_FLAG=${OKX_FLAG:-1} # 从.env读取, 默认1=Sandbox
     volumes:
       - .:/app
       - ./config/settings.yaml:/app/config/settings.yaml
