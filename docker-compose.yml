@@ -10,7 +10,9 @@ services:
       - .env
     environment:
       - OKX_API_KEY=${OKX_API_KEY}
-      - OKX_FLAG=${OKX_FLAG:-0}
+      - OKX_SECRET_KEY=${OKX_SECRET_KEY}
+      - OKX_PASSPHRASE=${OKX_PASSPHRASE}
+      - OKX_FLAG=1 # 1 = OKX Demo/Sandbox, 0 = Live
     volumes:
       - .:/app
       - ./config/settings.yaml:/app/config/settings.yaml
@@ -20,7 +22,7 @@ services:
       - ./data:/app/data
       - ./charts:/app/charts
       - ./status.json:/app/status.json
-    command: python run_live.py --paper
+    command: python run_live.py # OKX Demo Mode (OKX_FLAG=1)
     deploy:
       resources:
         limits:
