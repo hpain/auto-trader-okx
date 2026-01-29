@@ -71,8 +71,8 @@ class LLMSupervisor:
 
     def _run_loop(self):
         """The main loop running in the thread."""
-        # Use Native Gemini Client if model name contains 'gemini'
-        if 'gemini' in self.model_name.lower():
+        # Use Native Gemini Client if model name contains 'gemini' or 'gemma'
+        if 'gemini' in self.model_name.lower() or 'gemma' in self.model_name.lower():
             self.logger.info("Using Native Gemini SDK Client.")
             llm = GeminiClient(api_key=self.api_key, model=self.model_name)
         else:
