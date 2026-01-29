@@ -106,7 +106,9 @@ class LLMSupervisor:
 
     async def _fetch_market_data(self):
         """Fetch market data using ccxt (async, created new loop)."""
-        exchange = await ExchangeFactory.create_exchange("binance")
+        # Use OKX for market data (same exchange we trade on)
+        # sandbox=False to get real public market data (no auth needed)
+        exchange = await ExchangeFactory.create_exchange("okx", sandbox=False)
         try:
             # Fetch OHLCV data
             ohlcv = await exchange.fetch_candles(self.symbol, self.timeframe, limit=100)
