@@ -28,30 +28,27 @@ services:
         limits:
           memory: 4G
 
-  # Service B: The new Funding Arb bot (Structural Alpha)
-  # [DISABLED FOR PAPER TRADING] - Uncomment for Live
-  # auto-trader-arb:
-  #   build: .
-  #   container_name: auto-trader-arb
-  #   restart: unless-stopped
-  #   env_file:
-  #     - .env
-  #   environment:
-  #     # Inject LIVE keys for the Real Money service
-  #     - OKX_API_KEY=${LIVE_OKX_API_KEY}
-  #     - OKX_SECRET_KEY=${LIVE_OKX_SECRET_KEY}
-  #     - OKX_PASSPHRASE=${LIVE_OKX_PASSPHRASE}
-  #     - OKX_FLAG=0 # Force Live Mode Flag (0 = Live, 1 = Mock)
-  #   volumes:
-  #     - .:/app
-  #     - ./config/settings.yaml:/app/config/settings.yaml
-  #     - ./logs:/app/logs
-  #   # Explicitly run the simple arb script
-  #   command: python run_live_simple.py --strategy funding_arb --symbol ETH/USDT
-  #   deploy:
-  #     resources:
-  #       limits:
-  #         memory: 512M
+  # Service B: Funding Arb bot (Structural Alpha)
+  auto-trader-arb:
+    build: .
+    container_name: auto-trader-arb
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      - OKX_API_KEY=${OKX_API_KEY}
+      - OKX_SECRET_KEY=${OKX_SECRET_KEY}
+      - OKX_PASSPHRASE=${OKX_PASSPHRASE}
+      - OKX_FLAG=${OKX_FLAG:-0} # Demo mode
+    volumes:
+      - .:/app
+      - ./config/settings.yaml:/app/config/settings.yaml
+      - ./logs:/app/logs
+    command: python run_live_simple.py --strategy funding_arb --symbol ETH/USDT
+    deploy:
+      resources:
+        limits:
+          memory: 512M
 
   # Service C: LLM Supervisor Microservice
   llm-supervisor:
