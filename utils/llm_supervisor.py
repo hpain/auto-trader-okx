@@ -30,7 +30,8 @@ class LLMSupervisor:
         self.base_url = os.getenv("LLM_BASE_URL", "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions")
         self.model_name = os.getenv("LLM_MODEL", "gemini-1.5-flash")
         
-        self.symbol = "BTC-USDT" 
+        self.symbol = "BTC-USDT"      # For spot OHLCV
+        self.swap_symbol = "BTC-USDT-SWAP"  # For derivatives (funding, OI)
         self.timeframe = "4H"
         self.update_interval = 900 # 15 minutes
         self.context_file = "data/market_context.json"
@@ -147,7 +148,7 @@ class LLMSupervisor:
             
             try:
                 # 1. Funding Rate
-                funding_df = await exchange.fetch_funding_rates(self.symbol, "1H", limit=24)
+                funding_df = await exchange.fetch_funding_rates(self.swap_symbol, "1H", limit=24)
                 if funding_df is not None and not funding_df.empty:
                     latest_funding = float(funding_df['fundingRate'].iloc[-1])
                     avg_funding_24h = float(funding_df['fundingRate'].mean())
@@ -159,7 +160,7 @@ class LLMSupervisor:
             
             try:
                 # 2. Open Interest
-                oi_df = await exchange.fetch_open_interest(self.symbol, "1H", limit=24)
+                oi_df = await exchange.fetch_open_interest(self.swap_symbol, "1H", limit=24)
                 if oi_df is not None and not oi_df.empty:
                     latest_oi = float(oi_df['openInterest'].iloc[-1])
                     prev_oi = float(oi_df['openInterest'].iloc[0])
@@ -171,7 +172,7 @@ class LLMSupervisor:
             
             try:
                 # 3. Long/Short Ratio
-                ls_df = await exchange.fetch_long_short_ratio(self.symbol, "1H", limit=24)
+                ls_df = await exchange.fetch_long_short_ratio(self.swap_symbol, "1H", limit=24)
                 if ls_df is not None and not ls_df.empty:
                     col_name = 'longShortRatio' if 'longShortRatio' in ls_df.columns else ls_df.columns[-1]
                     latest_ls = float(ls_df[col_name].iloc[-1])
