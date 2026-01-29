@@ -31,13 +31,25 @@ class GeminiClient:
             
         for attempt in range(max_retries):
             try:
+                # Gemma 3 models do not support 'system_instruction' param
+                # We must manually prepend it to the prompt
+                is_gemma = "gemma" in self.model_name.lower()
+                
+                final_contents = prompt
+                config_params = {"temperature": temperature}
+
+                if is_gemma:
+                    # Manually prepend system prompt
+                    if system_prompt:
+                         final_contents = f"System: {system_prompt}\n\nUser: {prompt}"
+                else:
+                    # Use native system_instruction for Gemini models
+                    config_params["system_instruction"] = system_prompt
+
                 response = self.client.models.generate_content(
                     model=self.model_name,
-                    contents=prompt,
-                    config=types.GenerateContentConfig(
-                        system_instruction=system_prompt,
-                        temperature=temperature,
-                    )
+                    contents=final_contents,
+                    config=types.GenerateContentConfig(**config_params)
                 )
                 return response.text
             except Exception as e:
