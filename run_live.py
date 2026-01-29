@@ -12,12 +12,19 @@ from strategies.transformer_strategy import TransformerStrategy
 from trader.portfolio_manager import PortfolioManager
 from trader.execution_handler import ExecutionHandler
 from strategies.strategy_manager import StrategyManager
+from trader.market_regime_detector import MarketRegimeDetector
 
 # 导入新的工厂和配置加载器
 from exchange.factory import ExchangeFactory
 from utils.config_loader import load_config
 from features.feature_engineering import generate_features
 from utils.logger import setup_trader_logger, CycleLogger
+from utils.llm_supervisor import LLMSupervisor
+from utils.ml_feedback import get_ml_feedback
+from dotenv import load_dotenv
+
+# Explicitly load .env file to ensure LLM keys are available in os.environ
+load_dotenv()
 
 async def main_loop(args):
     """
@@ -25,16 +32,25 @@ async def main_loop(args):
     """
 
     # --- SAFETY CHECK: PREVENT ACCIDENTAL LIVE/PAPER TRADING ON DEV MACHINE ---
+    if args.paper:
+        os.environ['ALLOW_LOCAL_TRADING'] = '1'
+        print("!" * 80)
+        print("WARNING: PAPER TRADING MODE ENABLED")
+        print("Safety check bypassed for Simulation/Paper Trading.")
+        print("Ensure you are using DEMO/TESTNET API Keys!")
+        print("!" * 80)
+
     if sys.platform == 'win32' and not args.mock and not os.environ.get('ALLOW_LOCAL_TRADING'):
         print("\n" + "!" * 80)
         print("CRITICAL SAFETY STOP: Windows Development Environment Detected")
         print("!" * 80)
         print("To protect your capital, Live and Paper trading are DISABLED on this machine.")
-        print("You are attempting to run the bot without '--mock'.")
+        print("You are attempting to run the bot without '--mock' or '--paper'.")
         print("\nALLOWED ACTIONS on this machine:")
         print("1. Run with mock data:   python run_live.py --mock")
-        print("2. Run unit tests:       pytest")
-        print("\nIf you REALLY want to trade from this laptop, set env var: ALLOW_LOCAL_TRADING=1")
+        print("2. Run in Paper Mode:    python run_live.py --paper")
+        print("3. Run unit tests:       pytest")
+        print("\nIf you REALLY want to trade REAL money from this laptop, set env var: ALLOW_LOCAL_TRADING=1")
         print("!" * 80 + "\n")
         return
     # --------------------------------------------------------------------------
@@ -61,9 +77,15 @@ async def main_loop(args):
     api_credentials = config.get('okx', {})
     
     # 解析 sandbox 模式：如果 flag 为 "0"，则是 sandbox 模式
-    # 默认为 True (安全起见) 如果没有找到配置
+    # 如果 --paper 参数开启，强制为 True
     flag = str(api_credentials.get('flag', '0'))
-    is_sandbox = (flag == '0')
+    
+    if args.paper:
+        is_sandbox = True
+        print(f"Force Overriding Exchange Mode to SANDBOX (Paper Trading)",flush=True)
+    else:
+        is_sandbox = (flag == '0')
+
     print(f"Exchange Mode: {'SANDBOX' if is_sandbox else 'LIVE'}",flush=True)
     
     # --- DEBUG: Show Masked API Key for Verification ---
@@ -158,6 +180,10 @@ async def main_loop(args):
     # 3.3 初始化StrategyManager
     strategy_manager = StrategyManager(strategies=strategy_army)
     trader_logger.info(f"Initialized StrategyManager.")
+    
+    # 3.3.1 初始化 MarketRegimeDetector (Enhanced with Model Confidence Tracking)
+    regime_detector = MarketRegimeDetector(confidence_window=100)
+    trader_logger.info("Initialized MarketRegimeDetector with model confidence tracking.")
 
     # 3.4 初始化PortfolioManager
     # 尝试从配置读取初始资金，如果没有则默认 10000
@@ -190,10 +216,10 @@ async def main_loop(args):
     print(f"Trading Symbols: {symbols}")
     # ===========================================
 
-    # ========== Strategy Weights (Silver Tier) ==========
+    # ========== Strategy Weights ==========
+    # LGB is now the primary ML strategy (Transformer disabled)
     strategy_weights = {
-        'Transformer_Main': 1.5,
-        'LGB_Main': 1.2,
+        'LGB_Main': 1.5,      # Primary ML strategy
         'MA_Slow': 1.0,
         'MA_Fast': 0.5
     }
@@ -228,6 +254,10 @@ async def main_loop(args):
     cycle_count = 0
 
     # 4. 主循环
+    
+    # --- LLM Supervisor is now a separate microservice ---
+    # See docker-compose.yml -> llm-supervisor
+
     while True:
         # Check cycle limit
         if args.cycles is not None and cycle_count >= args.cycles:
@@ -306,9 +336,11 @@ async def main_loop(args):
                 data_for_pm[symbol] = featured_data
 
             if not data_for_pm:
-                trader_logger.warning("Failed to fetch market data for any symbol. Retrying in 60 seconds...")
-                # FIX: Add small delay even in mock mode to prevent infinite fast loop
-                await asyncio.sleep(1 if args.mock else 60)
+                if args.mock:
+                    trader_logger.warning("Mock mode: No data fetched. Breaking to prevent infinite loop.")
+                    break
+                
+                await asyncio.sleep(60)
                 continue
 
             # 4.2 (后续逻辑与之前相同...)
@@ -324,6 +356,15 @@ async def main_loop(args):
                 # Now get_active_strategies returns ALL strategies by default (Fusion Mode)
                 selected_strategies = strategy_manager.get_active_strategies()
                 portfolio_manager.asset_strategies[symbol] = selected_strategies
+                
+                # --- Record LGB predictions for confidence tracking ---
+                for strat in selected_strategies:
+                    if hasattr(strat, 'last_prediction') and hasattr(strat, 'last_probability'):
+                        regime_detector.update_prediction(
+                            probability=strat.last_probability,
+                            prediction=strat.last_prediction,
+                            timestamp=pd.Timestamp.now(tz='UTC')
+                        )
 
             # --- CRITICAL FIX: Update Portfolio Valuations with FRESH DATA ---
             # Ensure the "Portfolio Status" log below reflects current market prices, not stale sync data.
@@ -337,11 +378,46 @@ async def main_loop(args):
                         # We don't update PnL here as we need avg_entry_price, assuming PM handles it or it's approx.
             # -----------------------------------------------------------------
 
-            trade_orders, _ = portfolio_manager.rebalance(data_for_pm, cycle_logger)
+            # --- Model Confidence Check: Should we trade? ---
+            # Get first symbol's data for regime check
+            first_symbol_data = list(data_for_pm.values())[0] if data_for_pm else None
+            should_trade, trade_reason = regime_detector.should_trade(first_symbol_data)
+            position_multiplier = regime_detector.get_position_multiplier()
+            
+            if not should_trade:
+                trader_logger.warning(f"⚠️ SKIPPING TRADE: {trade_reason}")
+                cycle_logger.set_status("SKIPPED_LOW_CONFIDENCE")
+                trade_orders = []
+            else:
+                trade_orders, _ = portfolio_manager.rebalance(data_for_pm, cycle_logger)
+                
+                # Apply position multiplier based on confidence
+                if position_multiplier < 1.0 and trade_orders:
+                    trader_logger.info(f"📉 Position scaling: {position_multiplier:.0%} (confidence-based)")
+                    for order in trade_orders:
+                        if 'quantity' in order:
+                            order['quantity'] *= position_multiplier
 
             if trade_orders:
                 execution_report = await execution_handler.execute_trades(trade_orders, cycle_logger)
                 portfolio_manager.update_positions(execution_report)
+                
+                # --- NEW: Record ML predictions for LLM feedback ---
+                ml_feedback = get_ml_feedback()
+                for order in trade_orders:
+                    symbol = order.get('symbol', 'UNKNOWN')
+                    direction = 1 if order.get('side') == 'buy' else -1
+                    # Get probability from LGB strategy if available
+                    for strat in strategy_army:
+                        if hasattr(strat, 'last_probability'):
+                            ml_feedback.record_prediction(
+                                symbol=symbol,
+                                prediction=direction,
+                                probability=strat.last_probability
+                            )
+                            break
+                ml_feedback.save()
+                trader_logger.debug(f"📊 ML feedback recorded for {len(trade_orders)} orders")
             else:
                 trader_logger.info("No new trade orders to execute.")
                 cycle_logger.set_status("NO_ACTION")
@@ -422,9 +498,14 @@ async def main_loop(args):
     if 'exchange_client' in locals():
         await exchange_client.close()
 
+    # 关闭 LLM Supervisor - Moved to separate container
+    # if 'supervisor' in locals() and supervisor:
+    #     supervisor.stop()
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Run the Auto Trader.')
     parser.add_argument('--mock', action='store_true', help='Run in mock mode with simulated exchange data.')
+    parser.add_argument('--paper', action='store_true', help='Run in Paper Trading mode (Sandbox) on Windows/Local.')
     parser.add_argument('--cycles', type=int, default=None, help='Number of cycles to run before exiting (default: infinite).')
     
     args = parser.parse_args()

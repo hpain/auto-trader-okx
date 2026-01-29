@@ -62,4 +62,11 @@ polymarket_scanner/
 research/new_alpha/
 scripts/test_risk_scaling.py
 scripts/verify_real_model.py
+
+# 模型文件 - 排除大部分，但保留生产模型
+models/*.pkl
+models/*.pth
+!models/simple_lgb_model.pkl  # 生产模型 - 需要提交
+!models/simple_lgb_metadata.json  # 生产模型元数据 - 需要提交
+
 .agent/  

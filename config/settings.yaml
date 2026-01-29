@@ -113,21 +113,22 @@ risk_monitoring:
     - admin@yourcompany.com
 strategy_management:
   enabled_strategies:
-  - funding_arb
-  - transformer
+  - lgb          # Primary ML strategy (replaced transformer)
   - ma_fast
   - ma_slow
+  # - funding_arb  # Runs in separate process (run_live_simple.py)
+  # - transformer  # Disabled - not performing well with current data
   funding_arb_strategy:
     positive_threshold: 0.0001
     negative_threshold: -0.0001
   lgb_strategy:
     model_dir: models
-    model_name: improved_best_model_1H_5.0y.pkl
-    metadata_name: improved_metadata_1H_5.0y.json
-    buy_threshold: 0.55
+    model_name: simple_lgb_model.pkl   # Optimized V2: 35 features, 75% @0.60
+    metadata_name: simple_lgb_metadata.json
+    buy_threshold: 0.55  # Balanced (56.6% precision, 129 trades). Use 0.60 for conservative (75% precision)
     sell_threshold: 0.45
   transformer_strategy:
-    enabled: true
+    enabled: false  # Disabled - focus on LGB for now
     window_size: 120 # Updated after GPU Training (User specified --window 120)
     buy_threshold: 0.55
     sell_threshold: 0.45

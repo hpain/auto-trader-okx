@@ -257,30 +257,39 @@ class OKXExchange(Exchange):
         return df[['rate']]
 
     def fetch_open_interest(self, symbol: str, timeframe: str, years: Optional[float] = None, since: Optional[int] = None, limit: Optional[int] = None) -> pd.DataFrame:
-        # OKX open interest endpoint
-        path = "/api/v5/market/open-interest"
+        # OKX open interest endpoint (correct path: /api/v5/public/open-interest)
+        path = "/api/v5/public/open-interest"
+        
+        # Determine instType from symbol
+        if 'SWAP' in symbol:
+            inst_type = 'SWAP'
+        elif 'USDT' in symbol and '-' in symbol:
+            inst_type = 'SWAP'  # e.g., BTC-USDT-SWAP
+        else:
+            inst_type = 'FUTURES'
+        
         params = {
-            'instId': symbol,
-            'instType': 'SWAP' # Assuming we are interested in swap open interest
+            'instType': inst_type,
+            'instId': symbol
         }
-        # OKX open interest endpoint does not support 'since' or 'limit' for historical data directly
-        # It provides current open interest or a limited history via 'bar' parameter for candles.
-        # For historical open interest, we might need to fetch candles and extract OI from there if available,
-        # or use a different endpoint if OKX provides one.
-        # For now, we will fetch the current open interest.
 
-        data = self._request('GET', path, params=params)
+        try:
+            data = self._request('GET', path, params=params)
+            
+            if not data or 'data' not in data or len(data['data']) == 0:
+                self.logger.warning(f"No open interest data returned for {symbol}")
+                return pd.DataFrame()
 
-        if not data or 'data' not in data:
+            oi_data = data['data'][0]
+            df = pd.DataFrame([{
+                'timestamp': pd.to_datetime(int(oi_data['ts']), unit='ms', utc=True),
+                'oi': float(oi_data['oi']),
+                'oi_ccy': float(oi_data.get('oiCcy', 0)),
+                'oi_usd': float(oi_data.get('oiUsd', 0))
+            }])
+            df = df.set_index('timestamp')
+            return df
+            
+        except Exception as e:
+            self.logger.error(f"Error fetching open interest for {symbol}: {e}")
             return pd.DataFrame()
-
-        # The open interest endpoint returns current open interest, not historical series.
-        # If historical open interest is needed, a different approach or endpoint is required.
-        # For now, we return a DataFrame with the latest open interest.
-        oi_data = data['data'][0]
-        df = pd.DataFrame([{
-            'timestamp': pd.to_datetime(oi_data['ts'], unit='ms', utc=True),
-            'oi': float(oi_data['oi'])
-        }])
-        df = df.set_index('timestamp')
-        return df[['oi']]

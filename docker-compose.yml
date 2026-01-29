@@ -10,46 +10,68 @@ services:
       - .env
     environment:
       - OKX_API_KEY=${OKX_API_KEY}
-      - OKX_SECRET_KEY=${OKX_SECRET_KEY}
-      - OKX_PASSPHRASE=${OKX_PASSPHRASE}
       - OKX_FLAG=${OKX_FLAG:-0}
     volumes:
       - .:/app
       - ./config/settings.yaml:/app/config/settings.yaml
       - ./logs:/app/logs
       - ./models:/app/models
-      - ./data/history:/app/data/history
-      - ./data/cache:/app/data/cache
+      # Mount the entire data directory to access history, cache, AND market_context.json from supervisor
+      - ./data:/app/data
       - ./charts:/app/charts
       - ./status.json:/app/status.json
-    command: python run_live.py
+    command: python run_live.py --paper
     deploy:
       resources:
         limits:
-          memory: 2G
+          memory: 4G
 
   # Service B: The new Funding Arb bot (Structural Alpha)
-  auto-trader-arb:
+  # [DISABLED FOR PAPER TRADING] - Uncomment for Live
+  # auto-trader-arb:
+  #   build: .
+  #   container_name: auto-trader-arb
+  #   restart: unless-stopped
+  #   env_file:
+  #     - .env
+  #   environment:
+  #     # Inject LIVE keys for the Real Money service
+  #     - OKX_API_KEY=${LIVE_OKX_API_KEY}
+  #     - OKX_SECRET_KEY=${LIVE_OKX_SECRET_KEY}
+  #     - OKX_PASSPHRASE=${LIVE_OKX_PASSPHRASE}
+  #     - OKX_FLAG=0 # Force Live Mode Flag (0 = Live, 1 = Mock)
+  #   volumes:
+  #     - .:/app
+  #     - ./config/settings.yaml:/app/config/settings.yaml
+  #     - ./logs:/app/logs
+  #   # Explicitly run the simple arb script
+  #   command: python run_live_simple.py --strategy funding_arb --symbol ETH/USDT
+  #   deploy:
+  #     resources:
+  #       limits:
+  #         memory: 512M
+
+  # Service C: LLM Supervisor Microservice
+  llm-supervisor:
     build: .
-    container_name: auto-trader-arb
-    restart: unless-stopped
-    env_file:
-      - .env
+    container_name: llm-supervisor
+    restart: always
     environment:
-      # Inject LIVE keys for the Real Money service
-      # The code inside expects 'OKX_API_KEY', so we map LIVE_OKX_... -> OKX_...
-      - OKX_API_KEY=${LIVE_OKX_API_KEY}
-      - OKX_SECRET_KEY=${LIVE_OKX_SECRET_KEY}
-      - OKX_PASSPHRASE=${LIVE_OKX_PASSPHRASE}
-      - OKX_FLAG=0 # Force Live Mode Flag (0 = Live, 1 = Mock)
+      - LLM_API_KEY=${LLM_API_KEY}
+      - LLM_BASE_URL=${LLM_BASE_URL}
+      - LLM_MODEL=${LLM_MODEL}
+      # Exchange keys needed for Supervisor data fetching
+      - OKX_API_KEY=${OKX_API_KEY}
+      - OKX_SECRET_KEY=${OKX_SECRET_KEY}
+      - OKX_PASSPHRASE=${OKX_PASSPHRASE}
+      - OKX_FLAG=${OKX_FLAG:-0}
     volumes:
       - .:/app
-      - ./config/settings.yaml:/app/config/settings.yaml
       - ./logs:/app/logs
-    # Explicitly run the simple arb script
-    # Use ETH/USDT to avoid conflict with ML bot (which trades BTC/USDT)
-    command: python run_live_simple.py --strategy funding_arb --symbol ETH/USDT
+      - ./data:/app/data
+    command: python scripts/run_supervisor_service.py
     deploy:
       resources:
         limits:
-          memory: 512M
+          cpus: '0.5'
+          memory: 1G
