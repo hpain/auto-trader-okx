@@ -34,7 +34,8 @@ class ExchangeFactory:
             return MockExchange(exchange_id=exchange_id, market_type=market_type, **kwargs)
 
         # Auto-load credentials from env if not provided
-        if 'api_key' not in kwargs or not kwargs['api_key']:
+        # Check for None specifically - empty string "" means "no auth wanted"
+        if kwargs.get('api_key') is None:
             env_prefix = exchange_id.upper()
             kwargs['api_key'] = os.environ.get(f'{env_prefix}_API_KEY')
             kwargs['api_secret'] = os.environ.get(f'{env_prefix}_SECRET_KEY')
