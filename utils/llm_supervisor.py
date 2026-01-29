@@ -30,8 +30,8 @@ class LLMSupervisor:
         self.base_url = os.getenv("LLM_BASE_URL", "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions")
         self.model_name = os.getenv("LLM_MODEL", "gemini-1.5-flash")
         
-        self.symbol = "BTC-USDT"      # For spot OHLCV
-        self.swap_symbol = "BTC-USDT-SWAP"  # For derivatives (funding, OI)
+        self.symbol = "BTC/USDT"           # For spot OHLCV
+        self.swap_symbol = "BTC/USDT:USDT"  # CCXT unified format for OKX perpetual
         self.timeframe = "4H"
         self.update_interval = 900 # 15 minutes
         self.context_file = "data/market_context.json"
