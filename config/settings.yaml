@@ -1,9 +1,7 @@
 exchange:
   primary_exchange: okx
-  secondary_exchanges:
-  - binance
+  secondary_exchanges: []  # Only use OKX
 exchanges:
-- binance
 - okx
 - bybit
 derivatives_data:
