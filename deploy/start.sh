@@ -63,8 +63,14 @@ else
     # Fallback to legacy docker-compose
     DOCKER_COMPOSE_CMD="docker-compose"
     echo -e "${YELLOW}Warning: Docker Compose V2 not found. Using legacy docker-compose.${NC}"
-    echo "Attempting to fix known Python dependency issues for legacy docker-compose..."
     
+    # FIX: "KeyError: 'ContainerConfig'" compatibility issue
+    # Force legacy builder to avoid BuildKit metadata issues with Compose V1
+    export DOCKER_BUILDKIT=0
+    export COMPOSE_DOCKER_CLI_BUILD=0
+    echo -e "${YELLOW}Legacy Mode Enabled: DOCKER_BUILDKIT=0 to prevent ContainerConfig errors.${NC}"
+
+    echo "Attempting to fix known Python dependency issues for legacy docker-compose..."
     # AGGRESSIVE FIX: Downgrade requests/urllib3 to make docker-compose v1 work
     # This addresses 'Not supported URL scheme http+docker' error
     pip install "urllib3<2.0" "requests<2.29.0" --quiet || echo -e "${RED}Failed to auto-fix python dependencies. You might need sudo.${NC}"
