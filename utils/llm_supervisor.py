@@ -226,33 +226,52 @@ class LLMSupervisor:
 
     def _query_and_update(self, llm, data_summary):
         """Construct prompt and query LLM."""
-        system_prompt = """You are a senior crypto trading risk manager. 
+        
+        # --- 0. Extract Data Helper ---
+        derivatives_info = data_summary.get('derivatives', {})
+        ml_info = data_summary.get('ml_model_performance', {})
+        
+        # --- 1. Fetch News Context ---
+        news_context = ""
+        try:
+            if not hasattr(self, 'news_aggregator'):
+                from utils.sentiment_aggregator import NewsAggregator
+                self.news_aggregator = NewsAggregator()
+            
+            # Fetch news (cached automatically)
+            news_context = self.news_aggregator.fetch_news_summary()
+        except Exception as e:
+            self.logger.warning(f"Failed to fetch news: {e}")
+            news_context = "News data unavailable."
+
+        # --- 2. Construct Prompt ---
+        system_prompt = f"""You are a senior crypto trading risk manager. 
         Your job is to analyze market conditions and control the risk of a high-frequency scalping bot.
         
         You will receive:
         1. Price data with technical indicators (trend, RSI, volatility)
         2. Derivatives data (funding rate, open interest, long/short ratio)
         3. ML model performance metrics (win rate, confidence trend)
+        4. **News & Macro Context**: Recent headlines from crypto and global finance.
         
         Key Risk Rules:
         - If funding rate is abnormal (>0.03% or <-0.03%), increase caution
         - If crowd sentiment is extremely biased, consider contrarian bias
         - If ML model win rate is declining, reduce risk_multiplier
         - If volatility is extreme (>3%) or trend is unclear, go defensive
+        - **News Impact**: If news is significantly bearish/bullish (e.g. war, SEC lawsuit, ETF approval), override technical bias.
         
         Output JSON format only:
-        {
+        {{
             "regime": "string (trending_up, trending_down, ranging, high_volatility, crash)",
             "risk_multiplier": "float (0.0 to 1.5, where 1.0=normal, 0.5=defensive, 0.0=stop)",
             "bias": "string (long, short, neutral)",
-            "tp_sl_suggestion": {"tp_pct": 0.02, "sl_pct": 0.01},
-            "reasoning": "string (concise explanation, max 100 words)"
-        }
+            "sentiment_score": "float (-1.0 to 1.0, where -1=panic, 1=euphoria)",
+            "tp_sl_suggestion": {{"tp_pct": 0.02, "sl_pct": 0.01}},
+            "reasoning": "string (concise explanation, max 100 words)",
+            "market_commentary": "markdown string (A detailed Daily Market Briefing for the user. Include Macro context, Crypto Sentiment, and Strategy advice. Max 300 words.)"
+        }}
         """
-        
-        # Build enhanced context
-        derivatives_info = data_summary.get('derivatives', {})
-        ml_info = data_summary.get('ml_model_performance', {})
         
         user_prompt = f"""
         === MARKET STATUS ({datetime.utcnow()} UTC) ===
@@ -277,28 +296,49 @@ class LLMSupervisor:
         - Avg Confidence: {ml_info.get('avg_confidence', 'N/A')}
         - Performance Trend: {ml_info.get('trend', 'unknown')}
         
+        🌍 News & Macro Context:
+        {news_context}
+        
         === TASK ===
         1. Analyze all data holistically
         2. Determine market regime and appropriate risk level
         3. If ML model is underperforming (declining trend or <40% win rate), reduce exposure
         4. Suggest appropriate TP/SL percentages based on volatility
-        5. Provide concise reasoning
+        5. Provide concise reasoning AND detailed market commentary
         """
         
-        decision = llm.query_json(user_prompt, system_prompt)
-        
-        if decision:
-            decision['timestamp'] = datetime.utcnow().isoformat()
+        try:
+            self.logger.info("Sending Query to LLM (with News)...")
+            decision = llm.query_json(user_prompt, system_prompt)
             
-            # Atomic write
-            temp_file = self.context_file + ".tmp"
-            try:
-                os.makedirs(os.path.dirname(self.context_file), exist_ok=True)
-                with open(temp_file, 'w') as f:
-                    json.dump(decision, f, indent=2)
-                os.replace(temp_file, self.context_file)
-                self.logger.info(f"✅ LLM Update: Risk={decision.get('risk_multiplier')}, Bias={decision.get('bias')}")
-            except Exception as e:
-                self.logger.error(f"Failed to write context file: {e}")
-        else:
-            self.logger.error("LLM returned empty response.")
+            if decision:
+                decision['timestamp'] = datetime.utcnow().isoformat()
+                
+                # Atomic write context
+                temp_file = self.context_file + ".tmp"
+                try:
+                    os.makedirs(os.path.dirname(self.context_file), exist_ok=True)
+                    with open(temp_file, 'w') as f:
+                        json.dump(decision, f, indent=2)
+                    os.replace(temp_file, self.context_file)
+                    self.logger.info(f"✅ LLM Update: Risk={decision.get('risk_multiplier')}, Bias={decision.get('bias')}")
+                    
+                    # --- NEW: Save Market Briefing ---
+                    commentary = decision.get('market_commentary')
+                    if commentary:
+                        briefing_file = "data/latest_briefing.md"
+                        with open(briefing_file, 'w', encoding='utf-8') as f:
+                            f.write(f"# Daily Market Briefing\n")
+                            f.write(f"**Generated**: {datetime.now().strftime('%Y-%m-%d %H:%M')}\n\n")
+                            f.write(commentary)
+                        self.logger.info(f"📝 Market Briefing saved to {briefing_file}")
+                    # ---------------------------------
+
+                except Exception as e:
+                    self.logger.error(f"Failed to write context file: {e}")
+            else:
+                self.logger.error("LLM returned empty response.")
+                
+        except Exception as e:
+            self.logger.error(f"LLM Query failed: {e}")
+            traceback.print_exc()
