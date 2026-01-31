@@ -36,6 +36,11 @@ class LLMSupervisor:
         self.update_interval = 900 # 15 minutes
         self.context_file = "data/market_context.json"
         
+        # Throttling state for Briefing generation
+        self.last_briefing_time = 0
+        self.last_sentiment_score = 0.0
+        self.briefing_interval = 4 * 3600 # 4 hours
+        
         self.running = False
         self.thread = None
         self.stop_event = threading.Event()
@@ -323,15 +328,31 @@ class LLMSupervisor:
                     os.replace(temp_file, self.context_file)
                     self.logger.info(f"✅ LLM Update: Risk={decision.get('risk_multiplier')}, Bias={decision.get('bias')}")
                     
-                    # --- NEW: Save Market Briefing ---
+                    # --- NEW: Save Market Briefing (Throttled) ---
                     commentary = decision.get('market_commentary')
+                    sentiment_score = float(decision.get('sentiment_score', 0.0))
+                    
+                    now_ts = time.time()
+                    time_since_last = now_ts - self.last_briefing_time
+                    score_changed = abs(sentiment_score - self.last_sentiment_score) >= 0.5
+                    
                     if commentary:
-                        briefing_file = "data/latest_briefing.md"
-                        with open(briefing_file, 'w', encoding='utf-8') as f:
-                            f.write(f"# Daily Market Briefing\n")
-                            f.write(f"**Generated**: {datetime.now().strftime('%Y-%m-%d %H:%M')}\n\n")
-                            f.write(commentary)
-                        self.logger.info(f"📝 Market Briefing saved to {briefing_file}")
+                        if time_since_last > self.briefing_interval or score_changed:
+                            briefing_file = "data/latest_briefing.md"
+                            with open(briefing_file, 'w', encoding='utf-8') as f:
+                                f.write(f"# Daily Market Briefing\n")
+                                f.write(f"**Generated**: {datetime.now().strftime('%Y-%m-%d %H:%M')}\n")
+                                if score_changed:
+                                    f.write(f"**⚠️ ALERT: Significant Sentiment Shift Detected!**\n\n")
+                                else:
+                                    f.write(f"\n")
+                                f.write(commentary)
+                            
+                            self.logger.info(f"📝 Market Briefing updated (Reason: {'Score Shift' if score_changed else 'Scheduled'}).")
+                            self.last_briefing_time = now_ts
+                            self.last_sentiment_score = sentiment_score
+                        else:
+                            self.logger.info(f"⏳ Market Briefing skipped (Throttled: {time_since_last/60:.1f}m ago)")
                     # ---------------------------------
 
                 except Exception as e:
