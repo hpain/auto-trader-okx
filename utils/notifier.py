@@ -13,6 +13,9 @@ class Notifier:
         self.logger = logging.getLogger("Notifier")
         self.pushplus_token = os.getenv("PUSHPLUS_TOKEN", "")
         
+        # Feishu Config
+        self.feishu_webhook = os.getenv("FEISHU_WEBHOOK", "")
+        
         # WeCom Config
         self.wecom_cid = os.getenv("WECOM_CORPID", "")
         self.wecom_secret = os.getenv("WECOM_SECRET", "")
@@ -20,14 +23,55 @@ class Notifier:
         
     def send(self, title: str, content: str, template: str = "markdown"):
         """
-        Send notification via configured channels. Priority: WeCom > PushPlus.
+        Send notification. Priority: Feishu > WeCom > PushPlus.
         """
-        if self.wecom_cid and self.wecom_secret and self.wecom_aid:
+        if self.feishu_webhook:
+            self._send_feishu(title, content)
+        elif self.wecom_cid and self.wecom_secret:
             self._send_wecom(title, content)
         elif self.pushplus_token:
             self._send_pushplus(title, content, template)
+
         else:
             self.logger.warning("No notification tokens configured (WeCom/PushPlus). Notification skipped.")
+
+    def _send_feishu(self, title: str, content: str):
+        """
+        Send message via Feishu (Lark) Webhook
+        """
+        try:
+            headers = {'Content-Type': 'application/json'}
+            
+            # Use Feishu Interactive Card for Markdown support
+            payload = {
+                "msg_type": "interactive",
+                "card": {
+                    "header": {
+                        "template": "blue",
+                        "title": {
+                            "content": title,
+                            "tag": "plain_text"
+                        }
+                    },
+                    "elements": [
+                        {
+                            "tag": "markdown",
+                            "content": content
+                        }
+                    ]
+                }
+            }
+            
+            r = requests.post(self.feishu_webhook, json=payload, headers=headers, timeout=10)
+            resp = r.json()
+            
+            if resp.get('code') == 0:
+                self.logger.info(f"✅ Notification sent via Feishu: {title}")
+            else:
+                self.logger.error(f"❌ Feishu Send Error: {resp}")
+                
+        except Exception as e:
+            self.logger.error(f"❌ Failed to send Feishu notification: {e}")
 
     def _send_wecom(self, title: str, content: str):
         """
