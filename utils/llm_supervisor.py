@@ -276,7 +276,7 @@ class LLMSupervisor:
             "sentiment_score": "float (-1.0 to 1.0, where -1=panic, 1=euphoria)",
             "tp_sl_suggestion": {{"tp_pct": 0.02, "sl_pct": 0.01}},
             "reasoning": "string (concise explanation, max 100 words)",
-            "market_commentary": "markdown string (A detailed Daily Market Briefing for the user. Include Macro context, Crypto Sentiment, and Strategy advice. Max 300 words.)"
+            "market_commentary": "markdown string (A detailed Daily Market Briefing for the user. Include Macro context, Crypto Sentiment, and Strategy advice. Max 300 words. IMPORTANT: Maintain strict logical consistency. Avoid redundant summaries or contradictory transitions like using 'but' for points that agree. Ensure every sentence adds unique value.)"
         }}
         """
         
