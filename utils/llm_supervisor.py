@@ -13,7 +13,9 @@ sys.path.append(os.getcwd())
 
 from utils.llm_client import LLMClient
 from utils.llm_client_genai import GeminiClient
+from utils.notifier import get_notifier # Notification Support
 from exchange.factory import ExchangeFactory
+
 
 class LLMSupervisor:
     """
@@ -349,6 +351,17 @@ class LLMSupervisor:
                                 f.write(commentary)
                             
                             self.logger.info(f"📝 Market Briefing updated (Reason: {'Score Shift' if score_changed else 'Scheduled'}).")
+                            
+                            # --- NOTIFICATION TRIGGER ---
+                            if score_changed:
+                                title = f"🚨 Market Sentiment Shift: {sentiment_score:.1f}"
+                                # Send the first paragraph or full commentary
+                                # PushPlus Markdown support:
+                                msg_content = f"**Old Score**: {self.last_sentiment_score:.1f} -> **New Score**: {sentiment_score:.1f}\n\n"
+                                msg_content += commentary
+                                get_notifier().send(title=title, content=msg_content)
+                            # ----------------------------
+
                             self.last_briefing_time = now_ts
                             self.last_sentiment_score = sentiment_score
                         else:
