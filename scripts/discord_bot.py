@@ -53,7 +53,7 @@ MARKET_CONTEXT_FILE = "data/market_context.json"
 BRIEFING_FILE = "data/latest_briefing.md"
 ML_LOG_FILE = "logs/trading_cycles.log"
 ARB_LOG_FILE = "logs/simple_funding_arb.log"
-SUPERVISOR_LOG_FILE = "logs/llm.log"
+SUPERVISOR_LOG_FILE = "logs/llm_supervisor.log" # Fixed mismatch
 
 # Intents
 intents = discord.Intents.default()
@@ -183,7 +183,8 @@ def get_total_equity():
                 content = f.read().decode('utf-8', errors='ignore')
                 
                 # Match: 💰 Total Equity: $4927.06 (Cash: $4710.34)
-                match = re.search(r'💰 Total Equity:\s*\$([0-9.]+)', content)
+                # More robust pattern to handle prefixes like "auto-trader-ml | ..."
+                match = re.search(r'Total Equity:\s*\$([0-9.]+)', content)
                 if match:
                     return f"${match.group(1)}"
     except Exception as e:
