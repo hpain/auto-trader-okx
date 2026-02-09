@@ -57,16 +57,23 @@ data/
 *.bak
 *.parquet
 
-#临时目录
-polymarket_scanner/
-research/new_alpha/
-scripts/test_risk_scaling.py
-scripts/verify_real_model.py
+# 模型文件 - 全部排除，由服务器本地管理
+models/
+docs/
+research/
+results/
+charts/
 
-# 模型文件 - 排除大部分，但保留生产模型
-models/*.pkl
-models/*.pth
-!models/simple_lgb_model.pkl  # 生产模型 - 需要提交
-!models/simple_lgb_metadata.json  # 生产模型元数据 - 需要提交
+# 临时和调试脚本
+scripts/test_*.py
+scripts/debug_*.py
+scripts/diagnose_*.py
+scripts/run_llm_supervisor.py
+scripts/list_gemini_models.py
+scripts/fetch_recent_api.py
+scripts/plot_equity_curve_final.py
+scripts/build_final_model.py
+scripts/check_models.py
+scripts/deploy_paper_windows.ps1
 
-.agent/  
+.agent/
