@@ -28,3 +28,4 @@ torch>=2.0.0
 gplearn
 fastparquet
 tenacity
+discord.py>=2.0.0

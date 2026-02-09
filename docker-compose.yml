@@ -74,3 +74,25 @@ services:
         limits:
           cpus: '0.5'
           memory: 1G
+
+  # Service D: Discord Bot (Interactive LLM Assistant)
+  discord-bot:
+    build: .
+    container_name: discord-bot
+    restart: unless-stopped
+    environment:
+      - DISCORD_BOT_TOKEN=${DISCORD_BOT_TOKEN}
+      - DISCORD_OWNER_ID=${DISCORD_OWNER_ID}
+      - DISCORD_CHANNEL_NAME=${DISCORD_CHANNEL_NAME:-trading}
+      - LLM_API_KEY=${LLM_API_KEY}
+      - LLM_MODEL=${LLM_MODEL}
+    volumes:
+      - .:/app
+      - ./data:/app/data
+      - ./logs:/app/logs
+    command: python scripts/discord_bot.py
+    deploy:
+      resources:
+        limits:
+          cpus: '0.25'
+          memory: 512M
