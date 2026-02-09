@@ -316,7 +316,10 @@ async def on_message(message):
     content = message.content.strip().lower()
 
     # --- Log Retrieval (Natural Language Intent) ---
-    if ('日志' in content or 'log' in content) and any(x in content for x in ['ml', 'arb', 'supervisor', 'llm']):
+    # More strict check: must contain '日志' or 'log' AND a specific bot name
+    is_log_request = ('日志' in content or 'log' in content) and any(x in content for x in ['ml', 'arb', 'supervisor', 'llm'])
+    
+    if is_log_request:
         # Find count
         count_match = re.search(r'(\d+)', content)
         count = int(count_match.group(1)) if count_match else 50
