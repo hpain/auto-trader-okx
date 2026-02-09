@@ -171,6 +171,25 @@ def get_ml_position_summary():
     
     return "Unknown/None"
 
+def get_total_equity():
+    """Extract Total Equity info from trading_cycles.log."""
+    try:
+        if os.path.exists(ML_LOG_FILE):
+            with open(ML_LOG_FILE, 'rb') as f:
+                f.seek(0, os.SEEK_END)
+                size = f.tell()
+                offset = min(size, 32768)
+                f.seek(size - offset)
+                content = f.read().decode('utf-8', errors='ignore')
+                
+                # Match: 💰 Total Equity: $4927.06 (Cash: $4710.34)
+                match = re.search(r'💰 Total Equity:\s*\$([0-9.]+)', content)
+                if match:
+                    return f"${match.group(1)}"
+    except Exception as e:
+        logger.debug(f"Equity parsing failed: {e}")
+    return "N/A"
+
 def get_arb_activity_summary():
     """Extract latest activity from Arb bot log."""
     line = get_latest_log_line(ARB_LOG_FILE, pattern=' - INFO - ')
@@ -212,7 +231,9 @@ def format_server_embed():
     embed.add_field(name="Arb Bot", value=f"{arb_status} ({arb_time})", inline=True)
     embed.add_field(name="Supervisor", value=f"{sup_status} ({sup_time})", inline=True)
     
-    # Activity
+    # Activity & Equity
+    equity = get_total_equity()
+    embed.add_field(name="Portfolio Value", value=f"**{equity}**", inline=True)
     embed.add_field(name="ML Positions", value=f"`{get_ml_position_summary()}`", inline=False)
     embed.add_field(name="Arb Latest", value=f"`{get_arb_activity_summary()}`", inline=False)
     
@@ -275,6 +296,7 @@ Reasoning: {ctx.get('reasoning', 'N/A') if ctx else 'N/A'}
 {briefing if briefing else 'No briefing available.'}
 
 [Bot Status]
+Total Equity: {get_total_equity()}
 ML Positions: {ml_pos}
 Arb Activity: {arb_act}
 """
