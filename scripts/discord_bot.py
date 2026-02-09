@@ -59,6 +59,11 @@ SUPERVISOR_LOG_FILE = "logs/llm_supervisor.log" # Fixed mismatch
 intents = discord.Intents.default()
 intents.message_content = True
 
+def strip_ansi(text):
+    """Remove ANSI escape sequences (colors) from text."""
+    ansi_escape = re.compile(r'\x1b\[[0-9;]*[mGJK]')
+    return ansi_escape.sub('', text)
+
 bot = commands.Bot(command_prefix="!", intents=intents)
 
 # LLM Client
@@ -146,17 +151,16 @@ def get_ml_position_summary():
                                 if summary: return " | ".join(summary)
                         except: continue
 
-                # --- Attempt 2: Text Parsing Fallback (Looking for '• BTC/USDT: 0.003158 units') ---
-                # This matches the human-readable table format
+                # --- Attempt 2: Text Parsing Fallback ---
                 pos_pattern = re.compile(r'•\s+([A-Z0-9/:-]+):\s+([0-9.]+)\s+units')
                 summary = {}
-                # Look for the last "📊 PORTFOLIO STATUS" block
                 start_found = False
                 for line in reversed(lines):
-                    if "📊 PORTFOLIO STATUS" in line:
+                    clean_line = strip_ansi(line)
+                    if "📊 PORTFOLIO STATUS" in clean_line:
                         start_found = True
                         break
-                    match = pos_pattern.search(line)
+                    match = pos_pattern.search(clean_line)
                     if match:
                         sym, qty = match.groups()
                         summary[sym] = float(qty)
@@ -172,23 +176,26 @@ def get_ml_position_summary():
     return "Unknown/None"
 
 def get_total_equity():
-    """Extract Total Equity info from trading_cycles.log."""
-    try:
-        if os.path.exists(ML_LOG_FILE):
-            with open(ML_LOG_FILE, 'rb') as f:
-                f.seek(0, os.SEEK_END)
-                size = f.tell()
-                offset = min(size, 32768)
-                f.seek(size - offset)
-                content = f.read().decode('utf-8', errors='ignore')
-                
-                # Match: 💰 Total Equity: $4927.06 (Cash: $4710.34)
-                # More robust pattern to handle prefixes like "auto-trader-ml | ..."
-                match = re.search(r'Total Equity:\s*\$([0-9.]+)', content)
-                if match:
-                    return f"${match.group(1)}"
-    except Exception as e:
-        logger.debug(f"Equity parsing failed: {e}")
+    """Extract Total Equity info from trading logs. Tries multiple files."""
+    for log_path in [ML_LOG_FILE, "logs/trader.log"]:
+        try:
+            if os.path.exists(log_path):
+                with open(log_path, 'rb') as f:
+                    f.seek(0, os.SEEK_END)
+                    size = f.tell()
+                    offset = min(size, 131072) # 128KB buffer
+                    f.seek(size - offset)
+                    content = f.read().decode('utf-8', errors='ignore')
+                    
+                    # Match: 💰 Total Equity: $4927.06 (Cash: $4710.34)
+                    for line in reversed(content.splitlines()):
+                        clean_line = strip_ansi(line)
+                        match = re.search(r'Total Equity:\s*\$([0-9.]+)\s*\(Cash:\s*\$([0-9.]+)\)', clean_line)
+                        if match:
+                            total, cash = match.groups()
+                            return f"${total} (Cash: ${cash})"
+        except Exception as e:
+            logger.debug(f"Equity parsing failed for {log_path}: {e}")
     return "N/A"
 
 def get_arb_activity_summary():
