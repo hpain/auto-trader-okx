@@ -284,6 +284,9 @@ def _query_llm_sync(user_message: str) -> str:
     # 3. Server Status
     ml_pos = get_ml_position_summary()
     arb_act = get_arb_activity_summary()
+    ml_health, ml_h_time = get_file_health(ML_LOG_FILE)
+    arb_health, arb_h_time = get_file_health(ARB_LOG_FILE)
+    sup_health, sup_h_time = get_file_health(SUPERVISOR_LOG_FILE)
     
     context_str = f"""
 [Market Context]
@@ -297,8 +300,9 @@ Reasoning: {ctx.get('reasoning', 'N/A') if ctx else 'N/A'}
 
 [Bot Status]
 Total Equity: {get_total_equity()}
-ML Positions: {ml_pos}
-Arb Activity: {arb_act}
+ML Bot: {ml_health} (Active: {ml_h_time}) | Positions: {ml_pos}
+Arb Bot: {arb_health} (Active: {arb_h_time}) | Activity: {arb_act}
+Supervisor: {sup_health} (Active: {sup_h_time})
 """
 
     system_prompt = f"""You are the AI trading co-pilot (Gemma 3). 
