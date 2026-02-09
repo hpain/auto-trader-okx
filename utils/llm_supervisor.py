@@ -43,6 +43,10 @@ class LLMSupervisor:
         self.last_sentiment_score = 0.0
         self.briefing_interval = 4 * 3600 # 4 hours
         
+        # Daily notification state
+        self.last_daily_notification_time = 0
+        self.daily_notification_interval = 24 * 3600 # 24 hours
+        
         self.running = False
         self.thread = None
         self.stop_event = threading.Event()
@@ -251,7 +255,16 @@ class LLMSupervisor:
             self.logger.warning(f"Failed to fetch news: {e}")
             news_context = "News data unavailable."
 
-        # --- 2. Construct Prompt ---
+        # --- 2. Determine if we need market_commentary (only every 4 hours to save tokens) ---
+        now_ts = time.time()
+        need_commentary = (now_ts - self.last_briefing_time) > self.briefing_interval
+        
+        if need_commentary:
+            commentary_field = ',\n            "market_commentary": "markdown string (A detailed Daily Market Briefing for the user. Include Macro context, Crypto Sentiment, and Strategy advice. Max 300 words. IMPORTANT: Maintain strict logical consistency. Avoid redundant summaries or contradictory transitions. Ensure every sentence adds unique value.)"'
+        else:
+            commentary_field = ''
+        
+        # --- 3. Construct Prompt ---
         system_prompt = f"""You are a senior crypto trading risk manager. 
         Your job is to analyze market conditions and control the risk of a high-frequency scalping bot.
         
@@ -275,8 +288,7 @@ class LLMSupervisor:
             "bias": "string (long, short, neutral)",
             "sentiment_score": "float (-1.0 to 1.0, where -1=panic, 1=euphoria)",
             "tp_sl_suggestion": {{"tp_pct": 0.02, "sl_pct": 0.01}},
-            "reasoning": "string (concise explanation, max 100 words)",
-            "market_commentary": "markdown string (A detailed Daily Market Briefing for the user. Include Macro context, Crypto Sentiment, and Strategy advice. Max 300 words. IMPORTANT: Maintain strict logical consistency. Avoid redundant summaries or contradictory transitions like using 'but' for points that agree. Ensure every sentence adds unique value.)"
+            "reasoning": "string (concise explanation, max 100 words)"{commentary_field}
         }}
         """
         
@@ -334,38 +346,49 @@ class LLMSupervisor:
                     commentary = decision.get('market_commentary')
                     sentiment_score = float(decision.get('sentiment_score', 0.0))
                     
-                    now_ts = time.time()
-                    time_since_last = now_ts - self.last_briefing_time
+                    time_since_briefing = now_ts - self.last_briefing_time
+                    time_since_daily = now_ts - self.last_daily_notification_time
                     score_changed = abs(sentiment_score - self.last_sentiment_score) >= 0.5
                     
-                    if commentary:
-                        if time_since_last > self.briefing_interval or score_changed:
-                            briefing_file = "data/latest_briefing.md"
-                            with open(briefing_file, 'w', encoding='utf-8') as f:
-                                f.write(f"# Daily Market Briefing\n")
-                                f.write(f"**Generated**: {datetime.now().strftime('%Y-%m-%d %H:%M')}\n")
-                                if score_changed:
-                                    f.write(f"**⚠️ ALERT: Significant Sentiment Shift Detected!**\n\n")
-                                else:
-                                    f.write(f"\n")
-                                f.write(commentary)
-                            
-                            self.logger.info(f"📝 Market Briefing updated (Reason: {'Score Shift' if score_changed else 'Scheduled'}).")
-                            
-                            # --- NOTIFICATION TRIGGER ---
+                    # --- Save Briefing (every 4 hours) ---
+                    if commentary and time_since_briefing > self.briefing_interval:
+                        briefing_file = "data/latest_briefing.md"
+                        with open(briefing_file, 'w', encoding='utf-8') as f:
+                            f.write(f"# Daily Market Briefing\n")
+                            f.write(f"**Generated**: {datetime.now().strftime('%Y-%m-%d %H:%M')}\n")
                             if score_changed:
-                                title = f"🚨 Market Sentiment Shift: {sentiment_score:.1f}"
-                                # Send the first paragraph or full commentary
-                                # PushPlus Markdown support:
-                                msg_content = f"**Old Score**: {self.last_sentiment_score:.1f} -> **New Score**: {sentiment_score:.1f}\n\n"
-                                msg_content += commentary
-                                get_notifier().send(title=title, content=msg_content)
-                            # ----------------------------
-
-                            self.last_briefing_time = now_ts
-                            self.last_sentiment_score = sentiment_score
-                        else:
-                            self.logger.info(f"⏳ Market Briefing skipped (Throttled: {time_since_last/60:.1f}m ago)")
+                                f.write(f"**⚠️ ALERT: Significant Sentiment Shift Detected!**\n\n")
+                            else:
+                                f.write(f"\n")
+                            f.write(commentary)
+                        
+                        self.logger.info(f"📝 Market Briefing saved.")
+                        self.last_briefing_time = now_ts
+                        
+                        # --- DAILY NOTIFICATION (once per 24h) ---
+                        if time_since_daily > self.daily_notification_interval:
+                            title = f"📊 Daily Market Briefing"
+                            risk = decision.get('risk_multiplier', 'N/A')
+                            bias = decision.get('bias', 'N/A')
+                            msg_content = f"**Risk**: {risk} | **Bias**: {bias} | **Sentiment**: {sentiment_score:.1f}\n\n"
+                            msg_content += commentary
+                            get_notifier().send(title=title, content=msg_content)
+                            self.last_daily_notification_time = now_ts
+                            self.logger.info(f"📨 Daily notification sent to Discord.")
+                    
+                    # --- EMERGENCY ALERT (sentiment shift >= 0.5) ---
+                    if score_changed:
+                        title = f"🚨 Market Sentiment Shift: {sentiment_score:.1f}"
+                        msg_content = f"**Old Score**: {self.last_sentiment_score:.1f} -> **New Score**: {sentiment_score:.1f}\n\n"
+                        msg_content += decision.get('reasoning', '')
+                        get_notifier().send(title=title, content=msg_content)
+                        self.logger.info(f"🚨 Emergency sentiment alert sent.")
+                    
+                    self.last_sentiment_score = sentiment_score
+                    
+                    # Log throttling status
+                    if not commentary:
+                        self.logger.info(f"⏳ Commentary skipped (Throttled: {time_since_briefing/60:.1f}m ago)")
                     # ---------------------------------
 
                 except Exception as e:
