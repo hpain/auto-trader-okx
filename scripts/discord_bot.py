@@ -37,6 +37,7 @@ logger = logging.getLogger("DiscordBot")
 DISCORD_BOT_TOKEN = os.getenv("DISCORD_BOT_TOKEN")
 DISCORD_OWNER_ID = os.getenv("DISCORD_OWNER_ID")  # Your Discord User ID
 TRADING_CHANNEL_NAME = os.getenv("DISCORD_CHANNEL_NAME", "trading")
+LLM_MODEL = os.getenv("LLM_MODEL", "gemini-1.5-flash")
 
 # Data paths
 MARKET_CONTEXT_FILE = "data/market_context.json"
@@ -117,7 +118,7 @@ async def query_llm_with_context(user_message: str) -> str:
     global llm_client
     
     if llm_client is None:
-        llm_client = GeminiClient()
+        llm_client = GeminiClient(model=LLM_MODEL)
     
     # Load context
     ctx = load_market_context()
@@ -238,7 +239,7 @@ def query_llm_with_context_sync(user_message: str) -> str:
     global llm_client
     
     if llm_client is None:
-        llm_client = GeminiClient()
+        llm_client = GeminiClient(model=LLM_MODEL)
     
     ctx = load_market_context()
     context_str = ""
