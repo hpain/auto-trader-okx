@@ -1,4 +1,4 @@
-version: '3.8'
+version: '3.3'
 
 services:
   # Service A: The original ML-driven bot (Price Prediction)
@@ -23,10 +23,6 @@ services:
       - ./charts:/app/charts
       - ./status.json:/app/status.json
     command: python run_live.py # OKX Demo Mode (OKX_FLAG=1)
-    deploy:
-      resources:
-        limits:
-          memory: 4G
 
   # Service B: Funding Arb bot (Structural Alpha)
   auto-trader-arb:
@@ -45,10 +41,6 @@ services:
       - ./config/settings.yaml:/app/config/settings.yaml
       - ./logs:/app/logs
     command: python run_live_simple.py --strategy funding_arb --symbol ETH/USDT
-    deploy:
-      resources:
-        limits:
-          memory: 512M
 
   # Service C: LLM Supervisor Microservice
   llm-supervisor:
@@ -69,11 +61,6 @@ services:
       - ./logs:/app/logs
       - ./data:/app/data
     command: python scripts/run_supervisor_service.py
-    deploy:
-      resources:
-        limits:
-          cpus: '0.5'
-          memory: 1G
 
   # Service D: Discord Bot (Interactive LLM Assistant)
   discord-bot:
@@ -91,8 +78,3 @@ services:
       - ./data:/app/data
       - ./logs:/app/logs
     command: python scripts/discord_bot.py
-    deploy:
-      resources:
-        limits:
-          cpus: '0.25'
-          memory: 512M
