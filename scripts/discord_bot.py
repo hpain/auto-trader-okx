@@ -129,15 +129,19 @@ def get_ml_position_summary():
             if '{' in line:
                 json_str = line[line.find('{'):]
                 data = json.loads(json_str)
-                portfolio = data.get('portfolio', {})
-                if portfolio:
+                portfolio_data = data.get('portfolio', {})
+                
+                # The data might be nested: {"portfolio": {"final_positions": {...}}}
+                positions = portfolio_data.get('final_positions', portfolio_data)
+                
+                if isinstance(positions, dict):
                     summary = []
-                    for sym, pos in portfolio.items():
-                        if abs(pos) > 0.00001:
+                    for sym, pos in positions.items():
+                        if isinstance(pos, (int, float)) and abs(pos) > 0.00001:
                             summary.append(f"{sym}: {pos:+.4f}")
                     return " | ".join(summary) if summary else "No open positions"
-        except:
-            pass
+        except Exception as e:
+            logger.debug(f"Parsing ML positions failed: {e}")
     return "Unknown/None"
 
 def get_arb_activity_summary():
