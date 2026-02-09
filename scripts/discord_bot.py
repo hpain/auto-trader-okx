@@ -121,27 +121,54 @@ def get_latest_log_line(path, pattern=None):
     return None
 
 def get_ml_position_summary():
-    """Extract position info from trading_cycles.log JSON entries."""
-    line = get_latest_log_line(ML_LOG_FILE, pattern='{"cycle_id"')
-    if line:
-        try:
-            # Extract JSON from line (sometimes logs have prefix)
-            if '{' in line:
-                json_str = line[line.find('{'):]
-                data = json.loads(json_str)
-                portfolio_data = data.get('portfolio', {})
+    """Extract position info from trading_cycles.log. Supports JSON and text formats."""
+    # Use a larger buffer (64KB) to ensure we reach the previous cycle if needed
+    try:
+        if os.path.exists(ML_LOG_FILE):
+            with open(ML_LOG_FILE, 'rb') as f:
+                f.seek(0, os.SEEK_END)
+                size = f.tell()
+                offset = min(size, 65536)
+                f.seek(size - offset)
+                content = f.read().decode('utf-8', errors='ignore')
+                lines = content.splitlines()
                 
-                # The data might be nested: {"portfolio": {"final_positions": {...}}}
-                positions = portfolio_data.get('final_positions', portfolio_data)
+                # --- Attempt 1: JSON Parsing (Most Accurate) ---
+                for line in reversed(lines):
+                    if '{"cycle_id"' in line and '{' in line:
+                        try:
+                            json_str = line[line.find('{'):]
+                            data = json.loads(json_str)
+                            portfolio_data = data.get('portfolio', {})
+                            positions = portfolio_data.get('final_positions', portfolio_data)
+                            if isinstance(positions, dict) and positions:
+                                summary = [f"{sym}: {pos:+.4f}" for sym, pos in positions.items() if isinstance(pos, (int, float)) and abs(pos) > 0.00001]
+                                if summary: return " | ".join(summary)
+                        except: continue
+
+                # --- Attempt 2: Text Parsing Fallback (Looking for '• BTC/USDT: 0.003158 units') ---
+                # This matches the human-readable table format
+                pos_pattern = re.compile(r'•\s+([A-Z0-9/:-]+):\s+([0-9.]+)\s+units')
+                summary = {}
+                # Look for the last "📊 PORTFOLIO STATUS" block
+                start_found = False
+                for line in reversed(lines):
+                    if "📊 PORTFOLIO STATUS" in line:
+                        start_found = True
+                        break
+                    match = pos_pattern.search(line)
+                    if match:
+                        sym, qty = match.groups()
+                        summary[sym] = float(qty)
                 
-                if isinstance(positions, dict):
-                    summary = []
-                    for sym, pos in positions.items():
-                        if isinstance(pos, (int, float)) and abs(pos) > 0.00001:
-                            summary.append(f"{sym}: {pos:+.4f}")
-                    return " | ".join(summary) if summary else "No open positions"
-        except Exception as e:
-            logger.debug(f"Parsing ML positions failed: {e}")
+                if summary:
+                    return " | ".join([f"{s}: {q:+.4f}" for s, q in summary.items()])
+                if start_found:
+                    return "No open positions"
+
+    except Exception as e:
+        logger.error(f"Robust position parsing failed: {e}")
+    
     return "Unknown/None"
 
 def get_arb_activity_summary():
